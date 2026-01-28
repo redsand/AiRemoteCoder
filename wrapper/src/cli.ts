@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { config, validateConfig } from './config.js';
 import { ClaudeRunner } from './services/claude-runner.js';
 import { GenericRunner, createGenericRunner } from './services/generic-runner.js';
@@ -25,6 +26,18 @@ import { type WorkerType, getWorkerDisplayName, isValidWorkerType } from './serv
 import type { BaseRunner } from './services/base-runner.js';
 
 const program = new Command();
+
+// Read version from package.json
+function getVersion(): string {
+  try {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const packageJsonPath = join(__dirname, '..', 'package.json');
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version?: string };
+    return packageJson.version || '1.0.0';
+  } catch {
+    return '1.0.0'; // Fallback version
+  }
+}
 
 // Credential storage path
 const credentialsPath = join(config.dataDir, 'credentials.json');
@@ -129,9 +142,9 @@ function statusDisplay(status: string): string {
 }
 
 program
-  .name('claude-runner')
-  .description('Claude Code wrapper for Connect-Back Gateway - Full workflow control')
-  .version('1.0.0');
+  .name('ai-runner')
+  .description('AI Remote Coder wrapper for Connect-Back Gateway - Full workflow control')
+  .version(getVersion());
 
 // ============================================================================
 // Authentication Commands
