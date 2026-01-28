@@ -85,6 +85,7 @@ export const WORKER_CONFIGS: Record<WorkerType, WorkerConfig> = {
  * Common Ollama models for user selection
  */
 export const OLLAMA_MODELS: Array<{ value: string; label: string }> = [
+  { value: 'qwen2.5-coder:7b', label: 'Qwen 2.5 Coder 7B' },
   { value: 'codellama:7b', label: 'CodeLlama 7B' },
   { value: 'codellama:13b', label: 'CodeLlama 13B' },
   { value: 'codellama:34b', label: 'CodeLlama 34B' },
@@ -119,8 +120,8 @@ export function getWorkerConfig(workerType: WorkerType): WorkerConfig | undefine
  * Get CLI command for a worker type
  */
 export function getWorkerCommand(workerType: string | WorkerType): string {
-  const config = WORKER_CONFIGS[workerType as WorkerType];
-  return config?.command || workerType;
+  const workerConfig = WORKER_CONFIGS[workerType as WorkerType];
+  return workerConfig?.command || workerType;
 }
 
 /**
@@ -136,6 +137,40 @@ export function getDefaultModel(workerType: string | WorkerType): string | undef
  */
 export function isValidWorkerType(type: string): type is WorkerType {
   return type in WORKER_CONFIGS;
+}
+
+/**
+ * Query Ollama API for available models
+ * Connects to local Ollama instance (default: http://localhost:11434)
+ */
+export async function getAvailableOllamaModels(ollamaUrl: string = 'http://localhost:11434'): Promise<{ value: string; label: string }[]> {
+  try {
+    const response = await fetch(`${ollamaUrl}/api/tags`);
+    if (!response.ok) {
+      console.warn(`Failed to fetch Ollama models: ${response.statusText}`);
+      return OLLAMA_MODELS; // Return defaults if API call fails
+    }
+
+    const data = await response.json() as { models?: Array<{ name: string; digest: string; size: number; modified_at: string }> };
+
+    if (!data.models || data.models.length === 0) {
+      return OLLAMA_MODELS; // Return defaults if no models found
+    }
+
+    // Convert Ollama model names to our format (remove :latest suffix if present)
+    const models = data.models.map(m => ({
+      value: m.name,
+      label: m.name.replace(':latest', '')
+    }));
+
+    // Add custom option at the end
+    models.push({ value: 'custom', label: 'Custom...' });
+
+    return models;
+  } catch (err) {
+    console.warn('Could not connect to Ollama API, using default models:', err);
+    return OLLAMA_MODELS; // Return defaults if connection fails
+  }
 }
 
 /**

@@ -1,6 +1,6 @@
 {
   "name": "ai-remote-coder",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Connect-Back Progress + Assist Gateway for Claude Code",
   "private": true,
   "type": "module",
