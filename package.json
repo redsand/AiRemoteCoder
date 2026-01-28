@@ -1,0 +1,29 @@
+{
+  "name": "ai-remote-coder",
+  "version": "1.0.0",
+  "description": "Connect-Back Progress + Assist Gateway for Claude Code",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "gateway",
+    "wrapper",
+    "ui"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:gateway\" \"npm run dev:ui\"",
+    "dev:gateway": "npm run dev -w gateway",
+    "dev:ui": "npm run dev -w ui",
+    "build": "npm run build -w gateway && npm run build -w wrapper && npm run build -w ui",
+    "start": "npm run start -w gateway",
+    "test": "npm run test -w gateway && npm run test -w wrapper",
+    "setup": "npm install && npm run build",
+    "prune": "node scripts/prune.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
