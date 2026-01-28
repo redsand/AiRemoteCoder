@@ -123,6 +123,15 @@ export function RunDetail({ user }: Props) {
   const [commandLoading, setCommandLoading] = useState(false);
   const [promptLoading, setPromptLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [showActionMenu, setShowActionMenu] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  // Detect mobile/responsive changes
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -448,7 +457,7 @@ export function RunDetail({ user }: Props) {
           </div>
 
           {/* Action Buttons - Top Right */}
-          {canOperate && (isActive || canDelete) && (
+          {canOperate && (isActive || canDelete) && !isMobile && (
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               {isActive && (
                 <>
@@ -485,6 +494,129 @@ export function RunDetail({ user }: Props) {
                 >
                   🗑 Delete
                 </button>
+              )}
+            </div>
+          )}
+
+          {/* Mobile: Dropdown menu */}
+          {canOperate && (isActive || canDelete) && isMobile && (
+            <div style={{ position: 'relative' }}>
+              <button
+                className="btn btn-sm btn-primary"
+                onClick={() => setShowActionMenu(!showActionMenu)}
+                title="Action menu"
+              >
+                ⋮
+              </button>
+              {showActionMenu && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 0,
+                    background: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px',
+                    minWidth: '140px',
+                    zIndex: 1000,
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                    marginTop: '4px',
+                  }}
+                >
+                  {isActive && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setShowStopConfirm(true);
+                          setShowActionMenu(false);
+                        }}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          padding: '10px 12px',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          color: 'var(--text-primary)',
+                          fontSize: '13px',
+                          borderBottom: '1px solid var(--border-color)',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                      >
+                        ⏹ Stop
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowPromptModal(true);
+                          setShowActionMenu(false);
+                        }}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          padding: '10px 12px',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          color: 'var(--text-primary)',
+                          fontSize: '13px',
+                          borderBottom: '1px solid var(--border-color)',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                      >
+                        💬 Prompt
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowCommandModal(true);
+                          setShowActionMenu(false);
+                        }}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          padding: '10px 12px',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          color: 'var(--text-primary)',
+                          fontSize: '13px',
+                          borderBottom: '1px solid var(--border-color)',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                      >
+                        ▶ Command
+                      </button>
+                    </>
+                  )}
+                  {canDelete && (
+                    <button
+                      onClick={() => {
+                        setShowDeleteConfirm(true);
+                        setShowActionMenu(false);
+                      }}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        padding: '10px 12px',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        color: 'var(--accent-red)',
+                        fontSize: '13px',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                    >
+                      🗑 Delete
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}
