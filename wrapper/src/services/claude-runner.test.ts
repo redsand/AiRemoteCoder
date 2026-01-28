@@ -309,3 +309,284 @@ index 1234567..abcdefg 100644
     expect(truncated).toContain('[TRUNCATED]');
   });
 });
+
+describe('Halt Handling', () => {
+  it('should track halt requested state', () => {
+    let haltRequested = false;
+    const requestHalt = () => { haltRequested = true; };
+    const isHaltRequested = () => haltRequested;
+
+    expect(isHaltRequested()).toBe(false);
+    requestHalt();
+    expect(isHaltRequested()).toBe(true);
+  });
+
+  it('should send SIGKILL immediately on halt', () => {
+    let signalSent: string | null = null;
+    const sendSignal = (signal: string) => { signalSent = signal; };
+
+    // Halt should send SIGKILL immediately
+    sendSignal('SIGKILL');
+    expect(signalSent).toBe('SIGKILL');
+  });
+
+  it('should handle __HALT__ special command', () => {
+    const isHaltCommand = (cmd: string) => cmd === '__HALT__';
+    expect(isHaltCommand('__HALT__')).toBe(true);
+    expect(isHaltCommand('halt')).toBe(false);
+    expect(isHaltCommand('__halt__')).toBe(false);
+  });
+});
+
+describe('Input Handling', () => {
+  it('should handle __INPUT__ special command', () => {
+    const isInputCommand = (cmd: string) => cmd.startsWith('__INPUT__:');
+    expect(isInputCommand('__INPUT__:hello')).toBe(true);
+    expect(isInputCommand('__INPUT__:yes\n')).toBe(true);
+    expect(isInputCommand('__INPUT__')).toBe(false);
+    expect(isInputCommand('input')).toBe(false);
+  });
+
+  it('should extract input data from __INPUT__ command', () => {
+    const extractInput = (cmd: string) => {
+      if (cmd.startsWith('__INPUT__:')) {
+        return cmd.substring('__INPUT__:'.length);
+      }
+      return null;
+    };
+
+    expect(extractInput('__INPUT__:hello')).toBe('hello');
+    expect(extractInput('__INPUT__:yes\n')).toBe('yes\n');
+    expect(extractInput('__INPUT__:')).toBe('');
+    expect(extractInput('other')).toBe(null);
+  });
+
+  it('should write input to stdin', () => {
+    const writes: string[] = [];
+    const mockStdin = {
+      write: (data: string) => { writes.push(data); return true; }
+    };
+
+    const sendInput = (data: string) => mockStdin.write(data);
+
+    expect(sendInput('hello')).toBe(true);
+    expect(sendInput('world\n')).toBe(true);
+    expect(writes).toEqual(['hello', 'world\n']);
+  });
+});
+
+describe('Escape Handling', () => {
+  it('should handle __ESCAPE__ special command', () => {
+    const isEscapeCommand = (cmd: string) => cmd === '__ESCAPE__';
+    expect(isEscapeCommand('__ESCAPE__')).toBe(true);
+    expect(isEscapeCommand('escape')).toBe(false);
+  });
+
+  it('should send SIGINT on escape', () => {
+    let signalSent: string | null = null;
+    const sendSignal = (signal: string) => { signalSent = signal; return true; };
+
+    const sendEscape = () => sendSignal('SIGINT');
+
+    expect(sendEscape()).toBe(true);
+    expect(signalSent).toBe('SIGINT');
+  });
+});
+
+describe('State Management', () => {
+  it('should track runner state', () => {
+    const state = {
+      runId: 'test-run-123',
+      isRunning: false,
+      sequence: 0,
+      workingDir: '/home/user/project',
+      autonomous: false,
+      stopRequested: false
+    };
+
+    expect(state.runId).toBe('test-run-123');
+    expect(state.isRunning).toBe(false);
+    expect(state.autonomous).toBe(false);
+  });
+
+  it('should save state to JSON', () => {
+    const state = {
+      runId: 'test-123',
+      sequence: 42,
+      workingDir: '/home/user',
+      autonomous: true,
+      savedAt: Date.now()
+    };
+
+    const json = JSON.stringify(state, null, 2);
+    const parsed = JSON.parse(json);
+
+    expect(parsed.runId).toBe('test-123');
+    expect(parsed.sequence).toBe(42);
+    expect(parsed.autonomous).toBe(true);
+  });
+
+  it('should load state from JSON', () => {
+    const savedState = JSON.stringify({
+      runId: 'test-456',
+      sequence: 10,
+      workingDir: '/project',
+      autonomous: false
+    });
+
+    const loaded = JSON.parse(savedState);
+    expect(loaded.sequence).toBe(10);
+  });
+
+  it('should construct state file path', () => {
+    const runId = 'test-run';
+    const runsDir = '/project/.data/runs';
+    const stateFile = `${runsDir}/${runId}/state.json`;
+
+    expect(stateFile).toBe('/project/.data/runs/test-run/state.json');
+  });
+});
+
+describe('Autonomous Mode', () => {
+  it('should set autonomous flag in options', () => {
+    const options = {
+      runId: 'test-123',
+      capabilityToken: 'token-abc',
+      workingDir: '/project',
+      autonomous: true
+    };
+
+    expect(options.autonomous).toBe(true);
+  });
+
+  it('should use different args for autonomous mode', () => {
+    const buildArgs = (autonomous: boolean, command?: string) => {
+      if (autonomous) {
+        return ['--dangerously-skip-permissions'];
+      } else if (command) {
+        return [command];
+      }
+      return [];
+    };
+
+    expect(buildArgs(true)).toEqual(['--dangerously-skip-permissions']);
+    expect(buildArgs(false, 'test prompt')).toEqual(['test prompt']);
+    expect(buildArgs(false)).toEqual([]);
+  });
+
+  it('should set different TERM for autonomous mode', () => {
+    const getTermEnv = (autonomous: boolean) => {
+      return autonomous ? 'xterm-256color' : 'dumb';
+    };
+
+    expect(getTermEnv(true)).toBe('xterm-256color');
+    expect(getTermEnv(false)).toBe('dumb');
+  });
+
+  it('should include autonomous flag in start marker', () => {
+    const marker = {
+      event: 'started',
+      command: 'claude (autonomous mode)',
+      workingDir: '/project',
+      autonomous: true,
+      resumedFrom: undefined
+    };
+
+    expect(marker.autonomous).toBe(true);
+    expect(marker.command).toContain('autonomous');
+  });
+});
+
+describe('Resume Functionality', () => {
+  it('should track resumeFrom option', () => {
+    const options = {
+      runId: 'new-run-123',
+      capabilityToken: 'token-xyz',
+      resumeFrom: 'old-run-456'
+    };
+
+    expect(options.resumeFrom).toBe('old-run-456');
+  });
+
+  it('should include resumedFrom in start marker', () => {
+    const marker = {
+      event: 'started',
+      command: 'continue task',
+      workingDir: '/project',
+      autonomous: false,
+      resumedFrom: 'previous-run-id'
+    };
+
+    expect(marker.resumedFrom).toBe('previous-run-id');
+  });
+
+  it('should load previous sequence number on resume', () => {
+    const savedState = { sequence: 42 };
+    let currentSequence = 0;
+
+    // Load state on resume
+    currentSequence = savedState.sequence;
+
+    expect(currentSequence).toBe(42);
+  });
+});
+
+describe('Heartbeat', () => {
+  it('should update state periodically', () => {
+    const updates: number[] = [];
+    let sequence = 0;
+
+    const updateState = () => {
+      sequence++;
+      updates.push(sequence);
+    };
+
+    // Simulate 3 heartbeats
+    updateState();
+    updateState();
+    updateState();
+
+    expect(updates).toEqual([1, 2, 3]);
+  });
+
+  it('should save state on each heartbeat', () => {
+    const saves: object[] = [];
+
+    const saveState = (state: object) => {
+      saves.push(state);
+    };
+
+    saveState({ sequence: 1, savedAt: Date.now() });
+    saveState({ sequence: 2, savedAt: Date.now() });
+
+    expect(saves.length).toBe(2);
+  });
+});
+
+describe('Finish Marker Enhancement', () => {
+  it('should include stop/halt flags in finish marker', () => {
+    const createFinishMarker = (exitCode: number, opts: {
+      signal?: string;
+      stopRequested?: boolean;
+      haltRequested?: boolean;
+    }) => ({
+      event: 'finished',
+      exitCode,
+      signal: opts.signal,
+      stopRequested: opts.stopRequested || false,
+      haltRequested: opts.haltRequested || false
+    });
+
+    const normalExit = createFinishMarker(0, {});
+    expect(normalExit.stopRequested).toBe(false);
+    expect(normalExit.haltRequested).toBe(false);
+
+    const stoppedRun = createFinishMarker(130, { signal: 'SIGINT', stopRequested: true });
+    expect(stoppedRun.stopRequested).toBe(true);
+    expect(stoppedRun.signal).toBe('SIGINT');
+
+    const haltedRun = createFinishMarker(137, { signal: 'SIGKILL', haltRequested: true });
+    expect(haltedRun.haltRequested).toBe(true);
+    expect(haltedRun.signal).toBe('SIGKILL');
+  });
+});

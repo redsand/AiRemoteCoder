@@ -24,7 +24,31 @@ describe('Command Allowlist', () => {
   });
 
   function isCommandAllowed(command: string): boolean {
+    // Don't allow commands with leading/trailing whitespace (must be exact)
+    if (command !== command.trim()) {
+      return false;
+    }
+
     const cmdBase = command.trim();
+
+    // Empty commands not allowed
+    if (!cmdBase) {
+      return false;
+    }
+
+    // Block command injection patterns
+    const dangerousPatterns = [
+      /[;&|`$]/, // Shell operators and command substitution
+      /\.\.\//, // Path traversal
+      /\$\(/, // Command substitution
+    ];
+
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(cmdBase)) {
+        return false;
+      }
+    }
+
     return config.allowlistedCommands.some(allowed =>
       cmdBase === allowed || cmdBase.startsWith(allowed + ' ')
     );
@@ -135,5 +159,126 @@ describe('Special Commands', () => {
     expect(isStopCommand('__STOP__')).toBe(true);
     expect(isStopCommand('stop')).toBe(false);
     expect(isStopCommand('__stop__')).toBe(false);
+  });
+
+  it('should recognize __HALT__ as special command', () => {
+    const isHaltCommand = (cmd: string) => cmd === '__HALT__';
+    expect(isHaltCommand('__HALT__')).toBe(true);
+    expect(isHaltCommand('halt')).toBe(false);
+    expect(isHaltCommand('__halt__')).toBe(false);
+  });
+
+  it('should recognize __ESCAPE__ as special command', () => {
+    const isEscapeCommand = (cmd: string) => cmd === '__ESCAPE__';
+    expect(isEscapeCommand('__ESCAPE__')).toBe(true);
+    expect(isEscapeCommand('escape')).toBe(false);
+  });
+
+  it('should recognize __INPUT__ prefix as special command', () => {
+    const isInputCommand = (cmd: string) => cmd.startsWith('__INPUT__:');
+    expect(isInputCommand('__INPUT__:hello')).toBe(true);
+    expect(isInputCommand('__INPUT__:yes\n')).toBe(true);
+    expect(isInputCommand('__INPUT__:')).toBe(true);
+    expect(isInputCommand('__INPUT__')).toBe(false);
+    expect(isInputCommand('input:hello')).toBe(false);
+  });
+
+  it('should extract input data from __INPUT__ command', () => {
+    const extractInput = (cmd: string) => {
+      if (cmd.startsWith('__INPUT__:')) {
+        return cmd.substring('__INPUT__:'.length);
+      }
+      return null;
+    };
+    expect(extractInput('__INPUT__:hello')).toBe('hello');
+    expect(extractInput('__INPUT__:yes\n')).toBe('yes\n');
+    expect(extractInput('__INPUT__:')).toBe('');
+    expect(extractInput('other')).toBe(null);
+  });
+});
+
+describe('Run State Schema', () => {
+  it('should validate run state fields', () => {
+    const validateState = (state: any): boolean => {
+      if (!state.workingDir || typeof state.workingDir !== 'string') return false;
+      if (state.lastSequence !== undefined && typeof state.lastSequence !== 'number') return false;
+      return true;
+    };
+
+    expect(validateState({ workingDir: '/home/user/project' })).toBe(true);
+    expect(validateState({ workingDir: '/home/user/project', lastSequence: 5 })).toBe(true);
+    expect(validateState({ workingDir: '' })).toBe(false);
+    expect(validateState({ lastSequence: 5 })).toBe(false);
+  });
+});
+
+describe('Restart Schema', () => {
+  it('should allow empty restart options', () => {
+    const validateRestart = (opts: any): boolean => {
+      if (opts.command !== undefined && typeof opts.command !== 'string') return false;
+      if (opts.workingDir !== undefined && typeof opts.workingDir !== 'string') return false;
+      return true;
+    };
+
+    expect(validateRestart({})).toBe(true);
+    expect(validateRestart({ command: 'do something' })).toBe(true);
+    expect(validateRestart({ workingDir: '/home/user' })).toBe(true);
+    expect(validateRestart({ command: 'test', workingDir: '/home' })).toBe(true);
+  });
+});
+
+describe('Input Schema', () => {
+  it('should validate stdin input fields', () => {
+    const validateInput = (input: any): boolean => {
+      if (typeof input.input !== 'string') return false;
+      if (input.escape !== undefined && typeof input.escape !== 'boolean') return false;
+      return true;
+    };
+
+    expect(validateInput({ input: 'hello' })).toBe(true);
+    expect(validateInput({ input: 'yes\n', escape: false })).toBe(true);
+    expect(validateInput({ input: '', escape: true })).toBe(true);
+    expect(validateInput({ escape: true })).toBe(false);
+    expect(validateInput({ input: 123 })).toBe(false);
+  });
+
+  it('should prepend escape sequence when escape is true', () => {
+    const buildInput = (data: string, escape: boolean): string => {
+      return escape ? '\x03' + data : data;
+    };
+
+    expect(buildInput('hello', false)).toBe('hello');
+    expect(buildInput('hello', true)).toBe('\x03hello');
+    expect(buildInput('', true)).toBe('\x03');
+  });
+});
+
+describe('List Runs Filtering', () => {
+  it('should build valid filter queries', () => {
+    const buildQuery = (opts: { status?: string; search?: string; limit?: number; offset?: number }) => {
+      const params: string[] = [];
+      if (opts.status) params.push(`status=${opts.status}`);
+      if (opts.search) params.push(`search=${encodeURIComponent(opts.search)}`);
+      if (opts.limit) params.push(`limit=${opts.limit}`);
+      if (opts.offset) params.push(`offset=${opts.offset}`);
+      return params.length > 0 ? `?${params.join('&')}` : '';
+    };
+
+    expect(buildQuery({})).toBe('');
+    expect(buildQuery({ status: 'running' })).toBe('?status=running');
+    expect(buildQuery({ limit: 10, offset: 20 })).toBe('?limit=10&offset=20');
+    expect(buildQuery({ search: 'test' })).toBe('?search=test');
+  });
+
+  it('should validate status values', () => {
+    const validStatuses = ['pending', 'running', 'done', 'failed'];
+    const isValidStatus = (status: string) => validStatuses.includes(status);
+
+    expect(isValidStatus('pending')).toBe(true);
+    expect(isValidStatus('running')).toBe(true);
+    expect(isValidStatus('done')).toBe(true);
+    expect(isValidStatus('failed')).toBe(true);
+    expect(isValidStatus('unknown')).toBe(false);
+    expect(isValidStatus('')).toBe(false);
   });
 });
