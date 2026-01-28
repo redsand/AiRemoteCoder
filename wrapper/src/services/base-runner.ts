@@ -52,6 +52,8 @@ export abstract class BaseRunner extends EventEmitter {
   protected model?: string;
   private processedCommandIds: Set<string> = new Set(); // Track processed commands to prevent duplicates
   private processedCommandExpire: Map<string, NodeJS.Timeout> = new Map(); // Track expiration timers
+  private lastOutputTime = 0; // Track when we last received output
+  private outputWarningTimer: NodeJS.Timeout | null = null; // Warn if no output for a while
 
   constructor(options: RunnerOptions) {
     super();
@@ -139,11 +141,16 @@ export abstract class BaseRunner extends EventEmitter {
     console.log(`Spawning process: ${cmd} with args: ${JSON.stringify(args)}`);
     console.log(`Environment: TERM=${env.TERM}`);
 
+    // For Windows compatibility, we may need shell, but try to use it carefully
+    // shell: true can interfere with output capture, but some CLIs need it
+    const useShell = process.platform === 'win32';
+
     this.process = spawn(cmd, args, {
       cwd: this.workingDir,
-      shell: true,
+      shell: useShell,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env
+      env,
+      windowsHide: false, // Show window on Windows for interactive processes
     });
 
     console.log(`Process spawned with PID: ${this.process.pid}`);
@@ -353,9 +360,11 @@ export abstract class BaseRunner extends EventEmitter {
    */
   private async handleOutput(type: 'stdout' | 'stderr', data: Buffer): Promise<void> {
     const text = data.toString();
+    const preview = text.substring(0, 300);
+    const truncated = text.length > 300 ? '...' : '';
 
-    // Log to console for visibility
-    console.log(`[${type}] ${text.substring(0, 200)}${text.length > 200 ? '...' : ''}`);
+    // Log to console for visibility - include full length for debugging
+    console.log(`[${type}] (${text.length} chars) ${preview}${truncated}`);
 
     // Write to local log
     this.logStream?.write(`[${type}] ${text}`);
