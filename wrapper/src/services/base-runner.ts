@@ -58,6 +58,8 @@ export abstract class BaseRunner extends EventEmitter {
       capabilityToken: options.capabilityToken
     };
     this.workingDir = options.workingDir || process.cwd();
+    // Store the sandbox root - cannot go above this directory
+    (this as any).sandboxRoot = this.workingDir;
     this.autonomous = options.autonomous || false;
     this.resumeFrom = options.resumeFrom;
     this.model = options.model;
@@ -569,6 +571,57 @@ export abstract class BaseRunner extends EventEmitter {
       return;
     }
 
+    // Handle special directory navigation commands
+    if (cmd.command.startsWith('cd ')) {
+      const path = cmd.command.substring(3).trim();
+      const result = this.changeDirectory(path);
+      if (result.success) {
+        await this.sendEvent('info', result.message);
+        await ackCommand(this.auth, cmd.id, result.message);
+      } else {
+        await this.sendEvent('error', result.message);
+        await ackCommand(this.auth, cmd.id, undefined, result.message);
+      }
+      return;
+    }
+
+    // Handle pwd command - show current directory relative to sandbox
+    if (cmd.command === 'pwd') {
+      const currentDir = this.getWorkingDirectory();
+      const message = `Current directory: ${currentDir}`;
+      await this.sendEvent('info', message);
+      await ackCommand(this.auth, cmd.id, currentDir);
+      return;
+    }
+
+    // Handle ls/dir commands - show directory listing with relative paths
+    if (cmd.command.startsWith('ls') || cmd.command.startsWith('dir') || cmd.command.startsWith('ll')) {
+      const args = cmd.command.split(' ').slice(1).join(' ');
+      const lsCmd = `ls ${args}`.trim();
+      try {
+        const result = execSync(lsCmd, {
+          cwd: this.workingDir,
+          encoding: 'utf8',
+          timeout: 10000,
+          maxBuffer: 5 * 1024 * 1024
+        });
+
+        const sanitized = redactSecrets(result);
+        const header = this.getWorkingDirectory() !== (this as any).sandboxRoot
+          ? `Directory: ${this.getWorkingDirectory()}\n`
+          : '';
+
+        await this.sendEvent('info', `${header}${sanitized}`);
+        await ackCommand(this.auth, cmd.id, sanitized);
+      } catch (err: any) {
+        const errorMsg = err.stderr || err.message || 'Unknown error';
+        const sanitized = redactSecrets(errorMsg);
+        await this.sendEvent('error', `Command failed: ${sanitized}`);
+        await ackCommand(this.auth, cmd.id, undefined, sanitized);
+      }
+      return;
+    }
+
     // Execute command in working directory
     try {
       await this.sendEvent('info', `Executing command: ${cmd.command}`);
@@ -636,5 +689,110 @@ export abstract class BaseRunner extends EventEmitter {
       await this.sendEvent('error', `Failed to start tmate: ${err.message}`);
       return null;
     }
+  }
+
+  /**
+   * Validate that a path is within the sandbox (initial working directory)
+   */
+  private validatePathInSandbox(path: string): { valid: boolean; normalized: string } {
+    const { resolve, normalize } = await import('path');
+
+    const normalized = normalize(path);
+    const absolutePath = resolve(this.workingDir, normalized);
+    const sandboxRoot = resolve((this as any).sandboxRoot || this.workingDir);
+
+    // Check if the path is within the sandbox
+    const relative = resolve(sandboxRoot, normalized);
+    const relativeFromRoot = relative.substring(sandboxRoot.length);
+
+    // If path starts with .. or goes above root, it's invalid
+    if (relativeFromRoot.startsWith('..') || !absolutePath.startsWith(sandboxRoot)) {
+      return { valid: false, normalized: absolutePath };
+    }
+
+    return { valid: true, normalized: absolutePath };
+  }
+
+  /**
+   * Change directory within the sandbox
+   */
+  private changeDirectory(path: string): { success: boolean; message: string; newDir?: string } {
+    const { existsSync, statSync } = require('fs');
+    const { resolve, normalize } = require('path');
+
+    // Handle special cases
+    if (!path || path === '~') {
+      return {
+        success: false,
+        message: 'Cannot change to home directory - must stay within sandbox'
+      };
+    }
+
+    if (path === '-') {
+      return {
+        success: false,
+        message: 'Previous directory not tracked - use absolute paths'
+      };
+    }
+
+    // Normalize and validate the path
+    const sandboxRoot = resolve((this as any).sandboxRoot || this.workingDir);
+    const absolutePath = resolve(this.workingDir, path);
+
+    // Check if path is within sandbox
+    if (!absolutePath.startsWith(sandboxRoot)) {
+      return {
+        success: false,
+        message: `Cannot change directory: path is outside sandbox (${sandboxRoot})`
+      };
+    }
+
+    // Check if directory exists
+    if (!existsSync(absolutePath)) {
+      return {
+        success: false,
+        message: `Directory does not exist: ${path}`
+      };
+    }
+
+    // Check if it's a directory
+    try {
+      const stats = statSync(absolutePath);
+      if (!stats.isDirectory()) {
+        return {
+          success: false,
+          message: `Not a directory: ${path}`
+        };
+      }
+    } catch (err) {
+      return {
+        success: false,
+        message: `Cannot access directory: ${path}`
+      };
+    }
+
+    // Update working directory
+    this.workingDir = absolutePath;
+
+    // Update state and notify gateway
+    this.saveState();
+    updateRunState(this.auth, { workingDir: this.workingDir }).catch(() => {});
+
+    return {
+      success: true,
+      message: `Changed to: ${this.workingDir}`,
+      newDir: this.workingDir
+    };
+  }
+
+  /**
+   * Get current working directory
+   */
+  private getWorkingDirectory(): string {
+    // Return relative path from sandbox root for cleaner display
+    const { relative } = require('path');
+    const sandboxRoot = (this as any).sandboxRoot || this.workingDir;
+    const relPath = relative(sandboxRoot, this.workingDir);
+    return relPath === '.' ? sandboxRoot : relPath;
   }
 }

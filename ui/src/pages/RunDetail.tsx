@@ -63,7 +63,14 @@ const ALLOWED_COMMANDS = [
   'git diff',
   'git status',
   'git log --oneline -10',
+  // Directory navigation
+  'cd',
+  'ls',
   'ls -la',
+  'ls -l',
+  'ls -a',
+  'll',
+  'dir',
   'pwd',
 ];
 

@@ -56,6 +56,7 @@ export const config = {
 
   // Allowlisted commands (can be extended via env)
   allowlistedCommands: [
+    // Test commands
     'npm test',
     'npm run test',
     'pnpm test',
@@ -65,11 +66,19 @@ export const config = {
     'pytest -v',
     'go test ./...',
     'cargo test',
+    // Git commands
     'git diff',
     'git diff --cached',
     'git status',
     'git log --oneline -10',
+    // Directory navigation (handled specially in wrapper)
+    'cd',
+    'ls',
     'ls -la',
+    'ls -l',
+    'ls -a',
+    'll',
+    'dir',
     'pwd'
   ].concat((process.env.EXTRA_ALLOWED_COMMANDS || '').split(',').filter(Boolean)),
 
