@@ -57,6 +57,7 @@ For phone access via Cloudflare Tunnel:
 - [Security Model](docs/SECURITY.md)
 - [Operations Guide](docs/OPERATIONS.md)
 - [Claude Code Integration](docs/CLAUDE_CODE.md)
+- [Testing Guide](docs/TESTING.md)
 
 ## Project Structure
 
