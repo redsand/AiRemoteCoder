@@ -83,6 +83,10 @@ export function Runs({ user }: Props) {
   const [createAutonomous, setCreateAutonomous] = useState(true);
   const [createLoading, setCreateLoading] = useState(false);
 
+  // Credentials display state
+  const [showCredentialsModal, setShowCredentialsModal] = useState(false);
+  const [credentials, setCredentials] = useState<{ id: string; token: string; command: string } | null>(null);
+
   // Filters from URL
   const status = searchParams.get('status') || 'all';
   const clientId = searchParams.get('clientId') || '';
@@ -217,13 +221,18 @@ export function Runs({ user }: Props) {
         const data = await res.json();
         addToast('success', `Run ${data.id} created`);
 
-        // Show command to copy
-        const cmd = `claude-runner start --run-id ${data.id} --token ${data.capabilityToken}` +
+        // Show credentials modal
+        const cmd = `ai-runner start --run-id ${data.id} --token ${data.capabilityToken}` +
           ` --worker-type ${createWorkerType}` +
           (model ? ` --model "${model}"` : '') +
           (createCommand ? ` --cmd "${createCommand}"` : '');
-        await navigator.clipboard.writeText(cmd);
-        addToast('info', 'Start command copied to clipboard');
+
+        setCredentials({
+          id: data.id,
+          token: data.capabilityToken,
+          command: cmd
+        });
+        setShowCredentialsModal(true);
 
         fetchRuns();
         setShowCreateModal(false);
@@ -370,7 +379,7 @@ export function Runs({ user }: Props) {
                 padding: '2px',
               }}
             >
-              \u00D7
+              ×
             </button>
           </div>
         )}
@@ -571,8 +580,167 @@ export function Runs({ user }: Props) {
                 color: 'var(--text-secondary)',
               }}
             >
-              <strong>Tip:</strong> After creating the run, the start command will be copied to your clipboard.
-              Use it to start the worker from your terminal.
+              <strong>Tip:</strong> After creating the run, you'll see your credentials and the command to start
+              the ai-runner worker from your terminal. You can copy each piece individually or copy the entire command.
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Credentials Modal */}
+      {showCredentialsModal && credentials && (
+        <Modal
+          open={showCredentialsModal}
+          onClose={() => setShowCredentialsModal(false)}
+          title="Run Created Successfully! 🎉"
+          footer={
+            <button
+              className="btn btn-primary"
+              onClick={() => setShowCredentialsModal(false)}
+            >
+              Done
+            </button>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <p style={{ color: 'var(--text-secondary)', margin: 0 }}>
+              Your run has been created. Here are your credentials and the command to start the worker:
+            </p>
+
+            {/* Run ID */}
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: 'var(--text-secondary)' }}>
+                Run ID:
+              </label>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  background: 'var(--bg-tertiary)',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  fontFamily: 'monospace',
+                  fontSize: '14px',
+                }}
+              >
+                <code style={{ flex: 1, color: 'var(--accent-blue)', wordBreak: 'break-all' }}>
+                  {credentials.id}
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(credentials.id);
+                    addToast('success', 'Run ID copied to clipboard');
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent-blue)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    padding: '0 8px',
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            {/* Token */}
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: 'var(--text-secondary)' }}>
+                Capability Token:
+              </label>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  background: 'var(--bg-tertiary)',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  fontFamily: 'monospace',
+                  fontSize: '14px',
+                }}
+              >
+                <code style={{ flex: 1, color: 'var(--accent-green)', wordBreak: 'break-all' }}>
+                  {credentials.token}
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(credentials.token);
+                    addToast('success', 'Token copied to clipboard');
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent-blue)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    padding: '0 8px',
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            {/* Start Command */}
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: 'var(--text-secondary)' }}>
+                Start Command:
+              </label>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  background: 'var(--bg-tertiary)',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  overflow: 'auto',
+                }}
+              >
+                <code style={{ flex: 1, color: 'var(--text-primary)', wordBreak: 'break-all' }}>
+                  {credentials.command}
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(credentials.command);
+                    addToast('success', 'Command copied to clipboard');
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent-blue)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    padding: '0 8px',
+                    flexShrink: 0,
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            {/* Info Box */}
+            <div
+              style={{
+                padding: '12px',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '6px',
+                fontSize: '13px',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <strong>💡 Next Steps:</strong>
+              <ol style={{ marginTop: '8px', paddingLeft: '20px', margin: '8px 0 0 0' }}>
+                <li>Copy the token and run ID above</li>
+                <li>Open your terminal/command prompt</li>
+                <li>Paste and run the start command</li>
+                <li>The worker will connect to this gateway</li>
+              </ol>
             </div>
           </div>
         </Modal>

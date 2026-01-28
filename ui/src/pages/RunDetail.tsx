@@ -119,7 +119,9 @@ export function RunDetail({ user }: Props) {
   const [showCommandModal, setShowCommandModal] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState('');
   const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [commandLoading, setCommandLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -128,6 +130,7 @@ export function RunDetail({ user }: Props) {
   const keyboardInputRef = useRef<HTMLInputElement>(null);
 
   const canOperate = user?.role === 'admin' || user?.role === 'operator';
+  const canDelete = user?.role === 'admin';
   const isActive = run?.status === 'running';
 
   // Fetch run details
@@ -289,6 +292,26 @@ export function RunDetail({ user }: Props) {
     }
   };
 
+  // Delete run
+  const deleteRun = async () => {
+    setDeleteLoading(true);
+    try {
+      const res = await fetch(`/api/runs/${runId}`, { method: 'DELETE' });
+      if (res.ok) {
+        addToast('success', 'Run deleted successfully');
+        setShowDeleteConfirm(false);
+        navigate('/runs', { replace: true });
+      } else {
+        const error = await res.json();
+        addToast('error', error.error || 'Failed to delete run');
+      }
+    } catch (err) {
+      addToast('error', 'Failed to delete run');
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   // Send keyboard input
   const sendKeyboardInput = async () => {
     if (!keyboardInput.trim()) return;
@@ -389,7 +412,7 @@ export function RunDetail({ user }: Props) {
       <div className="run-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
           <Link to="/runs" className="btn btn-sm">
-            \u2190 Back
+            ← Back
           </Link>
           <StatusPill status={run.status as any} />
           <ConnectionIndicator connected={connected} reconnecting={reconnecting} />
@@ -442,7 +465,7 @@ export function RunDetail({ user }: Props) {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-            <span style={{ fontSize: '16px' }}>\uD83D\uDD17</span>
+            <span style={{ fontSize: '16px' }}>🔗</span>
             <strong style={{ color: 'var(--accent-green)' }}>Assist Session Active</strong>
           </div>
           <a
@@ -473,7 +496,7 @@ export function RunDetail({ user }: Props) {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-            <span style={{ fontSize: '16px' }}>\uD83D\uDD14</span>
+            <span style={{ fontSize: '16px' }}>🔔</span>
             <strong style={{ color: 'var(--accent-purple)' }}>Waiting for your input</strong>
           </div>
 
@@ -609,21 +632,34 @@ export function RunDetail({ user }: Props) {
 
       {/* Action Bar (mobile sticky) */}
       {canOperate && (
-        <ActionBar visible={isActive}>
-          <ActionButton
-            onClick={() => setShowStopConfirm(true)}
-            variant="danger"
-            icon="\u23F9"
-          >
-            Stop
-          </ActionButton>
-          <ActionButton
-            onClick={() => setShowCommandModal(true)}
-            variant="primary"
-            icon="\u25B6"
-          >
-            Run Command
-          </ActionButton>
+        <ActionBar visible={isActive || canDelete}>
+          {isActive && (
+            <>
+              <ActionButton
+                onClick={() => setShowStopConfirm(true)}
+                variant="danger"
+                icon="⏹"
+              >
+                Stop
+              </ActionButton>
+              <ActionButton
+                onClick={() => setShowCommandModal(true)}
+                variant="primary"
+                icon="▶"
+              >
+                Run Command
+              </ActionButton>
+            </>
+          )}
+          {canDelete && (
+            <ActionButton
+              onClick={() => setShowDeleteConfirm(true)}
+              variant="danger"
+              icon="🗑"
+            >
+              Delete Run
+            </ActionButton>
+          )}
         </ActionBar>
       )}
 
@@ -686,6 +722,17 @@ export function RunDetail({ user }: Props) {
         title="Stop Run"
         message="Are you sure you want to stop this run? This will send a stop signal to the running process."
         confirmText="Stop Run"
+        danger
+      />
+
+      {/* Delete Confirmation */}
+      <ConfirmModal
+        open={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={deleteRun}
+        title="Delete Run"
+        message="Are you sure you want to delete this run? This action cannot be undone. All logs, artifacts, and data associated with this run will be permanently deleted."
+        confirmText={deleteLoading ? 'Deleting...' : 'Delete Run'}
         danger
       />
     </div>
@@ -775,7 +822,7 @@ function TimelineGroup({
           padding: '8px 0',
         }}
       >
-        <span style={{ fontSize: '12px' }}>{expanded ? '\u25BC' : '\u25B6'}</span>
+        <span style={{ fontSize: '12px' }}>{expanded ? '▼' : '▶'}</span>
         <span style={{ fontSize: '13px', fontWeight: 500 }}>
           {formatTime(startTime)}
         </span>
@@ -846,7 +893,7 @@ function ArtifactsList({ artifacts }: { artifacts: Artifact[] }) {
           <div>
             <span className="artifact-name">{artifact.name}</span>
             <span className="artifact-meta">
-              {artifact.type} \u2022 {formatBytes(artifact.size)} \u2022{' '}
+              {artifact.type} • {formatBytes(artifact.size)} •{' '}
               {formatTime(artifact.created_at)}
             </span>
           </div>
@@ -888,7 +935,7 @@ function CommandsList({ commands }: { commands: Command[] }) {
           </div>
           <div className="command-meta">
             Queued: {formatTime(cmd.created_at)}
-            {cmd.acked_at && ` \u2022 Completed: ${formatTime(cmd.acked_at)}`}
+            {cmd.acked_at && ` • Completed: ${formatTime(cmd.acked_at)}`}
           </div>
           {cmd.result && (
             <pre className="command-result">{cmd.result}</pre>

@@ -92,7 +92,7 @@ Write-Host
 
 Write-Host "To start a Claude Code run:" -ForegroundColor Yellow
 Write-Host "  1. Create a run from the UI (get run-id and token)"
-Write-Host "  2. Run: .\wrapper\claude-runner start --run-id <id> --token <token>"
+Write-Host "  2. Run: .\wrapper\ai-runner start --run-id <id> --token <token>"
 Write-Host
 
 # Start gateway

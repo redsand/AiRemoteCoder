@@ -153,7 +153,7 @@ export function ClientDetailPage({ user }: Props) {
       <div className="client-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
           <Link to="/clients" className="btn btn-sm">
-            \u2190 Back
+            ← Back
           </Link>
           <StatusPill status={client.status as any} />
           {!client.operator_enabled && (

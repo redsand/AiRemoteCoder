@@ -154,7 +154,7 @@ export function Dashboard({ user: _user }: Props) {
       {totalAttention > 0 && (
         <section className="dashboard-section">
           <h2 className="section-title">
-            <span style={{ color: 'var(--accent-red)' }}>\u26A0</span> Needs Attention
+            <span style={{ color: 'var(--accent-red)' }}>⚠</span> Needs Attention
           </h2>
 
           {/* Waiting Approval */}

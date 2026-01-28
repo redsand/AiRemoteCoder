@@ -308,7 +308,7 @@ export function Alerts({ user }: Props) {
                   onClick={() => acknowledgeAlert(alert.id)}
                   aria-label="Acknowledge alert"
                 >
-                  \u2713
+                  ✓
                 </button>
               )}
             </div>
