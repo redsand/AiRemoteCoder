@@ -29,7 +29,7 @@ if (-not (Test-Path ".env")) {
     $hmacSecret = -join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
     $authSecret = -join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
 
-    @"
+    $envContent = @"
 # Gateway Configuration
 GATEWAY_PORT=3100
 GATEWAY_HOST=0.0.0.0
@@ -51,7 +51,8 @@ RUN_RETENTION_DAYS=30
 # Wrapper Configuration
 GATEWAY_URL=https://localhost:3100
 ALLOW_SELF_SIGNED=true
-"@ | Out-File -FilePath ".env" -Encoding utf8
+"@
+    $envContent | Out-File -FilePath ".env" -Encoding utf8
 
     Write-Host "Generated .env with secure secrets" -ForegroundColor Green
 }

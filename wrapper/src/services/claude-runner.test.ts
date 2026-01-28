@@ -54,6 +54,7 @@ vi.mock('fs', () => ({
 
 import { config } from '../config.js';
 import { redactSecrets } from '../utils/crypto.js';
+import { parseCdCommand, isPathSafe, getRelativePath } from './claude-runner.js';
 
 describe('ClaudeRunner', () => {
   describe('Command Allowlist', () => {
@@ -639,11 +640,6 @@ describe('Directory Navigation Commands', () => {
   });
 
   it('should validate cd command format', () => {
-    const parseCdCommand = (command: string) => {
-      if (!command.startsWith('cd ')) return null;
-      return command.substring(3).trim();
-    };
-
     expect(parseCdCommand('cd src')).toBe('src');
     expect(parseCdCommand('cd  src  ')).toBe('src');
     expect(parseCdCommand('cd')).toBe('');
@@ -651,12 +647,6 @@ describe('Directory Navigation Commands', () => {
   });
 
   it('should validate directory path safety', () => {
-    const isPathSafe = (path: string, sandboxRoot: string): boolean => {
-      const { resolve, normalize } = require('path');
-      const resolved = resolve(sandboxRoot, path);
-      return resolved.startsWith(sandboxRoot);
-    };
-
     expect(isPathSafe('src', '/project')).toBe(true);
     expect(isPathSafe('src/components', '/project')).toBe(true);
     expect(isPathSafe('../other', '/project')).toBe(false);
@@ -665,12 +655,6 @@ describe('Directory Navigation Commands', () => {
   });
 
   it('should handle relative path to working directory', () => {
-    const getRelativePath = (current: string, root: string): string => {
-      const { relative } = require('path');
-      const rel = relative(root, current);
-      return rel === '.' ? root : rel;
-    };
-
     expect(getRelativePath('/project', '/project')).toBe('/project');
     expect(getRelativePath('/project/src', '/project')).toBe('src');
     expect(getRelativePath('/project/src/components', '/project')).toBe('src/components');

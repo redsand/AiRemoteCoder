@@ -132,6 +132,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
       repo,
       waitingApproval,
       tags,
+      workerType,
       limit = '50',
       offset = '0',
       cursor,

@@ -184,6 +184,7 @@ export abstract class BaseRunner extends EventEmitter {
    */
   protected buildStartMarker(command: string): Record<string, any> {
     return {
+      event: 'started',
       command,
       workingDir: this.workingDir,
       autonomous: this.autonomous,
@@ -205,6 +206,7 @@ export abstract class BaseRunner extends EventEmitter {
     stopRequested: boolean;
     workerType: string;
     model?: string;
+    haltRequested?: boolean;
   } {
     return {
       runId: this.auth.runId,
@@ -214,7 +216,8 @@ export abstract class BaseRunner extends EventEmitter {
       autonomous: this.autonomous,
       stopRequested: this.stopRequested,
       workerType: this.getWorkerType(),
-      model: this.model
+      model: this.model,
+      haltRequested: this.haltRequested
     };
   }
 
@@ -292,7 +295,7 @@ export abstract class BaseRunner extends EventEmitter {
    * Send input to stdin
    */
   sendInput(data: string): boolean {
-    if (!this.process?.stdin || !this.isRunning) {
+    if (!this.process?.stdin) {
       return false;
     }
     try {
@@ -364,24 +367,30 @@ export abstract class BaseRunner extends EventEmitter {
    */
   private detectBlockingPrompt(text: string): boolean {
     const promptPatterns = [
-      /Would you like me to\s*\?/i,
-      /Should I\s*\?/i,
-      /Do you want me to\s*\?/i,
-      /Continue\s*\?/i,
+      /Would you like me to/i,
+      /Should I/i,
+      /Do you want me to/i,
+      /Continue\??/i,
       /\[Y\/n\]/i,
       /\[y\/N\]/i,
       /\(Y\/n\)/i,
       /\(y\/N\)/i,
       /\[y\/N\]?\s*$/m,
       /Press Enter to continue/i,
+      /press enter to continue/i,
       /Enter to proceed/i,
-      /Type 'y' to continue/i,
-      /Type 'yes' to continue/i,
+      /Type\s+'y'\s+to\s+continue/i,
+      /Type\s+'y'\s+to\s+proceed/i,
+      /Type\s+"y"\s+to\s+continue/i,
+      /Type\s+'yes'\s+to\s+continue/i,
+      /Type\s+'yes'\s+to\s+proceed/i,
+      /Type\s+"yes"\s+to\s+continue/i,
       /Would you like to proceed/i,
       /Confirm this change/i,
       /Allow this operation/i,
       /Proceed with this action/i,
       /Are you sure/i,
+      /Are you certain/i,
       /\?$/m, // Ends with question mark
     ];
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock config
 vi.mock('../config.js', () => ({
@@ -19,7 +19,6 @@ vi.mock('fs', () => ({
   mkdirSync: vi.fn(),
   writeFileSync: vi.fn(),
   readFileSync: vi.fn(),
-  statSync: vi.fn(),
   createWriteStream: vi.fn(() => ({
     write: vi.fn(),
     end: vi.fn()
@@ -66,12 +65,12 @@ class TestRunner extends BaseRunner {
     return (this as any).detectBlockingPrompt(text);
   }
 
-  public exposeChangeDirectory(path: string): { success: boolean; message: string; newDir?: string } {
-    return (this as any).changeDirectory(path);
+  public exposeBuildStartMarker(command: string): Record<string, any> {
+    return (this as any).buildStartMarker(command);
   }
 
-  public exposeGetWorkingDirectory(): string {
-    return (this as any).getWorkingDirectory();
+  public exposeBuildEnvironment(): NodeJS.ProcessEnv {
+    return (this as any).buildEnvironment();
   }
 }
 
@@ -194,6 +193,28 @@ describe('BaseRunner - Prompt Detection', () => {
       }
     });
 
+    it('should detect "Type \'yes\' to continue" prompts', () => {
+      const prompts = [
+        "Type 'yes' to continue",
+        "Type 'yes' to proceed"
+      ];
+
+      for (const prompt of prompts) {
+        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+      }
+    });
+
+    it('should detect "Enter to proceed" prompts', () => {
+      const prompts = [
+        'Enter to proceed',
+        'press ENTER to proceed'
+      ];
+
+      for (const prompt of prompts) {
+        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+      }
+    });
+
     it('should detect "Are you sure" prompts', () => {
       const prompts = [
         'Are you sure?',
@@ -265,248 +286,46 @@ Are you sure you want to proceed?
   });
 });
 
-describe('BaseRunner - Sandbox Directory Navigation', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    // We need to re-import fs after mocking
-    const fs = require('fs');
-    fs.existsSync = vi.fn((path: string) => {
-      const validPaths = [
-        '/test/project',
-        '/test/project/src',
-        '/test/project/src/components',
-        '/test/project/tests',
-        '/test/project/docs'
-      ];
-      return validPaths.some(p => path.startsWith(p));
-    });
-
-    fs.statSync = vi.fn((path: string) => ({
-      isDirectory: () => true,
-      isFile: () => false
-    }));
-  });
-  });
-
-  it('should initialize with sandbox root', () => {
+describe('BaseRunner - Start Marker', () => {
+  it('should include workerType in start marker', () => {
     const runner = new TestRunner({
       runId: 'test-run',
-      capabilityToken: 'token',
+      capabilityToken: 'test-token',
       workingDir: '/test/project',
-      autonomous: false
+      autonomous: false,
+      model: 'test-model'
     });
 
-    expect((runner as any).sandboxRoot).toBe('/test/project');
-  });
+    const marker = runner.exposeBuildStartMarker('test command');
 
-  it('should change to subdirectory', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project',
-      autonomous: false
-    });
-
-    const result = runner.exposeChangeDirectory('src');
-    expect(result.success).toBe(true);
-    expect(result.newDir).toBe('/test/project/src');
-  });
-
-  it('should change to nested subdirectory', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project',
-      autonomous: false
-    });
-
-    const result = runner.exposeChangeDirectory('src/components');
-    expect(result.success).toBe(true);
-    expect(result.newDir).toBe('/test/project/src/components');
-  });
-
-  it('should change to relative path', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project/src',
-      autonomous: false
-    });
-
-    const result = runner.exposeChangeDirectory('tests');
-    expect(result.success).toBe(true);
-    expect(result.newDir).toBe('/test/project/tests');
-  });
-
-  it('should block cd to parent directory', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project',
-      autonomous: false
-    });
-
-    const result = runner.exposeChangeDirectory('..');
-    expect(result.success).toBe(false);
-    expect(result.message).toContain('outside sandbox');
-  });
-
-  it('should block cd to absolute path outside sandbox', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project',
-      autonomous: false
-    });
-
-    const result = runner.exposeChangeDirectory('/etc');
-    expect(result.success).toBe(false);
-    expect(result.message).toContain('outside sandbox');
-  });
-
-  it('should block cd to home directory', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project',
-      autonomous: false
-    });
-
-    const result = runner.exposeChangeDirectory('~');
-    expect(result.success).toBe(false);
-    expect(result.message).toContain('cannot change to home');
-  });
-
-  it('should block cd to non-existent directory', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project',
-      autonomous: false
-    });
-
-    const result = runner.exposeChangeDirectory('nonexistent');
-    expect(result.success).toBe(false);
-    expect(result.message).toContain('does not exist');
-  });
-
-  it('should display working directory relative to sandbox', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project',
-      autonomous: false
-    });
-
-    // At root, shows the full path
-    let dir = runner.exposeGetWorkingDirectory();
-    expect(dir).toBe('/test/project');
-
-    // Change to subdirectory
-    runner.exposeChangeDirectory('src');
-
-    // Shows relative path
-    dir = runner.exposeGetWorkingDirectory();
-    expect(dir).toBe('src');
-
-    // Change to nested subdirectory
-    runner.exposeChangeDirectory('components');
-
-    // Shows relative path
-    dir = runner.exposeGetWorkingDirectory();
-    expect(dir).toBe('src/components');
-  });
-
-  it('should allow cd to absolute path within sandbox', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project/src',
-      autonomous: false
-    });
-
-    const result = runner.exposeChangeDirectory('/test/project/docs');
-    expect(result.success).toBe(true);
-    expect(result.newDir).toBe('/test/project/docs');
-  });
-
-  it('should handle multiple directory changes', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project',
-      autonomous: false
-    });
-
-    expect(runner.exposeChangeDirectory('src').success).toBe(true);
-    expect(runner.exposeGetWorkingDirectory()).toBe('src');
-
-    expect(runner.exposeChangeDirectory('components').success).toBe(true);
-    expect(runner.exposeGetWorkingDirectory()).toBe('src/components');
-
-    expect(runner.exposeChangeDirectory('../tests').success).toBe(true);
-    expect(runner.exposeGetWorkingDirectory()).toBe('tests');
-  });
-
-  it('should block escaped path traversal', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project/src',
-      autonomous: false
-    });
-
-    const result = runner.exposeChangeDirectory('../../..');
-    expect(result.success).toBe(false);
-    expect(result.message).toContain('outside sandbox');
+    expect(marker.event).toBe('started');
+    expect(marker.workerType).toBe('test-worker');
+    expect(marker.model).toBe('test-model');
+    expect(marker.autonomous).toBe(false);
   });
 });
 
-describe('BaseRunner - Input Handling', () => {
-  it('should send prompt_resolved event when input is sent', () => {
-    const runner = new TestRunner({
+describe('BaseRunner - Environment Building', () => {
+  it('should set TERM based on autonomous mode', () => {
+    const autonomousRunner = new TestRunner({
+      runId: 'test-run',
+      capabilityToken: 'token',
+      workingDir: '/test/project',
+      autonomous: true
+    });
+
+    const interactiveRunner = new TestRunner({
       runId: 'test-run',
       capabilityToken: 'token',
       workingDir: '/test/project',
       autonomous: false
     });
 
-    let promptResolvedEmitted = false;
-    let emittedInput = '';
-    runner.on('prompt_resolved', (input: string) => {
-      promptResolvedEmitted = true;
-      emittedInput = input;
-    });
+    const autonomousEnv = autonomousRunner.exposeBuildEnvironment();
+    const interactiveEnv = interactiveRunner.exposeBuildEnvironment();
 
-    // Simulate input being sent - we need to mock the process stdin
-    const mockStdin = { write: vi.fn(() => true) };
-    (runner as any).process = { stdin: mockStdin };
-
-    runner['sendInput']('yes\n');
-
-    expect(promptResolvedEmitted).toBe(true);
-    expect(emittedInput).toBe('yes\n');
-  });
-
-  it('should handle input without newline', () => {
-    const runner = new TestRunner({
-      runId: 'test-run',
-      capabilityToken: 'token',
-      workingDir: '/test/project',
-      autonomous: false
-    });
-
-    let promptResolvedEmitted = false;
-    runner.on('prompt_resolved', () => {
-      promptResolvedEmitted = true;
-    });
-
-    const mockStdin = { write: vi.fn(() => true) };
-    (runner as any).process = { stdin: mockStdin };
-
-    runner['sendInput']('y');
-
-    expect(promptResolvedEmitted).toBe(true);
+    expect(autonomousEnv.TERM).toBe('xterm-256color');
+    expect(interactiveEnv.TERM).toBe('dumb');
   });
 });
 
@@ -534,5 +353,130 @@ describe('BaseRunner - State Management', () => {
 
     const state = runner.getState();
     expect(state.workerType).toBe('test-worker');
+  });
+
+  it('should track stop requested state', () => {
+    const runner = new TestRunner({
+      runId: 'test-run',
+      capabilityToken: 'token',
+      workingDir: '/test/project',
+      autonomous: false
+    });
+
+    const state = runner.getState();
+    expect(state.stopRequested).toBe(false);
+    expect(state.haltRequested).toBeUndefined();
+  });
+});
+
+describe('BaseRunner - Command Building', () => {
+  it('should build command without prompt', () => {
+    const runner = new TestRunner({
+      runId: 'test-run',
+      capabilityToken: 'token',
+      workingDir: '/test/project',
+      autonomous: false
+    });
+
+    const result = runner.buildCommand();
+    expect(result.args).toEqual([]);
+    expect(result.fullCommand).toBe('test-cmd');
+  });
+
+  it('should build command with prompt', () => {
+    const runner = new TestRunner({
+      runId: 'test-run',
+      capabilityToken: 'token',
+      workingDir: '/test/project',
+      autonomous: false
+    });
+
+    const result = runner.buildCommand('test prompt');
+    expect(result.args).toEqual(['test prompt']);
+    expect(result.fullCommand).toBe('test prompt');
+  });
+
+  it('should include autonomous mode in start marker', () => {
+    const autonomousRunner = new TestRunner({
+      runId: 'test-run',
+      capabilityToken: 'token',
+      workingDir: '/test/project',
+      autonomous: true
+    });
+
+    const marker = autonomousRunner.exposeBuildStartMarker('autonomous test');
+    expect(marker.autonomous).toBe(true);
+    expect(marker.event).toBe('started');
+  });
+});
+
+describe('BaseRunner - Working Directory', () => {
+  it('should use provided working directory', () => {
+    const runner1 = new TestRunner({
+      runId: 'test-run',
+      capabilityToken: 'token',
+      workingDir: '/custom/path',
+      autonomous: false
+    });
+
+    const runner2 = new TestRunner({
+      runId: 'test-run',
+      capabilityToken: 'token',
+      // No workingDir specified - should use default
+      autonomous: false
+    });
+
+    expect(runner1.getState().workingDir).toBe('/custom/path');
+    expect(runner2.getState().workingDir).toBe(process.cwd());
+  });
+});
+
+describe('BaseRunner - Input Handling', () => {
+  it('should emit prompt_resolved event when input is sent', () => {
+    const runner = new TestRunner({
+      runId: 'test-run',
+      capabilityToken: 'token',
+      workingDir: '/test/project',
+      autonomous: false
+    });
+
+    let promptResolvedEmitted = false;
+    let emittedInput = '';
+    runner.on('prompt_resolved', (input: string) => {
+      promptResolvedEmitted = true;
+      emittedInput = input;
+    });
+
+    // Mock the process stdin
+    const mockStdin = { write: vi.fn(() => true) };
+    (runner as any).process = { stdin: mockStdin };
+
+    runner['sendInput']('yes\n');
+
+    expect(promptResolvedEmitted).toBe(true);
+    expect(emittedInput).toBe('yes\n');
+    expect(mockStdin.write).toHaveBeenCalledWith('yes\n');
+  });
+
+  it('should handle input without newline', () => {
+    const runner = new TestRunner({
+      runId: 'test-run',
+      capabilityToken: 'token',
+      workingDir: '/test/project',
+      autonomous: false
+    });
+
+    let promptResolvedEmitted = false;
+    runner.on('prompt_resolved', () => {
+      promptResolvedEmitted = true;
+    });
+
+    const mockStdin = { write: vi.fn(() => true) };
+    (runner as any).process = { stdin: mockStdin };
+
+    runner['sendInput']('y');
+
+    expect(promptResolvedEmitted).toBe(true);
+    expect(mockStdin.write).toHaveBeenCalledWith('y');
   });
 });

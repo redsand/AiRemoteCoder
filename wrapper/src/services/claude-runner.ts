@@ -1,6 +1,7 @@
 import { BaseRunner, RunnerOptions, WorkerCommandResult } from './base-runner.js';
 import { config } from '../config.js';
-import { join, existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { join, resolve as pathResolve, relative as pathRelative, normalize as pathNormalize } from 'path';
 
 export interface ClaudeRunnerOptions extends RunnerOptions {
   // No Claude-specific options needed currently
@@ -73,23 +74,8 @@ export class ClaudeRunner extends BaseRunner {
   /**
    * Get current run state (backward compatible method)
    */
-  getState(): {
-    runId: string;
-    isRunning: boolean;
-    sequence: number;
-    workingDir: string;
-    autonomous: boolean;
-    stopRequested: boolean;
-  } {
-    const state = super.getState();
-    return {
-      runId: state.runId,
-      isRunning: state.isRunning,
-      sequence: state.sequence,
-      workingDir: state.workingDir,
-      autonomous: state.autonomous,
-      stopRequested: state.stopRequested
-    };
+  getState() {
+    return super.getState();
   }
 
   /**
@@ -125,5 +111,78 @@ export class ClaudeRunner extends BaseRunner {
       console.error('Failed to load state:', err);
     }
     return false;
+  }
+}
+
+/**
+ * Parse a cd command and extract the target directory
+ * Returns null if not a cd command, empty string for bare 'cd', or the trimmed path
+ */
+export function parseCdCommand(command: string): string | null {
+  if (!command.startsWith('cd')) {
+    return null;
+  }
+  // Check if it's exactly 'cd' (bare cd)
+  if (command === 'cd') {
+    return '';
+  }
+  // Must have space after 'cd'
+  if (!command.startsWith('cd ')) {
+    return null;
+  }
+  return command.substring(3).trim();
+}
+
+/**
+ * Validate that a path stays within the sandbox root
+ * Prevents directory traversal attacks
+ */
+export function isPathSafe(path: string, sandboxRoot: string): boolean {
+  try {
+    // Normalize paths first to handle both POSIX and Windows formats
+    const normalizedRoot = pathNormalize(sandboxRoot);
+    const normalizedPath = pathNormalize(path);
+
+    // Resolve the path relative to the sandbox root
+    const resolved = pathResolve(normalizedRoot, normalizedPath);
+    const normalizedResolved = pathNormalize(resolved);
+
+    // Normalize the root as well
+    const normalizedRootResolved = pathNormalize(pathResolve(normalizedRoot));
+
+    // Convert both to forward slashes for consistent comparison
+    const resolvedForComparison = normalizedResolved.replace(/\\/g, '/').toLowerCase();
+    const rootForComparison = normalizedRootResolved.replace(/\\/g, '/').toLowerCase();
+
+    // Check if resolved path is within the sandbox
+    // This works even if paths have different drive letters or are POSIX vs Windows
+    return (
+      resolvedForComparison === rootForComparison ||
+      resolvedForComparison.startsWith(rootForComparison + '/')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get the relative path from root, or return root if at root
+ */
+export function getRelativePath(current: string, root: string): string {
+  try {
+    // Normalize both paths for comparison
+    const normalizedRoot = pathNormalize(root);
+    const normalizedCurrent = pathNormalize(current);
+
+    const rel = pathRelative(normalizedRoot, normalizedCurrent);
+
+    // If relative path is empty or '.', we're at the root - return original root path
+    if (!rel || rel === '.') {
+      return root;
+    }
+    // Convert backslashes to forward slashes for consistency
+    return rel.replace(/\\/g, '/');
+  } catch {
+    return '';
   }
 }

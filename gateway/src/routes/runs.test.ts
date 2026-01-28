@@ -385,7 +385,7 @@ describe('Run Schema with Worker Type', () => {
   });
 
   it('should handle missing worker_type in database for backward compatibility', () => {
-    const mockRun = {
+    const mockRun: any = {
       id: 'run-456',
       status: 'done',
       command: 'old command',
@@ -413,7 +413,7 @@ describe('Run State with Model', () => {
   });
 
   it('should not include model for workers that dont support it', () => {
-    const metadata = {
+    const metadata: any = {
       autonomous: false,
       workingDir: '/project',
       workerType: 'claude'
