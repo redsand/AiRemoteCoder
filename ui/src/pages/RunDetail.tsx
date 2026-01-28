@@ -100,11 +100,25 @@ export function RunDetail({ user }: Props) {
   const [reconnecting, setReconnecting] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('log');
 
+  // Prompt waiting state
+  const [promptWaiting, setPromptWaiting] = useState(false);
+  const [promptText, setPromptText] = useState('');
+  const [keyboardInput, setKeyboardInput] = useState('');
+  const [keyboardHistory, setKeyboardHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [sendLoading, setSendLoading] = useState(false);
+
   // Modals
   const [showCommandModal, setShowCommandModal] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState('');
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [commandLoading, setCommandLoading] = useState(false);
+
+  // Refs
+  const wsRef = useRef<WebSocket | null>(null);
+  const lastEventId = useRef(0);
+  const reconnectTimeout = useRef<NodeJS.Timeout>();
+  const keyboardInputRef = useRef<HTMLInputElement>(null);
 
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -176,6 +190,17 @@ export function RunDetail({ user }: Props) {
               },
             ]);
             lastEventId.current = data.eventId;
+
+            // Handle prompt events
+            if (data.eventType === 'prompt_waiting') {
+              setPromptWaiting(true);
+              setPromptText(data.data);
+              // Focus keyboard input
+              setTimeout(() => keyboardInputRef.current?.focus(), 100);
+            } else if (data.eventType === 'prompt_resolved') {
+              setPromptWaiting(false);
+              setPromptText('');
+            }
             break;
 
           case 'command_completed':
@@ -260,6 +285,79 @@ export function RunDetail({ user }: Props) {
     } catch (err) {
       addToast('error', 'Failed to stop run');
     }
+  };
+
+  // Send keyboard input
+  const sendKeyboardInput = async () => {
+    if (!keyboardInput.trim()) return;
+
+    setSendLoading(true);
+    const input = keyboardInput + '\n'; // Always append newline
+
+    try {
+      const res = await fetch(`/api/runs/${runId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input, escape: false }),
+      });
+      if (res.ok) {
+        // Add to history
+        setKeyboardHistory(prev => [...prev, keyboardInput].slice(-50));
+        setHistoryIndex(-1);
+        setKeyboardInput('');
+        addToast('success', 'Input sent');
+      } else {
+        const error = await res.json();
+        addToast('error', error.error || 'Failed to send input');
+      }
+    } catch (err) {
+      addToast('error', 'Failed to send input');
+    } finally {
+      setSendLoading(false);
+      keyboardInputRef.current?.focus();
+    }
+  };
+
+  // Handle keyboard history (up/down arrows)
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const newIndex = Math.min(historyIndex + 1, keyboardHistory.length - 1);
+      if (newIndex >= 0 && keyboardHistory[keyboardHistory.length - 1 - newIndex]) {
+        setHistoryIndex(newIndex);
+        setKeyboardInput(keyboardHistory[keyboardHistory.length - 1 - newIndex]);
+      }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const newIndex = Math.max(historyIndex - 1, -1);
+      setHistoryIndex(newIndex);
+      if (newIndex === -1) {
+        setKeyboardInput('');
+      } else if (keyboardHistory[keyboardHistory.length - 1 - newIndex]) {
+        setKeyboardInput(keyboardHistory[keyboardHistory.length - 1 - newIndex]);
+      }
+    }
+  };
+
+  // Quick response shortcuts
+  const sendQuickResponse = async (response: 'y' | 'n' | 'yes' | 'no' | 'enter') => {
+    const input = response === 'enter' ? '\n' : response + '\n';
+    try {
+      const res = await fetch(`/api/runs/${runId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input, escape: false }),
+      });
+      if (res.ok) {
+        addToast('success', `Sent: ${response}`);
+      } else {
+        const error = await res.json();
+        addToast('error', error.error || 'Failed to send input');
+      }
+    } catch (err) {
+      addToast('error', 'Failed to send input');
+    }
+    keyboardInputRef.current?.focus();
   };
 
   if (loading) {
@@ -358,6 +456,99 @@ export function RunDetail({ user }: Props) {
           >
             {run.assistUrl}
           </a>
+        </div>
+      )}
+
+      {/* Prompt Waiting Banner */}
+      {promptWaiting && (
+        <div
+          style={{
+            padding: '12px 16px',
+            background: 'rgba(163, 113, 247, 0.15)',
+            border: '1px solid var(--accent-purple)',
+            borderRadius: '8px',
+            marginBottom: '16px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+            <span style={{ fontSize: '16px' }}>\uD83D\uDD14</span>
+            <strong style={{ color: 'var(--accent-purple)' }}>Waiting for your input</strong>
+          </div>
+
+          {/* Quick response buttons */}
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+            <button
+              className="btn btn-sm"
+              onClick={() => sendQuickResponse('y')}
+              style={{ background: 'var(--accent-green)', color: 'white' }}
+            >
+              Yes (y)
+            </button>
+            <button
+              className="btn btn-sm"
+              onClick={() => sendQuickResponse('n')}
+              style={{ background: 'var(--accent-red)', color: 'white' }}
+            >
+              No (n)
+            </button>
+            <button
+              className="btn btn-sm"
+              onClick={() => sendQuickResponse('yes')}
+            >
+              Yes (full)
+            </button>
+            <button
+              className="btn btn-sm"
+              onClick={() => sendQuickResponse('no')}
+            >
+              No (full)
+            </button>
+            <button
+              className="btn btn-sm"
+              onClick={() => sendQuickResponse('enter')}
+            >
+              Enter
+            </button>
+          </div>
+
+          {/* Keyboard input */}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              ref={keyboardInputRef}
+              type="text"
+              value={keyboardInput}
+              onChange={(e) => setKeyboardInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Type your response and press Enter..."
+              className="form-input"
+              style={{ flex: 1 }}
+              disabled={sendLoading}
+            />
+            <button
+              className="btn btn-primary"
+              onClick={sendKeyboardInput}
+              disabled={sendLoading || !keyboardInput.trim()}
+            >
+              {sendLoading ? 'Sending...' : 'Send'}
+            </button>
+          </div>
+
+          {/* Show recent prompt text if available */}
+          {promptText && (
+            <div
+              style={{
+                marginTop: '8px',
+                padding: '8px',
+                background: 'var(--bg-tertiary)',
+                borderRadius: '4px',
+                fontSize: '12px',
+                fontFamily: 'monospace',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              {promptText.slice(-200)}
+            </div>
+          )}
         </div>
       )}
 

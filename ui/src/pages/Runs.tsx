@@ -36,6 +36,32 @@ const statusOptions: FilterOption[] = [
   { value: 'failed', label: 'Failed' },
 ];
 
+const workerTypeOptions: FilterOption[] = [
+  { value: 'all', label: 'All Workers' },
+  { value: 'claude', label: 'Claude' },
+  { value: 'ollama', label: 'Ollama' },
+  { value: 'ollama-launch', label: 'Ollama Launch (Claude)' },
+  { value: 'codex', label: 'Codex' },
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'rev', label: 'Rev' },
+];
+
+const ollamaModels = [
+  { value: 'codellama:7b', label: 'CodeLlama 7B' },
+  { value: 'codellama:13b', label: 'CodeLlama 13B' },
+  { value: 'codellama:34b', label: 'CodeLlama 34B' },
+  { value: 'deepseek-coder:6.7b', label: 'DeepSeek Coder 6.7B' },
+  { value: 'mistral:7b', label: 'Mistral 7B' },
+  { value: 'custom', label: 'Custom...' },
+];
+
+const geminiModels = [
+  { value: 'gemini-pro', label: 'Gemini Pro' },
+  { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+  { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+  { value: 'custom', label: 'Custom...' },
+];
+
 export function Runs({ user }: Props) {
   const { addToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -47,11 +73,21 @@ export function Runs({ user }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  // Create run modal state
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createWorkerType, setCreateWorkerType] = useState('claude');
+  const [createModel, setCreateModel] = useState('');
+  const [createCustomModel, setCreateCustomModel] = useState('');
+  const [createCommand, setCreateCommand] = useState('');
+  const [createAutonomous, setCreateAutonomous] = useState(true);
+  const [createLoading, setCreateLoading] = useState(false);
+
   // Filters from URL
   const status = searchParams.get('status') || 'all';
   const clientId = searchParams.get('clientId') || '';
   const search = searchParams.get('search') || '';
   const waitingApproval = searchParams.get('waitingApproval') === 'true';
+  const workerType = searchParams.get('workerType') || 'all';
 
   // Bulk actions
   const [selectedRuns, setSelectedRuns] = useState<Set<string>>(new Set());
@@ -81,6 +117,7 @@ export function Runs({ user }: Props) {
     if (clientId) params.set('clientId', clientId);
     if (search) params.set('search', search);
     if (waitingApproval) params.set('waitingApproval', 'true');
+    if (workerType !== 'all') params.set('workerType', workerType);
     params.set('limit', '20');
     params.set('offset', String(offset));
 
@@ -122,7 +159,7 @@ export function Runs({ user }: Props) {
   useEffect(() => {
     fetchRuns();
     fetchClients();
-  }, [status, clientId, search, waitingApproval]);
+  }, [status, clientId, search, waitingApproval, workerType]);
 
   // Auto-refresh
   useEffect(() => {
@@ -139,7 +176,7 @@ export function Runs({ user }: Props) {
   };
 
   // Check if any filters are active
-  const hasActiveFilters = status !== 'all' || !!clientId || !!search || waitingApproval;
+  const hasActiveFilters = status !== 'all' || !!clientId || !!search || waitingApproval || workerType !== 'all';
 
   // Client filter options
   const clientOptions: FilterOption[] = [
@@ -148,34 +185,67 @@ export function Runs({ user }: Props) {
   ];
 
   // Create new run
-  const createRun = async () => {
-    const command = prompt('Enter Claude command (optional):');
+  const handleCreateRun = async () => {
+    setCreateLoading(true);
     try {
+      let model = createModel;
+      if (model === 'custom') {
+        model = createCustomModel;
+      }
+
+      const requestBody: any = {
+        workerType: createWorkerType,
+        autonomous: createAutonomous,
+      };
+
+      if (createCommand.trim()) {
+        requestBody.command = createCommand.trim();
+      }
+
+      if (model && (createWorkerType === 'ollama' || createWorkerType === 'gemini')) {
+        requestBody.model = model;
+      }
+
       const res = await fetch('/api/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: command || undefined }),
+        body: JSON.stringify(requestBody),
       });
+
       if (res.ok) {
         const data = await res.json();
         addToast('success', `Run ${data.id} created`);
 
         // Show command to copy
-        const cmd = `claude-runner start --run-id ${data.id} --token ${data.capabilityToken}${
-          command ? ` --cmd "${command}"` : ''
-        }`;
+        const cmd = `claude-runner start --run-id ${data.id} --token ${data.capabilityToken}` +
+          ` --worker-type ${createWorkerType}` +
+          (model ? ` --model "${model}"` : '') +
+          (createCommand ? ` --cmd "${createCommand}"` : '');
         await navigator.clipboard.writeText(cmd);
         addToast('info', 'Start command copied to clipboard');
 
         fetchRuns();
+        setShowCreateModal(false);
+        // Reset form
+        setCreateWorkerType('claude');
+        setCreateModel('');
+        setCreateCustomModel('');
+        setCreateCommand('');
+        setCreateAutonomous(true);
       } else {
         const error = await res.json();
         addToast('error', error.error || 'Failed to create run');
       }
     } catch (err) {
       addToast('error', 'Failed to create run');
+    } finally {
+      setCreateLoading(false);
     }
   };
+
+  const supportsModelSelection = createWorkerType === 'ollama' || createWorkerType === 'ollama-launch' || createWorkerType === 'gemini';
+  const availableModels = createWorkerType === 'ollama' || createWorkerType === 'ollama-launch' ? ollamaModels :
+                         createWorkerType === 'gemini' ? geminiModels : [];
 
   // Toggle run selection
   const toggleRunSelection = (runId: string) => {
@@ -243,7 +313,7 @@ export function Runs({ user }: Props) {
             </button>
           )}
           {canOperate && (
-            <button className="btn btn-primary" onClick={createRun}>
+            <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
               New Run
             </button>
           )}
@@ -262,6 +332,12 @@ export function Runs({ user }: Props) {
           value={status}
           options={statusOptions}
           onChange={(val) => updateFilter('status', val)}
+        />
+        <FilterSelect
+          label="Worker"
+          value={workerType}
+          options={workerTypeOptions}
+          onChange={(val) => updateFilter('workerType', val)}
         />
         <FilterSelect
           label="Client"
@@ -383,6 +459,123 @@ export function Runs({ user }: Props) {
         danger
         loading={actionLoading}
       />
+
+      {/* Create Run Modal */}
+      {canOperate && (
+        <Modal
+          open={showCreateModal}
+          onClose={() => setShowCreateModal(false)}
+          title="Create New Run"
+          footer={
+            <>
+              <button className="btn" onClick={() => setShowCreateModal(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleCreateRun}
+                disabled={createLoading}
+              >
+                {createLoading ? 'Creating...' : 'Create Run'}
+              </button>
+            </>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Worker Type Selection */}
+            <div>
+              <label className="form-label">Worker Type</label>
+              <select
+                value={createWorkerType}
+                onChange={(e) => {
+                  setCreateWorkerType(e.target.value);
+                  setCreateModel('');
+                  setCreateCustomModel('');
+                }}
+                className="form-input"
+                style={{ cursor: 'pointer' }}
+              >
+                <option value="claude">Claude (Anthropic)</option>
+                <option value="ollama">Ollama (Local LLM)</option>
+                <option value="ollama-launch">Ollama Launch (Claude)</option>
+                <option value="codex">Codex CLI</option>
+                <option value="gemini">Gemini CLI</option>
+                <option value="rev">Rev</option>
+              </select>
+            </div>
+
+            {/* Model Selection (for Ollama/Gemini) */}
+            {supportsModelSelection && (
+              <div>
+                <label className="form-label">Model</label>
+                <select
+                  value={createModel}
+                  onChange={(e) => setCreateModel(e.target.value)}
+                  className="form-input"
+                  style={{ cursor: 'pointer' }}
+                >
+                  <option value="">Default Model</option>
+                  {availableModels.map((model) => (
+                    <option key={model.value} value={model.value}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+                {createModel === 'custom' && (
+                  <input
+                    type="text"
+                    value={createCustomModel}
+                    onChange={(e) => setCreateCustomModel(e.target.value)}
+                    placeholder="Enter custom model name..."
+                    className="form-input"
+                    style={{ marginTop: '8px' }}
+                  />
+                )}
+              </div>
+            )}
+
+            {/* Command/Prompt */}
+            <div>
+              <label className="form-label">Command / Prompt (optional)</label>
+              <input
+                type="text"
+                value={createCommand}
+                onChange={(e) => setCreateCommand(e.target.value)}
+                placeholder="Enter initial command or prompt..."
+                className="form-input"
+              />
+            </div>
+
+            {/* Autonomous Mode Toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <input
+                type="checkbox"
+                id="autonomous"
+                checked={createAutonomous}
+                onChange={(e) => setCreateAutonomous(e.target.checked)}
+                style={{ width: '18px', height: '18px', accentColor: 'var(--accent-blue)' }}
+              />
+              <label htmlFor="autonomous" style={{ cursor: 'pointer' }}>
+                Autonomous mode (no prompt required)
+              </label>
+            </div>
+
+            {/* Info Box */}
+            <div
+              style={{
+                padding: '12px',
+                background: 'var(--bg-tertiary)',
+                borderRadius: '6px',
+                fontSize: '13px',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <strong>Tip:</strong> After creating the run, the start command will be copied to your clipboard.
+              Use it to start the worker from your terminal.
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

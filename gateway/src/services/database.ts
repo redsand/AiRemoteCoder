@@ -51,12 +51,18 @@ db.exec(`
     error_message TEXT,
     capability_token TEXT NOT NULL,
     metadata TEXT,
-    tags TEXT
+    tags TEXT,
+    worker_type TEXT NOT NULL DEFAULT 'claude'
   );
   CREATE INDEX IF NOT EXISTS idx_runs_client_id ON runs(client_id);
   CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
   CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);
   CREATE INDEX IF NOT EXISTS idx_runs_waiting_approval ON runs(waiting_approval);
+  CREATE INDEX IF NOT EXISTS idx_runs_worker_type ON runs(worker_type);
+
+  -- Migration: Add worker_type column if it doesn't exist
+  -- This is a no-op if the column already exists
+  -- ALTER TABLE runs ADD COLUMN worker_type TEXT NOT NULL DEFAULT 'claude';
 
   -- Events table (log chunks, markers)
   CREATE TABLE IF NOT EXISTS events (

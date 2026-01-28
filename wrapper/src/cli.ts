@@ -5,6 +5,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { config, validateConfig } from './config.js';
 import { ClaudeRunner } from './services/claude-runner.js';
+import { GenericRunner, createGenericRunner } from './services/generic-runner.js';
 import {
   testConnection,
   login,
@@ -20,6 +21,8 @@ import {
   sendEscape,
   type UIAuth
 } from './services/gateway-client.js';
+import { type WorkerType, getWorkerDisplayName, isValidWorkerType } from './services/worker-registry.js';
+import type { BaseRunner } from './services/base-runner.js';
 
 const program = new Command();
 
@@ -347,22 +350,38 @@ program
   .description('Create and start a new autonomous run (no prompt needed)')
   .option('-c, --cwd <path>', 'Working directory')
   .option('-p, --prompt <prompt>', 'Initial prompt (optional)')
+  .option('-w, --worker-type <type>', 'Worker type (claude, ollama, ollama-launch, codex, gemini, rev)', 'claude')
+  .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, etc.)')
   .option('--autonomous', 'Run in fully autonomous mode', true)
   .option('--no-autonomous', 'Run in interactive mode')
   .action(async (options) => {
     try {
       validateConfig();
 
+      // Validate worker type
+      const workerType = options.workerType;
+      if (!isValidWorkerType(workerType)) {
+        console.error(`Invalid worker type: ${workerType}`);
+        console.error('Valid worker types: claude, ollama, codex, gemini, rev');
+        process.exit(1);
+      }
+
       const auth = await getUIAuth();
 
-      // Create a new run on the gateway
+      // Create a new run on the gateway with worker type
       const createResult = await createRun(auth, {
         command: options.prompt,
         workingDir: options.cwd || process.cwd(),
-        autonomous: options.autonomous
+        autonomous: options.autonomous,
+        workerType,
+        model: options.model
       });
 
       console.log(`Created run: ${createResult.id}`);
+      console.log(`Worker: ${getWorkerDisplayName(workerType)}`);
+      if (options.model) {
+        console.log(`Model: ${options.model}`);
+      }
       console.log(`Mode: ${createResult.autonomous ? 'Autonomous' : 'Interactive'}`);
 
       // Test gateway connection
@@ -372,13 +391,25 @@ program
         process.exit(1);
       }
 
-      // Start the runner
-      const runner = new ClaudeRunner({
-        runId: createResult.id,
-        capabilityToken: createResult.capabilityToken,
-        workingDir: options.cwd,
-        autonomous: options.autonomous
-      });
+      // Create the appropriate runner based on worker type
+      let runner: BaseRunner;
+
+      if (workerType === 'claude') {
+        runner = new ClaudeRunner({
+          runId: createResult.id,
+          capabilityToken: createResult.capabilityToken,
+          workingDir: options.cwd,
+          autonomous: options.autonomous
+        });
+      } else {
+        runner = createGenericRunner(workerType as WorkerType, {
+          runId: createResult.id,
+          capabilityToken: createResult.capabilityToken,
+          workingDir: options.cwd,
+          autonomous: options.autonomous,
+          model: options.model
+        });
+      }
 
       runner.on('stdout', (data) => process.stdout.write(data));
       runner.on('stderr', (data) => process.stderr.write(data));
@@ -407,11 +438,13 @@ program
 
 program
   .command('start')
-  .description('Start a Claude Code run with a specific run ID and token')
+  .description('Start a worker run with a specific run ID and token')
   .requiredOption('--run-id <id>', 'Run ID from gateway')
   .requiredOption('--token <token>', 'Capability token from gateway')
-  .option('--cmd <command>', 'Claude Code command/prompt')
+  .option('--cmd <command>', 'Worker command/prompt')
   .option('--cwd <path>', 'Working directory (defaults to current)')
+  .option('-w, --worker-type <type>', 'Worker type (claude, ollama, ollama-launch, codex, gemini, rev)', 'claude')
+  .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, etc.)')
   .option('--autonomous', 'Run in autonomous mode')
   .action(async (options) => {
     try {
@@ -419,6 +452,14 @@ program
     } catch (err: any) {
       console.error(`Configuration error: ${err.message}`);
       console.error('Make sure HMAC_SECRET is set in .env or environment');
+      process.exit(1);
+    }
+
+    // Validate worker type
+    const workerType = options.workerType;
+    if (!isValidWorkerType(workerType)) {
+      console.error(`Invalid worker type: ${workerType}`);
+      console.error('Valid worker types: claude, ollama, codex, gemini, rev');
       process.exit(1);
     }
 
@@ -430,18 +471,35 @@ program
       process.exit(1);
     }
     console.log('Gateway connection OK');
+    console.log(`Worker: ${getWorkerDisplayName(workerType)}`);
+    if (options.model) {
+      console.log(`Model: ${options.model}`);
+    }
 
-    const runner = new ClaudeRunner({
-      runId: options.runId,
-      capabilityToken: options.token,
-      workingDir: options.cwd,
-      autonomous: options.autonomous
-    });
+    // Create the appropriate runner based on worker type
+    let runner: BaseRunner;
+
+    if (workerType === 'claude') {
+      runner = new ClaudeRunner({
+        runId: options.runId,
+        capabilityToken: options.token,
+        workingDir: options.cwd,
+        autonomous: options.autonomous
+      });
+    } else {
+      runner = createGenericRunner(workerType as WorkerType, {
+        runId: options.runId,
+        capabilityToken: options.token,
+        workingDir: options.cwd,
+        autonomous: options.autonomous,
+        model: options.model
+      });
+    }
 
     runner.on('stdout', (data) => process.stdout.write(data));
     runner.on('stderr', (data) => process.stderr.write(data));
     runner.on('exit', (code) => {
-      console.log(`\nClaude Code finished with exit code ${code}`);
+      console.log(`\n${getWorkerDisplayName(workerType)} finished with exit code ${code}`);
       process.exit(code);
     });
 

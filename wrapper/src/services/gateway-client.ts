@@ -16,7 +16,7 @@ export interface RunAuth {
 }
 
 export interface GatewayEvent {
-  type: 'stdout' | 'stderr' | 'marker' | 'info' | 'error' | 'assist';
+  type: 'stdout' | 'stderr' | 'marker' | 'info' | 'error' | 'assist' | 'prompt_waiting' | 'prompt_resolved';
   data: string;
   sequence?: number;
 }
@@ -266,7 +266,14 @@ export async function getRunState(auth: UIAuth, runId: string): Promise<{
 
 export async function createRun(
   auth: UIAuth,
-  options: { command?: string; metadata?: Record<string, any>; workingDir?: string; autonomous?: boolean }
+  options: {
+    command?: string;
+    metadata?: Record<string, any>;
+    workingDir?: string;
+    autonomous?: boolean;
+    workerType?: string;
+    model?: string;
+  }
 ): Promise<{ id: string; capabilityToken: string; status: string; autonomous?: boolean }> {
   return uiRequest('POST', '/api/runs', options, auth);
 }

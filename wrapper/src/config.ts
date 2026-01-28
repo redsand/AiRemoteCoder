@@ -22,8 +22,35 @@ export const config = {
   dataDir: resolve(projectRoot, '.data'),
   runsDir: resolve(projectRoot, '.data', 'runs'),
 
-  // Claude Code command
+  // Worker Commands
   claudeCommand: process.env.CLAUDE_COMMAND || 'claude',
+  ollamaCommand: process.env.OLLAMA_COMMAND || 'ollama',
+  ollamaModel: process.env.OLLAMA_MODEL || 'codellama:7b',
+  codexCommand: process.env.CODEX_COMMAND || 'codex-cli',
+  geminiCommand: process.env.GEMINI_COMMAND || 'gemini-cli',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-pro',
+  revCommand: process.env.REV_COMMAND || 'rev',
+
+  // Get worker command by type
+  getWorkerCommand(workerType: string): string {
+    const commands: Record<string, string> = {
+      claude: this.claudeCommand,
+      ollama: this.ollamaCommand,
+      codex: this.codexCommand,
+      gemini: this.geminiCommand,
+      rev: this.revCommand
+    };
+    return commands[workerType] || workerType;
+  },
+
+  // Get default model for worker type
+  getDefaultModel(workerType: string): string | undefined {
+    const models: Record<string, string | undefined> = {
+      ollama: this.ollamaModel,
+      gemini: this.geminiModel
+    };
+    return models[workerType];
+  },
 
   // Polling intervals (ms)
   commandPollInterval: parseInt(process.env.COMMAND_POLL_INTERVAL || '2000', 10),

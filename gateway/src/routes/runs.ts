@@ -18,7 +18,9 @@ const createRunSchema = z.object({
   tags: z.array(z.string()).optional(),
   metadata: z.record(z.any()).optional(),
   workingDir: z.string().optional(),
-  autonomous: z.boolean().optional()
+  autonomous: z.boolean().optional(),
+  workerType: z.enum(['claude', 'ollama', 'ollama-launch', 'codex', 'gemini', 'rev']).optional().default('claude'),
+  model: z.string().optional()
 });
 
 const listRunsSchema = z.object({
@@ -78,12 +80,16 @@ export async function runsRoutes(fastify: FastifyInstance) {
     const metadata = {
       ...body.metadata,
       autonomous: body.autonomous || false,
-      workingDir: body.workingDir
+      workingDir: body.workingDir,
+      workerType: body.workerType || 'claude',
+      model: body.model
     };
 
+    const workerType = body.workerType || 'claude';
+
     db.prepare(`
-      INSERT INTO runs (id, client_id, label, command, repo_path, repo_name, tags, capability_token, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO runs (id, client_id, label, command, repo_path, repo_name, tags, capability_token, metadata, worker_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       clientId,
@@ -93,7 +99,8 @@ export async function runsRoutes(fastify: FastifyInstance) {
       body.repoName || null,
       body.tags ? JSON.stringify(body.tags) : null,
       capabilityToken,
-      JSON.stringify(metadata)
+      JSON.stringify(metadata),
+      workerType
     );
 
     // Save initial run state for resume capability
@@ -137,6 +144,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
       repo?: string;
       waitingApproval?: string;
       tags?: string;
+      workerType?: string;
       limit?: string;
       offset?: string;
       cursor?: string;
@@ -150,7 +158,8 @@ export async function runsRoutes(fastify: FastifyInstance) {
              r.exit_code, r.error_message, r.metadata, r.tags, r.client_id,
              c.display_name as client_name, c.status as client_status,
              (SELECT COUNT(*) FROM artifacts WHERE run_id = r.id) as artifact_count,
-             (SELECT data FROM events WHERE run_id = r.id AND type = 'assist' LIMIT 1) as assist_data
+             (SELECT data FROM events WHERE run_id = r.id AND type = 'assist' LIMIT 1) as assist_data,
+             r.worker_type
       FROM runs r
       LEFT JOIN clients c ON r.client_id = c.id
       WHERE 1=1
@@ -165,6 +174,11 @@ export async function runsRoutes(fastify: FastifyInstance) {
     if (clientId) {
       query += ' AND r.client_id = ?';
       params.push(clientId);
+    }
+
+    if (workerType && workerType !== 'all') {
+      query += ' AND r.worker_type = ?';
+      params.push(workerType);
     }
 
     if (search) {
@@ -254,7 +268,8 @@ export async function runsRoutes(fastify: FastifyInstance) {
       SELECT r.id, r.status, r.label, r.command, r.repo_path, r.repo_name,
              r.waiting_approval, r.created_at, r.started_at, r.finished_at,
              r.exit_code, r.error_message, r.metadata, r.tags, r.client_id,
-             c.display_name as client_name, c.agent_id as client_agent_id, c.status as client_status
+             c.display_name as client_name, c.agent_id as client_agent_id, c.status as client_status,
+             r.worker_type
       FROM runs r
       LEFT JOIN clients c ON r.client_id = c.id
       WHERE r.id = ?

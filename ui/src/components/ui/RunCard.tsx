@@ -18,6 +18,12 @@ export interface Run {
   artifact_count?: number;
   hasAssist?: boolean;
   duration?: number | null;
+  worker_type?: string | null;
+  metadata?: {
+    model?: string;
+    workerType?: string;
+    model?: string;
+  } | null;
 }
 
 interface RunCardProps {
@@ -45,12 +51,45 @@ function formatDuration(seconds: number): string {
   return `${hours}h ${mins}m`;
 }
 
+function getWorkerIcon(workerType: string | null): string {
+  const icons: Record<string, string> = {
+    claude: '',
+    ollama: '',
+    'ollama-launch': '',
+    codex: '',
+    gemini: '',
+    rev: ''
+  };
+  return icons[workerType || 'claude'] || '';
+}
+
+function getWorkerColor(workerType: string | null): string {
+  const colors: Record<string, string> = {
+    claude: '#D97706', // amber
+    ollama: '#059669', // emerald
+    'ollama-launch': '#9333EA', // purple
+    codex: '#0891B2', // cyan
+    gemini: '#7C3AED', // violet
+    rev: '#DC2626' // red
+  };
+  return colors[workerType || 'claude'] || '#6B7280';
+}
+
 export function RunCard({ run, compact = false, showClient = true, onClick }: RunCardProps) {
   const navigate = useNavigate();
   const handleClick = onClick || (() => navigate(`/runs/${run.id}`));
 
   const displayTitle = run.label || run.command?.slice(0, 60) || `Run ${run.id}`;
   const needsApproval = run.waiting_approval === 1;
+  const workerType = run.worker_type || run.metadata?.workerType || 'claude';
+  const model = run.metadata?.model;
+  const workerIcon = getWorkerIcon(workerType);
+  const workerColor = getWorkerColor(workerType);
+  // Format worker display name: capitalize first letter, handle hyphens
+  const workerDisplayName = workerType
+    .split('-')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
 
   return (
     <div
@@ -100,6 +139,22 @@ export function RunCard({ run, compact = false, showClient = true, onClick }: Ru
             {run.id}
           </span>
           <StatusPill status={run.status} size="sm" />
+          <span
+            style={{
+              padding: '2px 6px',
+              fontSize: '11px',
+              fontWeight: 600,
+              background: `${workerColor}20`,
+              color: workerColor,
+              borderRadius: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            {workerIcon}
+            {workerDisplayName}
+          </span>
           {needsApproval && (
             <span
               style={{
