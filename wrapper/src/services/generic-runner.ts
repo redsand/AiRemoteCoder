@@ -105,21 +105,31 @@ export class GenericRunner extends BaseRunner {
 
   /**
    * Build Ollama command
-   * Usage: ollama run <model> [prompt] or ollama launch <model>
+   * Usage: ollama run <model> [prompt] or ollama launch <integration> [--config]
    * Note: For 'launch' mode, the initial command is sent via stdin, not as CLI args
+   * Integrations: claude, opencode, codex, droid
    */
   private buildOllamaCommand(command?: string, autonomous?: boolean, subcommand: string = 'run'): WorkerCommandResult {
-    const model = this.model || config.ollamaModel;
-    const args = [subcommand, model];
+    const args = [subcommand];
 
-    // For 'run' mode, append command as argument; for 'launch', send via stdin
-    if (command && subcommand === 'run') {
-      args.push(command);
-    }
+    if (subcommand === 'run') {
+      // For 'run' mode: ollama run <model> [prompt]
+      const model = this.model || config.ollamaModel;
+      args.push(model);
 
-    // For launch mode, add --config flag if in autonomous mode for full permissions
-    if (subcommand === 'launch' && autonomous) {
-      args.push('--config');
+      if (command) {
+        args.push(command);
+      }
+    } else if (subcommand === 'launch') {
+      // For 'launch' mode: ollama launch <integration> [--config]
+      // model should be an integration name: claude, opencode, codex, droid
+      const integration = this.model || 'claude';
+      args.push(integration);
+
+      // Add --config flag for interactive setup/configuration
+      if (autonomous) {
+        args.push('--config');
+      }
     }
 
     const fullCommand = `${this.getCommand()} ${args.join(' ')}`;

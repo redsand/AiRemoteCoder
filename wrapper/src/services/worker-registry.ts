@@ -82,7 +82,7 @@ export const WORKER_CONFIGS: Record<WorkerType, WorkerConfig> = {
 };
 
 /**
- * Common Ollama models for user selection
+ * Common Ollama models for user selection (for 'ollama run')
  */
 export const OLLAMA_MODELS: Array<{ value: string; label: string }> = [
   { value: 'qwen2.5-coder:7b', label: 'Qwen 2.5 Coder 7B' },
@@ -96,6 +96,17 @@ export const OLLAMA_MODELS: Array<{ value: string; label: string }> = [
   { value: 'mistral:7b', label: 'Mistral 7B' },
   { value: 'phi:2.7b', label: 'Phi 2.7B' },
   { value: 'custom', label: 'Custom...' }
+];
+
+/**
+ * Ollama Launch integrations for user selection
+ * Note: ollama launch only works with these specific integrations, not arbitrary models
+ */
+export const OLLAMA_LAUNCH_INTEGRATIONS: Array<{ value: string; label: string }> = [
+  { value: 'claude', label: 'Claude Code' },
+  { value: 'opencode', label: 'OpenCode' },
+  { value: 'codex', label: 'Codex' },
+  { value: 'droid', label: 'Droid' }
 ];
 
 /**
