@@ -162,7 +162,9 @@ export abstract class BaseRunner extends EventEmitter {
 
     // Handle process exit
     this.process.on('close', async (code, signal) => {
+      console.log(`\n========================================`);
       console.log(`${this.getWorkerType()} exited with code ${code}, signal ${signal}`);
+      console.log(`========================================\n`);
       await this.handleExit(code, signal);
     });
 
@@ -171,6 +173,14 @@ export abstract class BaseRunner extends EventEmitter {
       await this.sendEvent('error', `Process error: ${err.message}`);
       await this.handleExit(1, null);
     });
+
+    // Log when process starts producing output
+    if (this.process.stdout) {
+      console.log(`stdout handler attached`);
+    }
+    if (this.process.stderr) {
+      console.log(`stderr handler attached`);
+    }
 
     // Start command polling and heartbeat
     this.startCommandPolling();
