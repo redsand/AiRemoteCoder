@@ -136,6 +136,9 @@ export abstract class BaseRunner extends EventEmitter {
     const cmd = this.getCommand();
     const env = this.buildEnvironment();
 
+    console.log(`Spawning process: ${cmd} with args: ${JSON.stringify(args)}`);
+    console.log(`Environment: TERM=${env.TERM}`);
+
     this.process = spawn(cmd, args, {
       cwd: this.workingDir,
       shell: true,
@@ -143,13 +146,17 @@ export abstract class BaseRunner extends EventEmitter {
       env
     });
 
+    console.log(`Process spawned with PID: ${this.process.pid}`);
+
     // Handle stdout
     this.process.stdout?.on('data', (data: Buffer) => {
+      console.log(`Received stdout data: ${data.length} bytes`);
       this.handleOutput('stdout', data);
     });
 
     // Handle stderr
     this.process.stderr?.on('data', (data: Buffer) => {
+      console.log(`Received stderr data: ${data.length} bytes`);
       this.handleOutput('stderr', data);
     });
 
@@ -177,7 +184,10 @@ export abstract class BaseRunner extends EventEmitter {
   protected buildEnvironment(): NodeJS.ProcessEnv {
     return {
       ...process.env,
-      TERM: this.autonomous ? 'xterm-256color' : 'dumb'
+      TERM: this.autonomous ? 'xterm-256color' : 'dumb',
+      // Disable output buffering for better real-time visibility
+      PYTHONUNBUFFERED: '1',
+      NODE_ENV: 'production'
     };
   }
 
@@ -334,6 +344,9 @@ export abstract class BaseRunner extends EventEmitter {
   private async handleOutput(type: 'stdout' | 'stderr', data: Buffer): Promise<void> {
     const text = data.toString();
 
+    // Log to console for visibility
+    console.log(`[${type}] ${text.substring(0, 200)}${text.length > 200 ? '...' : ''}`);
+
     // Write to local log
     this.logStream?.write(`[${type}] ${text}`);
 
@@ -343,6 +356,7 @@ export abstract class BaseRunner extends EventEmitter {
     // Detect blocking prompts (patterns that indicate Claude is waiting for user input)
     const promptDetected = this.detectBlockingPrompt(sanitized);
     if (promptDetected) {
+      console.log('Prompt waiting detected');
       await this.sendEvent('prompt_waiting', sanitized);
       this.emit('prompt', sanitized);
     }
@@ -351,7 +365,7 @@ export abstract class BaseRunner extends EventEmitter {
     try {
       await this.sendEvent(type, sanitized);
     } catch (err) {
-      console.error('Failed to send event:', err);
+      console.error('Failed to send event to gateway:', err);
     }
 
     this.emit(type, sanitized);
@@ -411,11 +425,17 @@ export abstract class BaseRunner extends EventEmitter {
    */
   private async sendEvent(type: string, data: string): Promise<void> {
     this.sequence++;
-    await sendEvent(this.auth, {
-      type: type as any,
-      data,
-      sequence: this.sequence
-    });
+    try {
+      await sendEvent(this.auth, {
+        type: type as any,
+        data,
+        sequence: this.sequence
+      });
+      console.log(`✓ Event sent: ${type} (seq: ${this.sequence}, ${data.length} bytes)`);
+    } catch (err: any) {
+      console.error(`✗ Failed to send event ${type}:`, err.message);
+      throw err;
+    }
   }
 
   /**
