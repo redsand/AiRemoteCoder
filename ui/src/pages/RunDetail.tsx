@@ -118,9 +118,12 @@ export function RunDetail({ user }: Props) {
   // Modals
   const [showCommandModal, setShowCommandModal] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState('');
+  const [showPromptModal, setShowPromptModal] = useState(false);
+  const [promptInput, setPromptInput] = useState('');
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [commandLoading, setCommandLoading] = useState(false);
+  const [promptLoading, setPromptLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Refs
@@ -272,6 +275,33 @@ export function RunDetail({ user }: Props) {
       addToast('error', 'Failed to send command');
     } finally {
       setCommandLoading(false);
+    }
+  };
+
+  // Send prompt/input
+  const sendPrompt = async () => {
+    if (!promptInput.trim()) return;
+
+    setPromptLoading(true);
+    try {
+      const res = await fetch(`/api/runs/${runId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: promptInput + '\n', escape: false }),
+      });
+      if (res.ok) {
+        addToast('success', 'Prompt sent');
+        setShowPromptModal(false);
+        setPromptInput('');
+        fetchRun();
+      } else {
+        const error = await res.json();
+        addToast('error', error.error || 'Failed to send prompt');
+      }
+    } catch (err) {
+      addToast('error', 'Failed to send prompt');
+    } finally {
+      setPromptLoading(false);
     }
   };
 
@@ -643,6 +673,13 @@ export function RunDetail({ user }: Props) {
                 Stop
               </ActionButton>
               <ActionButton
+                onClick={() => setShowPromptModal(true)}
+                variant="primary"
+                icon="💬"
+              >
+                Send Prompt
+              </ActionButton>
+              <ActionButton
                 onClick={() => setShowCommandModal(true)}
                 variant="primary"
                 icon="▶"
@@ -662,6 +699,39 @@ export function RunDetail({ user }: Props) {
           )}
         </ActionBar>
       )}
+
+      {/* Prompt Modal */}
+      <Modal
+        open={showPromptModal}
+        onClose={() => setShowPromptModal(false)}
+        title="Send Prompt"
+        footer={
+          <>
+            <button className="btn" onClick={() => setShowPromptModal(false)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={sendPrompt}
+              disabled={!promptInput.trim() || promptLoading}
+            >
+              {promptLoading ? 'Sending...' : 'Send Prompt'}
+            </button>
+          </>
+        }
+      >
+        <div style={{ marginBottom: '16px' }}>
+          <label className="form-label">Enter Prompt or Command</label>
+          <textarea
+            value={promptInput}
+            onChange={(e) => setPromptInput(e.target.value)}
+            placeholder="Enter your prompt or command to send to the running process..."
+            className="form-input"
+            style={{ minHeight: '120px', fontFamily: 'monospace', fontSize: '13px' }}
+            disabled={promptLoading}
+          />
+        </div>
+      </Modal>
 
       {/* Command Modal */}
       <Modal
