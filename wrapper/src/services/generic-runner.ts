@@ -61,11 +61,14 @@ export class GenericRunner extends BaseRunner {
 
     // For ollama-launch, send the initial command via stdin after process starts
     if (this.workerType === 'ollama-launch' && this.initialCommand) {
-      // Small delay to ensure the process is ready
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Delay to ensure ollama launch process is fully initialized
+      // ollama launch can take a moment to set up the integration
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
       if (this.sendInput(this.initialCommand + '\n')) {
         console.log('Sent initial command to ollama launch process via stdin');
+      } else {
+        console.log('Failed to send initial command to ollama launch - process may not have stdin available yet');
       }
     }
   }
