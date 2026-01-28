@@ -18,6 +18,7 @@ import { authRoutes } from './routes/auth.js';
 import { clientsRoutes } from './routes/clients.js';
 import { alertsRoutes } from './routes/alerts.js';
 import { dashboardRoutes } from './routes/dashboard.js';
+import { modelsRoutes } from './routes/models.js';
 import { rawBodyPlugin } from './middleware/auth.js';
 
 // Validate configuration
@@ -140,6 +141,7 @@ await fastify.register(authRoutes);
 await fastify.register(clientsRoutes);
 await fastify.register(alertsRoutes);
 await fastify.register(dashboardRoutes);
+await fastify.register(modelsRoutes);
 
 // Health check
 fastify.get('/api/health', async () => {
