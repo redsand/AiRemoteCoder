@@ -1,6 +1,6 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { EventEmitter } from 'events';
-import { createWriteStream, existsSync, mkdirSync } from 'fs';
+import { createWriteStream, existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { config } from '../config.js';
 import { redactSecrets } from '../utils/crypto.js';
@@ -9,6 +9,7 @@ import {
   uploadArtifact,
   pollCommands,
   ackCommand,
+  updateRunState,
   type RunAuth,
   type Command
 } from './gateway-client.js';
@@ -18,6 +19,8 @@ export interface RunnerOptions {
   capabilityToken: string;
   command?: string;
   workingDir?: string;
+  autonomous?: boolean;
+  resumeFrom?: string; // Run ID to resume from
 }
 
 export class ClaudeRunner extends EventEmitter {
@@ -26,10 +29,15 @@ export class ClaudeRunner extends EventEmitter {
   private logPath: string;
   private logStream: ReturnType<typeof createWriteStream> | null = null;
   private commandPollTimer: NodeJS.Timeout | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
   private sequence = 0;
   private isRunning = false;
   private workingDir: string;
   private stopRequested = false;
+  private haltRequested = false;
+  private autonomous: boolean;
+  private stateFile: string;
+  private resumeFrom?: string;
 
   constructor(options: RunnerOptions) {
     super();
@@ -38,6 +46,8 @@ export class ClaudeRunner extends EventEmitter {
       capabilityToken: options.capabilityToken
     };
     this.workingDir = options.workingDir || process.cwd();
+    this.autonomous = options.autonomous || false;
+    this.resumeFrom = options.resumeFrom;
 
     // Setup log directory
     const runDir = join(config.runsDir, options.runId);
@@ -45,6 +55,63 @@ export class ClaudeRunner extends EventEmitter {
       mkdirSync(runDir, { recursive: true });
     }
     this.logPath = join(runDir, 'claude.log');
+    this.stateFile = join(runDir, 'state.json');
+  }
+
+  /**
+   * Get current run state
+   */
+  getState(): {
+    runId: string;
+    isRunning: boolean;
+    sequence: number;
+    workingDir: string;
+    autonomous: boolean;
+    stopRequested: boolean;
+  } {
+    return {
+      runId: this.auth.runId,
+      isRunning: this.isRunning,
+      sequence: this.sequence,
+      workingDir: this.workingDir,
+      autonomous: this.autonomous,
+      stopRequested: this.stopRequested
+    };
+  }
+
+  /**
+   * Save state to disk for recovery
+   */
+  private saveState(): void {
+    const state = {
+      runId: this.auth.runId,
+      sequence: this.sequence,
+      workingDir: this.workingDir,
+      autonomous: this.autonomous,
+      savedAt: Date.now()
+    };
+    try {
+      writeFileSync(this.stateFile, JSON.stringify(state, null, 2));
+    } catch (err) {
+      console.error('Failed to save state:', err);
+    }
+  }
+
+  /**
+   * Load state from disk
+   */
+  private loadState(): boolean {
+    try {
+      if (existsSync(this.stateFile)) {
+        const data = readFileSync(this.stateFile, 'utf8');
+        const state = JSON.parse(data);
+        this.sequence = state.sequence || 0;
+        return true;
+      }
+    } catch (err) {
+      console.error('Failed to load state:', err);
+    }
+    return false;
   }
 
   /**
@@ -55,28 +122,66 @@ export class ClaudeRunner extends EventEmitter {
       throw new Error('Runner already started');
     }
 
+    // Load previous state if resuming
+    if (this.resumeFrom) {
+      this.loadState();
+    }
+
     this.isRunning = true;
     this.logStream = createWriteStream(this.logPath, { flags: 'a' });
 
-    // Build Claude command
-    const claudeArgs = command ? [command] : [];
-    const fullCommand = `${config.claudeCommand} ${claudeArgs.join(' ')}`.trim();
+    // Build Claude command based on mode
+    let claudeArgs: string[] = [];
+    let fullCommand: string;
 
-    console.log(`Starting Claude Code: ${fullCommand}`);
+    if (this.autonomous) {
+      // Autonomous mode: no prompt, just start Claude in interactive mode
+      // Use --dangerously-skip-permissions if available for full autonomy
+      claudeArgs = ['--dangerously-skip-permissions'];
+      fullCommand = `${config.claudeCommand} (autonomous mode)`;
+      console.log('Starting Claude Code in autonomous mode');
+    } else if (command) {
+      claudeArgs = [command];
+      fullCommand = `${config.claudeCommand} ${claudeArgs.join(' ')}`.trim();
+      console.log(`Starting Claude Code: ${fullCommand}`);
+    } else {
+      // Interactive mode without prompt
+      fullCommand = config.claudeCommand;
+      console.log('Starting Claude Code in interactive mode');
+    }
+
     console.log(`Working directory: ${this.workingDir}`);
 
     // Send start marker
-    await this.sendMarker('started', { command: fullCommand, workingDir: this.workingDir });
+    await this.sendMarker('started', {
+      command: fullCommand,
+      workingDir: this.workingDir,
+      autonomous: this.autonomous,
+      resumedFrom: this.resumeFrom
+    });
 
-    // Spawn Claude Code process
+    // Save initial state
+    this.saveState();
+
+    // Update state on gateway
+    try {
+      await updateRunState(this.auth, {
+        workingDir: this.workingDir,
+        lastSequence: this.sequence
+      });
+    } catch (err) {
+      console.error('Failed to update run state:', err);
+    }
+
+    // Spawn Claude Code process with stdin available
     this.process = spawn(config.claudeCommand, claudeArgs, {
       cwd: this.workingDir,
       shell: true,
+      stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin for input
       env: {
         ...process.env,
-        // Force non-interactive mode if available
-        CI: 'true',
-        TERM: 'dumb'
+        // Don't force CI mode for autonomous/interactive - allow full functionality
+        TERM: this.autonomous ? 'xterm-256color' : 'dumb'
       }
     });
 
@@ -102,8 +207,74 @@ export class ClaudeRunner extends EventEmitter {
       await this.handleExit(1, null);
     });
 
-    // Start command polling
+    // Start command polling and heartbeat
     this.startCommandPolling();
+    this.startHeartbeat();
+  }
+
+  /**
+   * Start heartbeat to update state periodically
+   */
+  private startHeartbeat(): void {
+    this.heartbeatTimer = setInterval(async () => {
+      if (!this.isRunning) return;
+
+      // Save state locally
+      this.saveState();
+
+      // Update state on gateway
+      try {
+        await updateRunState(this.auth, {
+          workingDir: this.workingDir,
+          lastSequence: this.sequence
+        });
+      } catch (err) {
+        // Ignore heartbeat errors
+      }
+    }, config.heartbeatInterval);
+  }
+
+  /**
+   * Stop heartbeat
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  /**
+   * Send input to stdin
+   */
+  sendInput(data: string): boolean {
+    if (!this.process?.stdin || !this.isRunning) {
+      return false;
+    }
+    try {
+      this.process.stdin.write(data);
+      return true;
+    } catch (err) {
+      console.error('Failed to write to stdin:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Send escape sequence (Ctrl+C) to process
+   */
+  sendEscape(): boolean {
+    if (!this.process || !this.isRunning) {
+      return false;
+    }
+    try {
+      // Send SIGINT for escape
+      this.process.kill('SIGINT');
+      return true;
+    } catch (err) {
+      console.error('Failed to send escape:', err);
+      return false;
+    }
   }
 
   /**
@@ -153,11 +324,20 @@ export class ClaudeRunner extends EventEmitter {
   private async handleExit(code: number | null, signal: string | null): Promise<void> {
     this.isRunning = false;
     this.stopCommandPolling();
+    this.stopHeartbeat();
 
     const exitCode = code ?? (signal ? 128 : 1);
 
+    // Save final state
+    this.saveState();
+
     // Send finish marker
-    await this.sendMarker('finished', { exitCode, signal });
+    await this.sendMarker('finished', {
+      exitCode,
+      signal,
+      stopRequested: this.stopRequested,
+      haltRequested: this.haltRequested
+    });
 
     // Close log stream
     this.logStream?.end();
@@ -174,7 +354,7 @@ export class ClaudeRunner extends EventEmitter {
   }
 
   /**
-   * Request graceful stop
+   * Request graceful stop (SIGINT, then SIGKILL after timeout)
    */
   async stop(): Promise<void> {
     if (!this.isRunning || !this.process) {
@@ -194,6 +374,21 @@ export class ClaudeRunner extends EventEmitter {
         this.process.kill('SIGKILL');
       }
     }, 10000);
+  }
+
+  /**
+   * Hard halt (immediate SIGKILL)
+   */
+  async halt(): Promise<void> {
+    if (!this.isRunning || !this.process) {
+      return;
+    }
+
+    this.haltRequested = true;
+    await this.sendEvent('info', 'Hard halt requested by operator - killing immediately');
+
+    // Immediate SIGKILL
+    this.process.kill('SIGKILL');
   }
 
   /**
@@ -237,6 +432,35 @@ export class ClaudeRunner extends EventEmitter {
       return;
     }
 
+    if (cmd.command === '__HALT__') {
+      await this.halt();
+      await ackCommand(this.auth, cmd.id, 'Hard halt initiated');
+      return;
+    }
+
+    if (cmd.command === '__ESCAPE__') {
+      const success = this.sendEscape();
+      if (success) {
+        await this.sendEvent('info', 'Escape sequence sent (SIGINT)');
+        await ackCommand(this.auth, cmd.id, 'Escape sent');
+      } else {
+        await ackCommand(this.auth, cmd.id, undefined, 'Failed to send escape - process not running');
+      }
+      return;
+    }
+
+    if (cmd.command.startsWith('__INPUT__:')) {
+      const input = cmd.command.substring('__INPUT__:'.length);
+      const success = this.sendInput(input);
+      if (success) {
+        await this.sendEvent('info', `Input sent: ${input.length} bytes`);
+        await ackCommand(this.auth, cmd.id, `Sent ${input.length} bytes to stdin`);
+      } else {
+        await ackCommand(this.auth, cmd.id, undefined, 'Failed to send input - process not running');
+      }
+      return;
+    }
+
     // Validate command is allowlisted
     const isAllowed = config.allowlistedCommands.some(allowed =>
       cmd.command === allowed || cmd.command.startsWith(allowed + ' ')
@@ -265,7 +489,6 @@ export class ClaudeRunner extends EventEmitter {
       // If it's a git diff, upload as artifact
       if (cmd.command.startsWith('git diff')) {
         const diffPath = join(config.runsDir, this.auth.runId, 'latest.diff');
-        const { writeFileSync } = await import('fs');
         writeFileSync(diffPath, result);
         await uploadArtifact(this.auth, diffPath, 'latest.diff');
       }
