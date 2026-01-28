@@ -318,7 +318,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
   });
 
   // Get run commands/audit separately (for tab)
-  fastify.get('/api/runs/:runId/commands', {
+  fastify.get('/api/runs/:runId/audit', {
     preHandler: [uiAuth]
   }, async (request: AuthenticatedRequest, reply) => {
     const { runId } = request.params as { runId: string };
