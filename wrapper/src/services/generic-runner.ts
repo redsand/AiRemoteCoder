@@ -21,6 +21,7 @@ export class GenericRunner extends BaseRunner {
   private workerType: WorkerType;
   private commandPrefix?: string[];
   private buildCommandFn?: (command?: string, autonomous?: boolean, model?: string) => WorkerCommandResult;
+  private initialCommand?: string; // Store initial command for stdin-based execution
 
   constructor(options: GenericRunnerOptions) {
     super(options);
@@ -44,6 +45,29 @@ export class GenericRunner extends BaseRunner {
       return this.commandPrefix[0];
     }
     return config.getWorkerCommand(this.workerType);
+  }
+
+  /**
+   * Override start to handle sending initial command via stdin for ollama-launch
+   */
+  async start(command?: string): Promise<void> {
+    // Store the initial command for ollama-launch to send via stdin
+    if (this.workerType === 'ollama-launch' && command) {
+      this.initialCommand = command;
+    }
+
+    // Call parent start method
+    await super.start(command);
+
+    // For ollama-launch, send the initial command via stdin after process starts
+    if (this.workerType === 'ollama-launch' && this.initialCommand) {
+      // Small delay to ensure the process is ready
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      if (this.sendInput(this.initialCommand + '\n')) {
+        console.log('Sent initial command to ollama launch process via stdin');
+      }
+    }
   }
 
   /**
@@ -81,13 +105,15 @@ export class GenericRunner extends BaseRunner {
 
   /**
    * Build Ollama command
-   * Usage: ollama run <model> [prompt] or ollama launch <model> [prompt]
+   * Usage: ollama run <model> [prompt] or ollama launch <model>
+   * Note: For 'launch' mode, the initial command is sent via stdin, not as CLI args
    */
   private buildOllamaCommand(command?: string, autonomous?: boolean, subcommand: string = 'run'): WorkerCommandResult {
     const model = this.model || config.ollamaModel;
     const args = [subcommand, model];
 
-    if (command) {
+    // For 'run' mode, append command as argument; for 'launch', send via stdin
+    if (command && subcommand === 'run') {
       args.push(command);
     }
 
