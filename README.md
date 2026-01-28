@@ -54,6 +54,7 @@ For phone access via Cloudflare Tunnel:
 ## Documentation
 
 - [Quickstart Guide](docs/QUICKSTART.md)
+- [DigitalOcean Deployment](docs/DIGITALOCEAN.md)
 - [Security Model](docs/SECURITY.md)
 - [Operations Guide](docs/OPERATIONS.md)
 - [Claude Code Integration](docs/CLAUDE_CODE.md)
