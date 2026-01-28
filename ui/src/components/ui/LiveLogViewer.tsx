@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 
 export interface LogEvent {
   id: number;
-  type: 'stdout' | 'stderr' | 'marker' | 'info' | 'error' | 'assist';
+  type: 'stdout' | 'stderr' | 'marker' | 'info' | 'error' | 'assist' | 'prompt_waiting' | 'prompt_resolved';
   data: string;
   timestamp: number;
   step_id?: string;
@@ -27,6 +27,8 @@ const typeColors: Record<string, string> = {
   info: 'var(--accent-blue)',
   error: 'var(--accent-red)',
   assist: 'var(--accent-green)',
+  prompt_waiting: 'var(--accent-purple)',
+  prompt_resolved: 'var(--accent-green)',
 };
 
 export function LiveLogViewer({
@@ -40,6 +42,8 @@ export function LiveLogViewer({
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(0);
   const [localAutoScroll, setLocalAutoScroll] = useState(autoScroll);
+  const [userToggledAutoScroll, setUserToggledAutoScroll] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
 
   // Process events - collapse consecutive similar lines
   const processedEvents = useMemo(() => {
@@ -95,14 +99,14 @@ export function LiveLogViewer({
 
     // Check if user scrolled up manually
     const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
-    if (!isAtBottom && localAutoScroll) {
+
+    // Only auto-enable scroll if user hasn't manually disabled it
+    if (!isAtBottom && localAutoScroll && !userToggledAutoScroll) {
       setLocalAutoScroll(false);
       onAutoScrollChange?.(false);
-    } else if (isAtBottom && !localAutoScroll) {
-      setLocalAutoScroll(true);
-      onAutoScrollChange?.(true);
     }
-  }, [localAutoScroll, onAutoScrollChange]);
+    // Don't automatically re-enable if user manually disabled it
+  }, [localAutoScroll, userToggledAutoScroll, onAutoScrollChange]);
 
   // Update container height on resize
   useEffect(() => {
@@ -144,9 +148,25 @@ export function LiveLogViewer({
   const toggleAutoScroll = () => {
     const newValue = !localAutoScroll;
     setLocalAutoScroll(newValue);
+    setUserToggledAutoScroll(true);
     onAutoScrollChange?.(newValue);
     if (newValue && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
+  };
+
+  // Copy log content to clipboard
+  const copyToClipboard = async () => {
+    const allText = filteredEvents
+      .map((event, i) => `${i + 1} ${event.data}`)
+      .join('\n');
+
+    try {
+      await navigator.clipboard.writeText(allText);
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
     }
   };
 
@@ -198,6 +218,24 @@ export function LiveLogViewer({
               {errorIndices.length} errors
             </button>
           )}
+
+          <button
+            onClick={copyToClipboard}
+            style={{
+              padding: '4px 8px',
+              fontSize: '11px',
+              background: copyFeedback ? 'rgba(59, 185, 80, 0.15)' : 'var(--bg-tertiary)',
+              border: 'none',
+              borderRadius: '4px',
+              color: copyFeedback ? 'var(--accent-green)' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              transition: 'all 0.3s ease',
+            }}
+            title="Copy all log output to clipboard"
+            aria-label="Copy log output"
+          >
+            {copyFeedback ? '✓ Copied' : '📋 Copy'}
+          </button>
 
           <button
             onClick={toggleAutoScroll}
