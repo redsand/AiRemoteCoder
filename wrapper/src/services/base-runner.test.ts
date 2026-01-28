@@ -268,8 +268,9 @@ Are you sure you want to proceed?
 describe('BaseRunner - Sandbox Directory Navigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Mock existsSync to return true for existing directories
-    vi.mocked(require('fs').existsSync).mockImplementation((path: string) => {
+    // We need to re-import fs after mocking
+    const fs = require('fs');
+    fs.existsSync = vi.fn((path: string) => {
       const validPaths = [
         '/test/project',
         '/test/project/src',
@@ -280,11 +281,11 @@ describe('BaseRunner - Sandbox Directory Navigation', () => {
       return validPaths.some(p => path.startsWith(p));
     });
 
-    // Mock statSync to return directory info
-    vi.mocked(require('fs').statSync).mockImplementation((path: string) => ({
+    fs.statSync = vi.fn((path: string) => ({
       isDirectory: () => true,
       isFile: () => false
     }));
+  });
   });
 
   it('should initialize with sandbox root', () => {
@@ -477,7 +478,10 @@ describe('BaseRunner - Input Handling', () => {
       emittedInput = input;
     });
 
-    // Simulate input being sent
+    // Simulate input being sent - we need to mock the process stdin
+    const mockStdin = { write: vi.fn(() => true) };
+    (runner as any).process = { stdin: mockStdin };
+
     runner['sendInput']('yes\n');
 
     expect(promptResolvedEmitted).toBe(true);
@@ -496,6 +500,9 @@ describe('BaseRunner - Input Handling', () => {
     runner.on('prompt_resolved', () => {
       promptResolvedEmitted = true;
     });
+
+    const mockStdin = { write: vi.fn(() => true) };
+    (runner as any).process = { stdin: mockStdin };
 
     runner['sendInput']('y');
 

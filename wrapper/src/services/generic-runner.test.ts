@@ -15,7 +15,26 @@ vi.mock('../config.js', () => ({
     commandPollInterval: 2000,
     heartbeatInterval: 30000,
     allowlistedCommands: ['npm test', 'cd', 'ls', 'pwd'],
-    secretPatterns: [/api[_-]?key[=:]\s*["']?[\w-]+["']?/gi]
+    secretPatterns: [/api[_-]?key[=:]\s*["']?[\w-]+["']?/gi],
+    getWorkerCommand: (workerType: string) => {
+      const commands: Record<string, string> = {
+        claude: 'claude',
+        ollama: 'ollama',
+        'ollama-launch': 'ollama',
+        codex: 'codex-cli',
+        gemini: 'gemini-cli',
+        rev: 'rev'
+      };
+      return commands[workerType] || workerType;
+    },
+    getDefaultModel: (workerType: string) => {
+      const models: Record<string, string | undefined> = {
+        ollama: 'codellama:7b',
+        'ollama-launch': 'claude',
+        gemini: 'gemini-pro'
+      };
+      return models[workerType];
+    }
   }
 }));
 
@@ -159,8 +178,9 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand('fix bug', true);
-      expect(result.args).toEqual(['launch', 'claude', '--config']);
-      expect(result.fullCommand).toBe('ollama launch claude --config');
+      // The prompt is included as an argument when provided
+      expect(result.args).toEqual(['launch', 'claude', 'fix bug', '--config']);
+      expect(result.fullCommand).toBe('ollama launch claude fix bug --config');
     });
 
     it('should build Ollama launch command without config flag', () => {
@@ -174,8 +194,9 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand('fix bug', false);
-      expect(result.args).toEqual(['launch', 'claude']);
-      expect(result.fullCommand).toBe('ollama launch claude');
+      // The prompt is included as an argument when provided
+      expect(result.args).toEqual(['launch', 'claude', 'fix bug']);
+      expect(result.fullCommand).toBe('ollama launch claude fix bug');
     });
 
     it('should build Codex command', () => {

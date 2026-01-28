@@ -695,15 +695,15 @@ export abstract class BaseRunner extends EventEmitter {
    * Validate that a path is within the sandbox (initial working directory)
    */
   private validatePathInSandbox(path: string): { valid: boolean; normalized: string } {
-    const { resolve, normalize } = await import('path');
+    const { resolve, normalize, relative } = require('path');
 
     const normalized = normalize(path);
     const absolutePath = resolve(this.workingDir, normalized);
     const sandboxRoot = resolve((this as any).sandboxRoot || this.workingDir);
 
     // Check if the path is within the sandbox
-    const relative = resolve(sandboxRoot, normalized);
-    const relativeFromRoot = relative.substring(sandboxRoot.length);
+    const resolvedPath = resolve(sandboxRoot, normalized);
+    const relativeFromRoot = relative(sandboxRoot, resolvedPath);
 
     // If path starts with .. or goes above root, it's invalid
     if (relativeFromRoot.startsWith('..') || !absolutePath.startsWith(sandboxRoot)) {
