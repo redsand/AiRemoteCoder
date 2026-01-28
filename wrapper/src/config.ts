@@ -36,6 +36,7 @@ export const config = {
     const commands: Record<string, string> = {
       claude: this.claudeCommand,
       ollama: this.ollamaCommand,
+      'ollama-launch': this.ollamaCommand,
       codex: this.codexCommand,
       gemini: this.geminiCommand,
       rev: this.revCommand
