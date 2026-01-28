@@ -255,12 +255,13 @@ describe('Input Schema', () => {
 
 describe('List Runs Filtering', () => {
   it('should build valid filter queries', () => {
-    const buildQuery = (opts: { status?: string; search?: string; limit?: number; offset?: number }) => {
+    const buildQuery = (opts: { status?: string; search?: string; limit?: number; offset?: number; workerType?: string }) => {
       const params: string[] = [];
       if (opts.status) params.push(`status=${opts.status}`);
       if (opts.search) params.push(`search=${encodeURIComponent(opts.search)}`);
       if (opts.limit) params.push(`limit=${opts.limit}`);
       if (opts.offset) params.push(`offset=${opts.offset}`);
+      if (opts.workerType) params.push(`workerType=${opts.workerType}`);
       return params.length > 0 ? `?${params.join('&')}` : '';
     };
 
@@ -268,6 +269,8 @@ describe('List Runs Filtering', () => {
     expect(buildQuery({ status: 'running' })).toBe('?status=running');
     expect(buildQuery({ limit: 10, offset: 20 })).toBe('?limit=10&offset=20');
     expect(buildQuery({ search: 'test' })).toBe('?search=test');
+    expect(buildQuery({ workerType: 'ollama' })).toBe('?workerType=ollama');
+    expect(buildQuery({ status: 'running', workerType: 'claude' })).toBe('?status=running&workerType=claude');
   });
 
   it('should validate status values', () => {
@@ -280,5 +283,158 @@ describe('List Runs Filtering', () => {
     expect(isValidStatus('failed')).toBe(true);
     expect(isValidStatus('unknown')).toBe(false);
     expect(isValidStatus('')).toBe(false);
+  });
+
+  it('should validate worker type values', () => {
+    const validWorkerTypes = ['claude', 'ollama', 'ollama-launch', 'codex', 'gemini', 'rev'];
+    const isValidWorkerType = (workerType: string) => validWorkerTypes.includes(workerType);
+
+    expect(isValidWorkerType('claude')).toBe(true);
+    expect(isValidWorkerType('ollama')).toBe(true);
+    expect(isValidWorkerType('ollama-launch')).toBe(true);
+    expect(isValidWorkerType('codex')).toBe(true);
+    expect(isValidWorkerType('gemini')).toBe(true);
+    expect(isValidWorkerType('rev')).toBe(true);
+    expect(isValidWorkerType('invalid')).toBe(false);
+    expect(isValidWorkerType('')).toBe(false);
+  });
+});
+
+describe('Worker Type Schema', () => {
+  it('should validate worker type enum values', () => {
+    const validWorkerTypes = ['claude', 'ollama', 'ollama-launch', 'codex', 'gemini', 'rev'];
+
+    const isValidWorkerType = (workerType: string) => {
+      return validWorkerTypes.includes(workerType);
+    };
+
+    for (const type of validWorkerTypes) {
+      expect(isValidWorkerType(type)).toBe(true);
+    }
+
+    expect(isValidWorkerType('invalid')).toBe(false);
+    expect(isValidWorkerType('CLAUDE')).toBe(false);
+    expect(isValidWorkerType('')).toBe(false);
+  });
+
+  it('should default to claude when workerType not provided', () => {
+    const validateCreateRun = (body: any): boolean => {
+      const workerType = body.workerType || 'claude';
+      return ['claude', 'ollama', 'ollama-launch', 'codex', 'gemini', 'rev'].includes(workerType);
+    };
+
+    expect(validateCreateRun({})).toBe(true);
+    expect(validateCreateRun({ command: 'test' })).toBe(true);
+    expect(validateCreateRun({ workerType: 'ollama' })).toBe(true);
+    expect(validateCreateRun({ workerType: 'invalid' })).toBe(false);
+  });
+
+  it('should allow model parameter for workers that support it', () => {
+    const supportsModel = (workerType: string): boolean => {
+      return ['ollama', 'ollama-launch', 'gemini'].includes(workerType);
+    };
+
+    expect(supportsModel('ollama')).toBe(true);
+    expect(supportsModel('ollama-launch')).toBe(true);
+    expect(supportsModel('gemini')).toBe(true);
+    expect(supportsModel('claude')).toBe(false);
+    expect(supportsModel('codex')).toBe(false);
+    expect(supportsModel('rev')).toBe(false);
+  });
+});
+
+describe('Run Schema with Worker Type', () => {
+  it('should accept valid worker types in create request', () => {
+    const validateCreateRun = (body: any): boolean => {
+      const { workerType, model } = body;
+
+      // Validate workerType
+      const validWorkerTypes = ['claude', 'ollama', 'ollama-launch', 'codex', 'gemini', 'rev'];
+      if (workerType && !validWorkerTypes.includes(workerType)) return false;
+
+      // For workers that support model, model is optional but if provided must be string
+      const modelSupportingWorkers = ['ollama', 'ollama-launch', 'gemini'];
+      if (modelSupportingWorkers.includes(workerType) && model && typeof model !== 'string') {
+        return false;
+      }
+
+      return true;
+    };
+
+    expect(validateCreateRun({})).toBe(true);
+    expect(validateCreateRun({ workerType: 'claude' })).toBe(true);
+    expect(validateCreateRun({ workerType: 'ollama', model: 'codellama:7b' })).toBe(true);
+    expect(validateCreateRun({ workerType: 'ollama-launch', model: 'claude' })).toBe(true);
+    expect(validateCreateRun({ workerType: 'gemini', model: 'gemini-pro' })).toBe(true);
+    expect(validateCreateRun({ workerType: 'codex', model: 'should-ignore' })).toBe(true);
+    expect(validateCreateRun({ workerType: 'invalid' })).toBe(false);
+  });
+
+  it('should include worker_type in run response', () => {
+    const mockRun = {
+      id: 'run-123',
+      status: 'running',
+      command: 'test command',
+      worker_type: 'ollama',
+      created_at: 1234567890,
+      started_at: 1234567891
+    };
+
+    expect(mockRun.worker_type).toBe('ollama');
+    expect(typeof mockRun.worker_type).toBe('string');
+  });
+
+  it('should handle missing worker_type in database for backward compatibility', () => {
+    const mockRun = {
+      id: 'run-456',
+      status: 'done',
+      command: 'old command',
+      // worker_type not present
+      created_at: 1234567890
+    };
+
+    // Should default to 'claude'
+    const effectiveWorkerType = mockRun.worker_type || 'claude';
+    expect(effectiveWorkerType).toBe('claude');
+  });
+});
+
+describe('Run State with Model', () => {
+  it('should include model in metadata for workers that support it', () => {
+    const metadata = {
+      autonomous: true,
+      workingDir: '/project',
+      workerType: 'ollama',
+      model: 'codellama:13b'
+    };
+
+    expect(metadata.workerType).toBe('ollama');
+    expect(metadata.model).toBe('codellama:13b');
+  });
+
+  it('should not include model for workers that dont support it', () => {
+    const metadata = {
+      autonomous: false,
+      workingDir: '/project',
+      workerType: 'claude'
+    };
+
+    expect(metadata.workerType).toBe('claude');
+    expect(metadata.model).toBeUndefined();
+  });
+
+  it('should serialize metadata to JSON', () => {
+    const metadata = {
+      autonomous: true,
+      workingDir: '/project',
+      workerType: 'ollama-launch',
+      model: 'claude'
+    };
+
+    const json = JSON.stringify(metadata);
+    const parsed = JSON.parse(json);
+
+    expect(parsed.workerType).toBe('ollama-launch');
+    expect(parsed.model).toBe('claude');
   });
 });

@@ -11,7 +11,14 @@ vi.mock('../config.js', () => ({
       'npm test',
       'git diff',
       'git status',
-      'ls -la'
+      'ls',
+      'ls -la',
+      'ls -l',
+      'ls -a',
+      'll',
+      'dir',
+      'pwd',
+      'cd'
     ],
     secretPatterns: [
       /api[_-]?key[=:]\s*["']?[\w-]+["']?/gi,
@@ -588,5 +595,85 @@ describe('Finish Marker Enhancement', () => {
     const haltedRun = createFinishMarker(137, { signal: 'SIGKILL', haltRequested: true });
     expect(haltedRun.haltRequested).toBe(true);
     expect(haltedRun.signal).toBe('SIGKILL');
+  });
+});
+
+describe('Directory Navigation Commands', () => {
+  it('should allow cd command', () => {
+    const isCommandAllowed = (command: string): boolean => {
+      return ['cd', 'ls', 'ls -la', 'ls -l', 'ls -a', 'll', 'dir', 'pwd'].some(allowed =>
+        command === allowed || command.startsWith(allowed + ' ')
+      );
+    };
+
+    expect(isCommandAllowed('cd')).toBe(true);
+    expect(isCommandAllowed('cd src')).toBe(true);
+    expect(isCommandAllowed('cd ..')).toBe(true);
+    expect(isCommandAllowed('cd /absolute/path')).toBe(true);
+  });
+
+  it('should allow ls command variants', () => {
+    const isCommandAllowed = (command: string): boolean => {
+      return ['cd', 'ls', 'ls -la', 'ls -l', 'ls -a', 'll', 'dir', 'pwd'].some(allowed =>
+        command === allowed || command.startsWith(allowed + ' ')
+      );
+    };
+
+    expect(isCommandAllowed('ls')).toBe(true);
+    expect(isCommandAllowed('ls -la')).toBe(true);
+    expect(isCommandAllowed('ls -l')).toBe(true);
+    expect(isCommandAllowed('ls -a')).toBe(true);
+    expect(isCommandAllowed('ll')).toBe(true);
+    expect(isCommandAllowed('dir')).toBe(true);
+    expect(isCommandAllowed('ls /path')).toBe(true);
+  });
+
+  it('should allow pwd command', () => {
+    const isCommandAllowed = (command: string): boolean => {
+      return ['cd', 'ls', 'ls -la', 'ls -l', 'ls -a', 'll', 'dir', 'pwd'].some(allowed =>
+        command === allowed || command.startsWith(allowed + ' ')
+      );
+    };
+
+    expect(isCommandAllowed('pwd')).toBe(true);
+  });
+
+  it('should validate cd command format', () => {
+    const parseCdCommand = (command: string) => {
+      if (!command.startsWith('cd ')) return null;
+      return command.substring(3).trim();
+    };
+
+    expect(parseCdCommand('cd src')).toBe('src');
+    expect(parseCdCommand('cd  src  ')).toBe('src');
+    expect(parseCdCommand('cd')).toBe('');
+    expect(parseCdCommand('ls src')).toBe(null);
+  });
+
+  it('should validate directory path safety', () => {
+    const isPathSafe = (path: string, sandboxRoot: string): boolean => {
+      const { resolve, normalize } = require('path');
+      const resolved = resolve(sandboxRoot, path);
+      return resolved.startsWith(sandboxRoot);
+    };
+
+    expect(isPathSafe('src', '/project')).toBe(true);
+    expect(isPathSafe('src/components', '/project')).toBe(true);
+    expect(isPathSafe('../other', '/project')).toBe(false);
+    expect(isPathSafe('/etc', '/project')).toBe(false);
+    expect(isPathSafe('../../..', '/project/src')).toBe(false);
+  });
+
+  it('should handle relative path to working directory', () => {
+    const getRelativePath = (current: string, root: string): string => {
+      const { relative } = require('path');
+      const rel = relative(root, current);
+      return rel === '.' ? root : rel;
+    };
+
+    expect(getRelativePath('/project', '/project')).toBe('/project');
+    expect(getRelativePath('/project/src', '/project')).toBe('src');
+    expect(getRelativePath('/project/src/components', '/project')).toBe('src/components');
+    expect(getRelativePath('/project/../project', '/project')).toBe('/project');
   });
 });
