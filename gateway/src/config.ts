@@ -2,6 +2,7 @@ import { config as dotenvConfig } from 'dotenv';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
+import { randomBytes } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..', '..');
@@ -87,11 +88,11 @@ export const config = {
 export function validateConfig(): void {
   if (!config.hmacSecret || config.hmacSecret.length < 32) {
     console.warn('WARNING: HMAC_SECRET not set or too short. Generating random secret for this session.');
-    config.hmacSecret = require('crypto').randomBytes(32).toString('hex');
+    config.hmacSecret = randomBytes(32).toString('hex');
   }
 
   if (!config.authSecret || config.authSecret.length < 32) {
     console.warn('WARNING: AUTH_SECRET not set or too short. Generating random secret for this session.');
-    config.authSecret = require('crypto').randomBytes(32).toString('hex');
+    config.authSecret = randomBytes(32).toString('hex');
   }
 }
