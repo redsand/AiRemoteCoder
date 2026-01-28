@@ -50,6 +50,8 @@ export abstract class BaseRunner extends EventEmitter {
   protected stateFile: string;
   protected resumeFrom?: string;
   protected model?: string;
+  private processedCommandIds: Set<string> = new Set(); // Track processed commands to prevent duplicates
+  private processedCommandExpire: Map<string, NodeJS.Timeout> = new Map(); // Track expiration timers
 
   constructor(options: RunnerOptions) {
     super();
@@ -508,6 +510,11 @@ export abstract class BaseRunner extends EventEmitter {
       try {
         const commands = await pollCommands(this.auth);
         for (const cmd of commands) {
+          // Skip if this command was recently processed
+          if (this.processedCommandIds.has(cmd.id)) {
+            console.warn(`Skipping recently processed command: ${cmd.id}`);
+            continue;
+          }
           await this.executeCommand(cmd);
         }
       } catch (err) {
@@ -527,31 +534,66 @@ export abstract class BaseRunner extends EventEmitter {
   }
 
   /**
+   * Mark a command as processed to prevent duplicate execution
+   */
+  private markCommandProcessed(commandId: string, expireMs: number = 5000): void {
+    this.processedCommandIds.add(commandId);
+
+    // Clear any existing timeout
+    const existingTimer = this.processedCommandExpire.get(commandId);
+    if (existingTimer) clearTimeout(existingTimer);
+
+    // Set new timeout to remove from set after expiration
+    const timer = setTimeout(() => {
+      this.processedCommandIds.delete(commandId);
+      this.processedCommandExpire.delete(commandId);
+    }, expireMs);
+
+    this.processedCommandExpire.set(commandId, timer);
+  }
+
+  /**
    * Execute a command from the gateway
    */
   private async executeCommand(cmd: Command): Promise<void> {
     console.log(`Executing command: ${cmd.command}`);
 
+    // Mark command as being processed to prevent duplicate execution
+    // if ack fails, it will be re-polled after expiration
+    this.markCommandProcessed(cmd.id, 10000);
+
     // Handle special commands
     if (cmd.command === '__STOP__') {
-      await this.stop();
-      await ackCommand(this.auth, cmd.id, 'Stop initiated');
+      try {
+        await this.stop();
+        await ackCommand(this.auth, cmd.id, 'Stop initiated');
+      } catch (err: any) {
+        console.error(`Failed to acknowledge stop command ${cmd.id}:`, err.message);
+      }
       return;
     }
 
     if (cmd.command === '__HALT__') {
-      await this.halt();
-      await ackCommand(this.auth, cmd.id, 'Hard halt initiated');
+      try {
+        await this.halt();
+        await ackCommand(this.auth, cmd.id, 'Hard halt initiated');
+      } catch (err: any) {
+        console.error(`Failed to acknowledge halt command ${cmd.id}:`, err.message);
+      }
       return;
     }
 
     if (cmd.command === '__ESCAPE__') {
       const success = this.sendEscape();
-      if (success) {
-        await this.sendEvent('info', 'Escape sequence sent (SIGINT)');
-        await ackCommand(this.auth, cmd.id, 'Escape sent');
-      } else {
-        await ackCommand(this.auth, cmd.id, undefined, 'Failed to send escape - process not running');
+      try {
+        if (success) {
+          await this.sendEvent('info', 'Escape sequence sent (SIGINT)');
+          await ackCommand(this.auth, cmd.id, 'Escape sent');
+        } else {
+          await ackCommand(this.auth, cmd.id, undefined, 'Failed to send escape - process not running');
+        }
+      } catch (err: any) {
+        console.error(`Failed to acknowledge escape command ${cmd.id}:`, err.message);
       }
       return;
     }
@@ -559,13 +601,18 @@ export abstract class BaseRunner extends EventEmitter {
     if (cmd.command.startsWith('__INPUT__:')) {
       const input = cmd.command.substring('__INPUT__:'.length);
       const success = this.sendInput(input);
-      if (success) {
-        // Send prompt_resolved event to indicate the prompt was answered
-        await this.sendEvent('prompt_resolved', `Response: ${input.replace(/\n/g, '\\n')}`);
-        await this.sendEvent('info', `Input sent: ${input.length} bytes`);
-        await ackCommand(this.auth, cmd.id, `Sent ${input.length} bytes to stdin`);
-      } else {
-        await ackCommand(this.auth, cmd.id, undefined, 'Failed to send input - process not running');
+      try {
+        if (success) {
+          // Send prompt_resolved event to indicate the prompt was answered
+          await this.sendEvent('prompt_resolved', `Response: ${input.replace(/\n/g, '\\n')}`);
+          await this.sendEvent('info', `Input sent: ${input.length} bytes`);
+          await ackCommand(this.auth, cmd.id, `Sent ${input.length} bytes to stdin`);
+        } else {
+          await ackCommand(this.auth, cmd.id, undefined, 'Failed to send input - process not running');
+        }
+      } catch (err: any) {
+        console.error(`Failed to acknowledge input command ${cmd.id}:`, err.message);
+        await this.sendEvent('error', `Failed to acknowledge input: ${err.message}`);
       }
       return;
     }
