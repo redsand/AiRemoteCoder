@@ -58,10 +58,7 @@ const ackSchema = z.object({
 export async function runsRoutes(fastify: FastifyInstance) {
   // Create a new run (from UI or self-registration by wrapper)
   fastify.post('/api/runs', {
-    preHandler: [uiAuth, requireRole('admin', 'operator')],
-    schema: {
-      body: createRunSchema
-    }
+    preHandler: [uiAuth, requireRole('admin', 'operator')]
   }, async (request: AuthenticatedRequest, reply) => {
     const body = createRunSchema.parse(request.body);
     const id = nanoid(12);
