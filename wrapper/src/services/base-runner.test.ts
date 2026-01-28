@@ -95,7 +95,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -107,7 +107,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -118,7 +118,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -130,7 +130,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -141,7 +141,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -153,7 +153,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -165,7 +165,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -177,7 +177,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -189,7 +189,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -200,7 +200,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -211,7 +211,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -223,7 +223,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -236,7 +236,7 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const prompt of prompts) {
-        expect(runner.exposeDetectBlockingPrompt(prompt)).toBe(true);
+        expect(runner.exposeDetectBlockingPrompt(prompt).isPrompt).toBe(true);
       }
     });
 
@@ -251,14 +251,14 @@ describe('BaseRunner - Prompt Detection', () => {
       ];
 
       for (const text of nonPrompts) {
-        expect(runner.exposeDetectBlockingPrompt(text)).toBe(false);
+        expect(runner.exposeDetectBlockingPrompt(text).isPrompt).toBe(false);
       }
     });
 
     it('should handle edge cases', () => {
-      expect(runner.exposeDetectBlockingPrompt('')).toBe(false);
-      expect(runner.exposeDetectBlockingPrompt('   ')).toBe(false);
-      expect(runner.exposeDetectBlockingPrompt('Output without question')).toBe(false);
+      expect(runner.exposeDetectBlockingPrompt('').isPrompt).toBe(false);
+      expect(runner.exposeDetectBlockingPrompt('   ').isPrompt).toBe(false);
+      expect(runner.exposeDetectBlockingPrompt('Output without question').isPrompt).toBe(false);
     });
   });
 
@@ -269,7 +269,7 @@ I've analyzed the code and found a potential issue in the authentication module.
 
 Would you like me to fix this vulnerability? [Y/n]
 `;
-      expect(runner.exposeDetectBlockingPrompt(claudeOutput)).toBe(true);
+      expect(runner.exposeDetectBlockingPrompt(claudeOutput).isPrompt).toBe(true);
     });
 
     it('should detect prompt in multi-line output', () => {
@@ -281,7 +281,7 @@ Making changes to 3 files...
 
 Are you sure you want to proceed?
 `;
-      expect(runner.exposeDetectBlockingPrompt(output)).toBe(true);
+      expect(runner.exposeDetectBlockingPrompt(output).isPrompt).toBe(true);
     });
   });
 });

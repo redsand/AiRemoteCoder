@@ -376,11 +376,35 @@ export abstract class BaseRunner extends EventEmitter {
     const sanitized = redactSecrets(text);
 
     // Detect blocking prompts (patterns that indicate Claude is waiting for user input)
-    const promptDetected = this.detectBlockingPrompt(sanitized);
-    if (promptDetected) {
-      console.log('Prompt waiting detected');
+    const promptResult = this.detectBlockingPrompt(sanitized);
+    if (promptResult.isPrompt) {
+      console.log(`Prompt waiting detected (type: ${promptResult.type})`);
       await this.sendEvent('prompt_waiting', sanitized);
       this.emit('prompt', sanitized);
+
+      // Auto-respond in autonomous mode
+      if (this.autonomous) {
+        console.log('Autonomous mode: auto-responding to prompt');
+        let response = '';
+
+        if (promptResult.type === 'yes') {
+          // For trust/safety prompts, answer "1" (Yes, I trust this folder)
+          response = '1\n';
+        } else if (promptResult.type === 'confirm') {
+          // For general yes/no prompts, answer "y"
+          response = 'y\n';
+        }
+
+        if (response) {
+          // Add a delay to ensure the prompt is fully rendered before responding
+          await new Promise(resolve => setTimeout(resolve, 500));
+          if (this.sendInput(response)) {
+            console.log('Auto-response sent successfully');
+          } else {
+            console.log('Failed to send auto-response');
+          }
+        }
+      }
     }
 
     // Send to gateway
@@ -395,6 +419,7 @@ export abstract class BaseRunner extends EventEmitter {
 
   /**
    * Detect if the worker is waiting for user input (blocking prompt)
+   * Returns the prompt type to determine how to respond
    * Common Claude prompt patterns:
    * - "Would you like me to..."
    * - "Should I..."
@@ -402,8 +427,24 @@ export abstract class BaseRunner extends EventEmitter {
    * - "[Y/n]"
    * - "(y/N)"
    * - "Press Enter to continue"
+   * - Trust/safety prompts from IDE integrations
    */
-  private detectBlockingPrompt(text: string): boolean {
+  private detectBlockingPrompt(text: string): { isPrompt: boolean; type?: 'yes' | 'confirm' } {
+    // Detect trust/safety prompts that should be auto-answered with "1" (yes)
+    const trustPrompts = [
+      /Is this a project you created or one you trust/i,
+      /trust this folder/i,
+      /do you want to proceed/i,
+      /Yes.*trust.*folder/i,
+    ];
+
+    for (const pattern of trustPrompts) {
+      if (pattern.test(text)) {
+        return { isPrompt: true, type: 'yes' };
+      }
+    }
+
+    // Detect other blocking prompts
     const promptPatterns = [
       /Would you like me to/i,
       /Should I/i,
@@ -435,11 +476,11 @@ export abstract class BaseRunner extends EventEmitter {
     // Check if any pattern matches
     for (const pattern of promptPatterns) {
       if (pattern.test(text)) {
-        return true;
+        return { isPrompt: true, type: 'confirm' };
       }
     }
 
-    return false;
+    return { isPrompt: false };
   }
 
   /**
