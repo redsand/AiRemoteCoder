@@ -10,6 +10,12 @@ import { broadcastToRun } from '../services/websocket.js';
 // Validation schemas
 const createRunSchema = z.object({
   command: z.string().optional(),
+  label: z.string().max(200).optional(),
+  clientId: z.string().optional(),
+  agentId: z.string().optional(), // For auto-associating with client
+  repoPath: z.string().optional(),
+  repoName: z.string().optional(),
+  tags: z.array(z.string()).optional(),
   metadata: z.record(z.any()).optional()
 });
 
@@ -40,12 +46,31 @@ export async function runsRoutes(fastify: FastifyInstance) {
     const id = nanoid(12);
     const capabilityToken = generateCapabilityToken();
 
-    db.prepare(`
-      INSERT INTO runs (id, command, capability_token, metadata)
-      VALUES (?, ?, ?, ?)
-    `).run(id, body.command || null, capabilityToken, body.metadata ? JSON.stringify(body.metadata) : null);
+    // Find client by agentId if provided
+    let clientId = body.clientId || null;
+    if (!clientId && body.agentId) {
+      const client = db.prepare('SELECT id FROM clients WHERE agent_id = ?').get(body.agentId) as { id: string } | undefined;
+      if (client) {
+        clientId = client.id;
+      }
+    }
 
-    logAudit(request.user?.id, 'run.create', 'run', id, { command: body.command }, request.ip);
+    db.prepare(`
+      INSERT INTO runs (id, client_id, label, command, repo_path, repo_name, tags, capability_token, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      clientId,
+      body.label || null,
+      body.command || null,
+      body.repoPath || null,
+      body.repoName || null,
+      body.tags ? JSON.stringify(body.tags) : null,
+      capabilityToken,
+      body.metadata ? JSON.stringify(body.metadata) : null
+    );
+
+    logAudit(request.user?.id, 'run.create', 'run', id, { command: body.command, clientId }, request.ip);
 
     return {
       id,
@@ -54,48 +79,220 @@ export async function runsRoutes(fastify: FastifyInstance) {
     };
   });
 
-  // List runs
+  // List runs with filtering, search, and pagination
   fastify.get('/api/runs', {
     preHandler: [uiAuth]
   }, async (request: AuthenticatedRequest) => {
-    const runs = db.prepare(`
-      SELECT id, status, command, created_at, started_at, finished_at, exit_code, error_message, metadata
-      FROM runs
-      ORDER BY created_at DESC
-      LIMIT 100
-    `).all();
+    const {
+      status,
+      clientId,
+      search,
+      repo,
+      waitingApproval,
+      tags,
+      limit = '50',
+      offset = '0',
+      cursor,
+      sortBy = 'created_at',
+      sortOrder = 'desc'
+    } = request.query as {
+      status?: string;
+      clientId?: string;
+      search?: string;
+      repo?: string;
+      waitingApproval?: string;
+      tags?: string;
+      limit?: string;
+      offset?: string;
+      cursor?: string;
+      sortBy?: string;
+      sortOrder?: string;
+    };
 
-    return runs.map((r: any) => ({
-      ...r,
-      metadata: r.metadata ? JSON.parse(r.metadata) : null
-    }));
+    let query = `
+      SELECT r.id, r.status, r.label, r.command, r.repo_path, r.repo_name,
+             r.waiting_approval, r.created_at, r.started_at, r.finished_at,
+             r.exit_code, r.error_message, r.metadata, r.tags, r.client_id,
+             c.display_name as client_name, c.status as client_status,
+             (SELECT COUNT(*) FROM artifacts WHERE run_id = r.id) as artifact_count,
+             (SELECT data FROM events WHERE run_id = r.id AND type = 'assist' LIMIT 1) as assist_data
+      FROM runs r
+      LEFT JOIN clients c ON r.client_id = c.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (status && status !== 'all') {
+      query += ' AND r.status = ?';
+      params.push(status);
+    }
+
+    if (clientId) {
+      query += ' AND r.client_id = ?';
+      params.push(clientId);
+    }
+
+    if (search) {
+      query += ' AND (r.id LIKE ? OR r.label LIKE ? OR r.command LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    if (repo) {
+      query += ' AND (r.repo_path LIKE ? OR r.repo_name LIKE ?)';
+      params.push(`%${repo}%`, `%${repo}%`);
+    }
+
+    if (waitingApproval === 'true') {
+      query += ' AND r.waiting_approval = 1';
+    }
+
+    if (tags) {
+      const tagList = tags.split(',');
+      tagList.forEach(tag => {
+        query += ' AND r.tags LIKE ?';
+        params.push(`%"${tag}"%`);
+      });
+    }
+
+    // Cursor-based pagination (for WebSocket real-time updates)
+    if (cursor) {
+      query += ' AND r.id < ?';
+      params.push(cursor);
+    }
+
+    // Validate sort column
+    const allowedSorts = ['created_at', 'started_at', 'finished_at', 'status'];
+    const sortCol = allowedSorts.includes(sortBy) ? sortBy : 'created_at';
+    const sortDir = sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    query += ` ORDER BY r.${sortCol} ${sortDir} LIMIT ? OFFSET ?`;
+    params.push(parseInt(limit, 10), parseInt(offset, 10));
+
+    const runs = db.prepare(query).all(...params);
+
+    // Get total count for pagination
+    let countQuery = 'SELECT COUNT(*) as count FROM runs r WHERE 1=1';
+    const countParams: any[] = [];
+    if (status && status !== 'all') {
+      countQuery += ' AND r.status = ?';
+      countParams.push(status);
+    }
+    if (clientId) {
+      countQuery += ' AND r.client_id = ?';
+      countParams.push(clientId);
+    }
+    if (search) {
+      countQuery += ' AND (r.id LIKE ? OR r.label LIKE ? OR r.command LIKE ?)';
+      countParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+    if (repo) {
+      countQuery += ' AND (r.repo_path LIKE ? OR r.repo_name LIKE ?)';
+      countParams.push(`%${repo}%`, `%${repo}%`);
+    }
+    if (waitingApproval === 'true') {
+      countQuery += ' AND r.waiting_approval = 1';
+    }
+
+    const { count } = db.prepare(countQuery).get(...countParams) as { count: number };
+
+    return {
+      runs: runs.map((r: any) => ({
+        ...r,
+        metadata: r.metadata ? JSON.parse(r.metadata) : null,
+        tags: r.tags ? JSON.parse(r.tags) : null,
+        hasAssist: !!r.assist_data
+      })),
+      total: count,
+      limit: parseInt(limit, 10),
+      offset: parseInt(offset, 10),
+      hasMore: parseInt(offset, 10) + runs.length < count
+    };
   });
 
-  // Get single run
+  // Get single run with full details
   fastify.get('/api/runs/:runId', {
     preHandler: [uiAuth]
   }, async (request: AuthenticatedRequest, reply) => {
     const { runId } = request.params as { runId: string };
 
     const run = db.prepare(`
-      SELECT id, status, command, created_at, started_at, finished_at, exit_code, error_message, metadata
-      FROM runs WHERE id = ?
+      SELECT r.id, r.status, r.label, r.command, r.repo_path, r.repo_name,
+             r.waiting_approval, r.created_at, r.started_at, r.finished_at,
+             r.exit_code, r.error_message, r.metadata, r.tags, r.client_id,
+             c.display_name as client_name, c.agent_id as client_agent_id, c.status as client_status
+      FROM runs r
+      LEFT JOIN clients c ON r.client_id = c.id
+      WHERE r.id = ?
     `).get(runId) as any;
 
     if (!run) {
       return reply.code(404).send({ error: 'Run not found' });
     }
 
+    // Get artifacts
     const artifacts = db.prepare(`
       SELECT id, name, type, size, created_at
       FROM artifacts WHERE run_id = ?
+      ORDER BY created_at DESC
     `).all(runId);
+
+    // Get commands/audit trail
+    const commands = db.prepare(`
+      SELECT id, command, status, created_at, acked_at, result, error
+      FROM commands WHERE run_id = ?
+      ORDER BY created_at DESC
+    `).all(runId);
+
+    // Get assist session if any
+    const assistEvent = db.prepare(`
+      SELECT data FROM events WHERE run_id = ? AND type = 'assist' ORDER BY timestamp DESC LIMIT 1
+    `).get(runId) as { data: string } | undefined;
+
+    // Calculate duration
+    let duration = null;
+    if (run.started_at) {
+      const endTime = run.finished_at || Math.floor(Date.now() / 1000);
+      duration = endTime - run.started_at;
+    }
 
     return {
       ...run,
       metadata: run.metadata ? JSON.parse(run.metadata) : null,
-      artifacts
+      tags: run.tags ? JSON.parse(run.tags) : null,
+      artifacts,
+      commands,
+      assistUrl: assistEvent ? JSON.parse(assistEvent.data).url : null,
+      duration
     };
+  });
+
+  // Get run commands/audit separately (for tab)
+  fastify.get('/api/runs/:runId/commands', {
+    preHandler: [uiAuth]
+  }, async (request: AuthenticatedRequest, reply) => {
+    const { runId } = request.params as { runId: string };
+
+    const run = db.prepare('SELECT id FROM runs WHERE id = ?').get(runId);
+    if (!run) {
+      return reply.code(404).send({ error: 'Run not found' });
+    }
+
+    const commands = db.prepare(`
+      SELECT id, command, status, created_at, acked_at, result, error
+      FROM commands WHERE run_id = ?
+      ORDER BY created_at DESC
+    `).all(runId);
+
+    // Get related audit entries
+    const auditEntries = db.prepare(`
+      SELECT id, user_id, action, details, ip_address, timestamp
+      FROM audit_log
+      WHERE target_type = 'run' AND target_id = ?
+      ORDER BY timestamp DESC
+      LIMIT 50
+    `).all(runId);
+
+    return { commands, auditEntries };
   });
 
   // Get run events (with pagination)
