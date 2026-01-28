@@ -4,8 +4,6 @@ import {
   StatusPill,
   ConnectionIndicator,
   LiveLogViewer,
-  ActionBar,
-  ActionButton,
   Modal,
   ConfirmModal,
   useToast,
@@ -438,14 +436,58 @@ export function RunDetail({ user }: Props) {
 
   return (
     <div className="run-detail">
-      {/* Header */}
+      {/* Header with Action Buttons in Top Right */}
       <div className="run-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
-          <Link to="/runs" className="btn btn-sm">
-            ← Back
-          </Link>
-          <StatusPill status={run.status as any} />
-          <ConnectionIndicator connected={connected} reconnecting={reconnecting} />
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Link to="/runs" className="btn btn-sm">
+              ← Back
+            </Link>
+            <StatusPill status={run.status as any} />
+            <ConnectionIndicator connected={connected} reconnecting={reconnecting} />
+          </div>
+
+          {/* Action Buttons - Top Right */}
+          {canOperate && (isActive || canDelete) && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {isActive && (
+                <>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => setShowStopConfirm(true)}
+                    style={{ background: 'var(--accent-red)', color: 'white' }}
+                    title="Stop the running process"
+                  >
+                    ⏹ Stop
+                  </button>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    onClick={() => setShowPromptModal(true)}
+                    title="Send a prompt to the process"
+                  >
+                    💬 Send Prompt
+                  </button>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    onClick={() => setShowCommandModal(true)}
+                    title="Run a command"
+                  >
+                    ▶ Command
+                  </button>
+                </>
+              )}
+              {canDelete && (
+                <button
+                  className="btn btn-sm"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  style={{ background: 'var(--accent-red)', color: 'white' }}
+                  title="Delete this run"
+                >
+                  🗑 Delete
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <h1 style={{ fontSize: '20px', fontWeight: 600, marginBottom: '8px' }}>
@@ -659,46 +701,6 @@ export function RunDetail({ user }: Props) {
           <CommandsList commands={run.commands} />
         )}
       </div>
-
-      {/* Action Bar (mobile sticky) */}
-      {canOperate && (
-        <ActionBar visible={isActive || canDelete}>
-          {isActive && (
-            <>
-              <ActionButton
-                onClick={() => setShowStopConfirm(true)}
-                variant="danger"
-                icon="⏹"
-              >
-                Stop
-              </ActionButton>
-              <ActionButton
-                onClick={() => setShowPromptModal(true)}
-                variant="primary"
-                icon="💬"
-              >
-                Send Prompt
-              </ActionButton>
-              <ActionButton
-                onClick={() => setShowCommandModal(true)}
-                variant="primary"
-                icon="▶"
-              >
-                Run Command
-              </ActionButton>
-            </>
-          )}
-          {canDelete && (
-            <ActionButton
-              onClick={() => setShowDeleteConfirm(true)}
-              variant="danger"
-              icon="🗑"
-            >
-              Delete Run
-            </ActionButton>
-          )}
-        </ActionBar>
-      )}
 
       {/* Prompt Modal */}
       <Modal
