@@ -19,8 +19,9 @@ const createRunSchema = z.object({
   metadata: z.record(z.any()).optional(),
   workingDir: z.string().optional(),
   autonomous: z.boolean().optional(),
-  workerType: z.enum(['claude', 'ollama', 'ollama-launch', 'codex', 'gemini', 'rev']).optional().default('claude'),
-  model: z.string().optional()
+  workerType: z.enum(['claude', 'ollama-launch', 'codex', 'gemini', 'rev']).optional().default('claude'),
+  model: z.string().optional(),
+  integration: z.enum(['claude', 'codex', 'opencode', 'droid']).optional() // For ollama-launch
 });
 
 const listRunsSchema = z.object({
@@ -79,7 +80,8 @@ export async function runsRoutes(fastify: FastifyInstance) {
       autonomous: body.autonomous || false,
       workingDir: body.workingDir,
       workerType: body.workerType || 'claude',
-      model: body.model
+      model: body.model,
+      ...(body.integration && { integration: body.integration })
     };
 
     const workerType = body.workerType || 'claude';
