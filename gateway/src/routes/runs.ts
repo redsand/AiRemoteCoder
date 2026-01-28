@@ -41,7 +41,7 @@ const restartSchema = z.object({
 });
 
 const eventSchema = z.object({
-  type: z.enum(['stdout', 'stderr', 'marker', 'info', 'error', 'assist']),
+  type: z.enum(['stdout', 'stderr', 'marker', 'info', 'error', 'assist', 'prompt_waiting', 'prompt_resolved']),
   data: z.string(),
   sequence: z.number().int().min(0).optional()
 });
