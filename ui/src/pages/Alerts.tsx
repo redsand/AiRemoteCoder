@@ -52,10 +52,6 @@ function formatRelativeTime(timestamp: number): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-function formatTime(timestamp: number): string {
-  return new Date(timestamp * 1000).toLocaleString();
-}
-
 export function Alerts({ user }: Props) {
   const navigate = useNavigate();
   const { addToast } = useToast();

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   RunCard,
   type Run,
@@ -37,7 +37,6 @@ const statusOptions: FilterOption[] = [
 ];
 
 export function Runs({ user }: Props) {
-  const navigate = useNavigate();
   const { addToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
 

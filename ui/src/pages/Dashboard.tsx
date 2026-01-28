@@ -68,7 +68,7 @@ function formatRelativeTime(timestamp: number): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-export function Dashboard({ user }: Props) {
+export function Dashboard({ user: _user }: Props) {
   const navigate = useNavigate();
   const [needsAttention, setNeedsAttention] = useState<NeedsAttention | null>(null);
   const [activeRuns, setActiveRuns] = useState<Run[]>([]);

@@ -549,10 +549,10 @@ function TimelineView({ events }: { events: LogEvent[] }) {
 }
 
 function TimelineGroup({
-  stepId,
+  stepId: _stepId,
   events,
   startTime,
-  endTime,
+  endTime: _endTime,
   hasErrors,
 }: {
   stepId: string;

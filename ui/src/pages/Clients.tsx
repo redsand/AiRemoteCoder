@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   ClientCard,
   type Client,
@@ -28,8 +28,7 @@ const statusOptions: FilterOption[] = [
   { value: 'offline', label: 'Offline' },
 ];
 
-export function Clients({ user }: Props) {
-  const navigate = useNavigate();
+export function Clients({ user: _user }: Props) {
   const { addToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
 

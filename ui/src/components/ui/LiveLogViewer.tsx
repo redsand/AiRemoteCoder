@@ -305,7 +305,7 @@ function LogLine({ event, index, searchTerm }: LogLineProps) {
   // Highlight search term
   if (searchTerm && content.toLowerCase().includes(searchTerm.toLowerCase())) {
     const parts = content.split(new RegExp(`(${escapeRegExp(searchTerm)})`, 'gi'));
-    content = parts.map((part, i) =>
+    content = parts.map((part) =>
       part.toLowerCase() === searchTerm.toLowerCase()
         ? `<mark style="background: rgba(210, 153, 34, 0.4); padding: 0 2px;">${part}</mark>`
         : part

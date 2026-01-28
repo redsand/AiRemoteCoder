@@ -6,6 +6,7 @@ export interface Client {
   display_name: string;
   agent_id: string;
   last_seen_at: number;
+  created_at?: number;
   version?: string | null;
   capabilities?: string[] | null;
   status: ConnectionStatus;

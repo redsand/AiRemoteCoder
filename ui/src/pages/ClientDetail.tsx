@@ -203,9 +203,11 @@ export function ClientDetailPage({ user }: Props) {
               <strong>Version:</strong> {client.version}
             </span>
           )}
-          <span>
-            <strong>Connected:</strong> {formatTime(client.created_at)}
-          </span>
+          {client.created_at && (
+            <span>
+              <strong>Connected:</strong> {formatTime(client.created_at)}
+            </span>
+          )}
         </div>
       </div>
 
@@ -380,7 +382,7 @@ export function ClientDetailPage({ user }: Props) {
             : 'Enabling operator actions will allow commands to be sent to this client.'
         }
         confirmText={client.operator_enabled ? 'Disable' : 'Enable'}
-        danger={client.operator_enabled}
+        danger={!!client.operator_enabled}
         loading={actionLoading}
       />
 

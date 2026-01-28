@@ -114,7 +114,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
     };
   });
 
-<<<<<<< HEAD
   // List runs with filtering, search, and pagination
   fastify.get('/api/runs', {
     preHandler: [uiAuth]
