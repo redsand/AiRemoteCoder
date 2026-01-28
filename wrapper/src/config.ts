@@ -56,11 +56,16 @@ export const config = {
 
   // Secret patterns to redact before sending
   secretPatterns: [
-    /(?:api[_-]?key|apikey|secret|password|token|auth|bearer|credential)[=:\s]["']?[\w\-\.]+["']?/gi,
+    // Match various key/password/token formats with = or : separators (handles spaces after separator)
+    /(?:api[_-]?key|apiKey|API_KEY|APIKEY|secret|password|PASSWORD|token|TOKEN|auth|AUTH|bearer|Bearer|BEARER|credential)[=:\s]\s*["']?[\w\-\.]+["']?/g,
+    // OpenAI keys
     /sk-[a-zA-Z0-9]{20,}/g,
+    // GitHub tokens
     /ghp_[a-zA-Z0-9]{36}/g,
     /ghs_[a-zA-Z0-9]{36}/g,
+    // NPM tokens
     /npm_[a-zA-Z0-9]{36}/g,
+    // PEM certificates
     /-----BEGIN[\s\S]*?-----END[^-]*-----/g
   ]
 };
