@@ -1,7 +1,16 @@
-import { Routes, Route, Link, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import RunList from './components/RunList';
-import RunDetail from './components/RunDetail';
+import { ToastProvider } from './components/ui';
+import { Layout } from './components/Layout';
+import {
+  Dashboard,
+  Runs,
+  RunDetail,
+  Clients,
+  ClientDetailPage,
+  Alerts,
+  Settings,
+} from './pages';
 import Login from './components/Login';
 import Setup from './components/Setup';
 
@@ -63,42 +72,50 @@ function App() {
 
   // Setup required
   if (authStatus?.setupRequired) {
-    return <Setup onComplete={() => checkAuth()} />;
+    return (
+      <ToastProvider>
+        <Setup onComplete={() => checkAuth()} />
+      </ToastProvider>
+    );
   }
 
   // Not authenticated
   if (!user && !authStatus?.cloudflareEnabled) {
-    return <Login onLogin={(u) => setUser(u)} />;
+    return (
+      <ToastProvider>
+        <Login onLogin={(u) => setUser(u)} />
+      </ToastProvider>
+    );
   }
 
   return (
-    <div className="app">
-      <header className="header">
-        <h1>
-          <Link to="/">Claude Code Monitor</Link>
-        </h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          {user && (
-            <>
-              <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
-                {user.username}
-              </span>
-              <button className="btn btn-sm" onClick={handleLogout}>
-                Logout
-              </button>
-            </>
-          )}
-        </div>
-      </header>
+    <ToastProvider>
+      <div className="app">
+        <Layout user={user} onLogout={handleLogout}>
+          <Routes>
+            {/* Dashboard */}
+            <Route path="/" element={<Dashboard user={user} />} />
 
-      <main className="main">
-        <Routes>
-          <Route path="/" element={<RunList user={user} />} />
-          <Route path="/runs/:runId" element={<RunDetail user={user} />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </main>
-    </div>
+            {/* Runs */}
+            <Route path="/runs" element={<Runs user={user} />} />
+            <Route path="/runs/:runId" element={<RunDetail user={user} />} />
+
+            {/* Clients */}
+            <Route path="/clients" element={<Clients user={user} />} />
+            <Route path="/clients/:clientId" element={<ClientDetailPage user={user} />} />
+
+            {/* Alerts */}
+            <Route path="/alerts" element={<Alerts user={user} />} />
+
+            {/* Settings */}
+            <Route path="/settings" element={<Settings user={user} onLogout={handleLogout} />} />
+
+            {/* Fallback */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Layout>
+      </div>
+    </ToastProvider>
   );
 }
 
