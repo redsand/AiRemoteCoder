@@ -3,7 +3,7 @@ import { config } from '../config.js';
 /**
  * Supported worker types
  */
-export type WorkerType = 'claude' | 'ollama' | 'ollama-launch' | 'codex' | 'gemini' | 'rev';
+export type WorkerType = 'claude' | 'ollama-launch' | 'codex' | 'gemini' | 'rev';
 
 /**
  * Worker configuration
@@ -31,16 +31,6 @@ export const WORKER_CONFIGS: Record<WorkerType, WorkerConfig> = {
     defaultModel: undefined,
     supportsModelSelection: false,
     description: 'Anthropic Claude Code - Interactive AI coding assistant'
-  },
-  ollama: {
-    type: 'ollama',
-    command: config.ollamaCommand,
-    displayName: 'Ollama',
-    icon: '',
-    defaultModel: config.ollamaModel,
-    supportsModelSelection: true,
-    description: 'Local LLM runner for models like CodeLlama, Llama, etc.',
-    subcommand: 'run'
   },
   'ollama-launch': {
     type: 'ollama-launch',
@@ -80,23 +70,6 @@ export const WORKER_CONFIGS: Record<WorkerType, WorkerConfig> = {
     description: 'Custom AI coding tool'
   }
 };
-
-/**
- * Common Ollama models for user selection (for 'ollama run')
- */
-export const OLLAMA_MODELS: Array<{ value: string; label: string }> = [
-  { value: 'qwen2.5-coder:7b', label: 'Qwen 2.5 Coder 7B' },
-  { value: 'codellama:7b', label: 'CodeLlama 7B' },
-  { value: 'codellama:13b', label: 'CodeLlama 13B' },
-  { value: 'codellama:34b', label: 'CodeLlama 34B' },
-  { value: 'codellama:instruct', label: 'CodeLlama Instruct' },
-  { value: 'llama2:7b', label: 'Llama 2 7B' },
-  { value: 'llama2:13b', label: 'Llama 2 13B' },
-  { value: 'deepseek-coder:6.7b', label: 'DeepSeek Coder 6.7B' },
-  { value: 'mistral:7b', label: 'Mistral 7B' },
-  { value: 'phi:2.7b', label: 'Phi 2.7B' },
-  { value: 'custom', label: 'Custom...' }
-];
 
 /**
  * Ollama Launch integrations for user selection
@@ -150,39 +123,6 @@ export function isValidWorkerType(type: string): type is WorkerType {
   return type in WORKER_CONFIGS;
 }
 
-/**
- * Query Ollama API for available models
- * Connects to local Ollama instance (default: http://localhost:11434)
- */
-export async function getAvailableOllamaModels(ollamaUrl: string = 'http://localhost:11434'): Promise<{ value: string; label: string }[]> {
-  try {
-    const response = await fetch(`${ollamaUrl}/api/tags`);
-    if (!response.ok) {
-      console.warn(`Failed to fetch Ollama models: ${response.statusText}`);
-      return OLLAMA_MODELS; // Return defaults if API call fails
-    }
-
-    const data = await response.json() as { models?: Array<{ name: string; digest: string; size: number; modified_at: string }> };
-
-    if (!data.models || data.models.length === 0) {
-      return OLLAMA_MODELS; // Return defaults if no models found
-    }
-
-    // Convert Ollama model names to our format (remove :latest suffix if present)
-    const models = data.models.map(m => ({
-      value: m.name,
-      label: m.name.replace(':latest', '')
-    }));
-
-    // Add custom option at the end
-    models.push({ value: 'custom', label: 'Custom...' });
-
-    return models;
-  } catch (err) {
-    console.warn('Could not connect to Ollama API, using default models:', err);
-    return OLLAMA_MODELS; // Return defaults if connection fails
-  }
-}
 
 /**
  * Get all worker types
@@ -204,7 +144,7 @@ export function getWorkerDisplayName(workerType: WorkerType): string {
 export function getWorkerIcon(workerType: string): string | undefined {
   const icons: Record<string, string> = {
     claude: '',
-    ollama: '',
+    'ollama-launch': '',
     codex: '',
     gemini: '',
     rev: ''

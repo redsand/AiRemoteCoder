@@ -11,6 +11,8 @@ export interface GenericRunnerOptions extends RunnerOptions {
   commandPrefix?: string[];
   // Optional: custom command building function
   buildCommandFn?: (command?: string, autonomous?: boolean, model?: string) => WorkerCommandResult;
+  // Optional: integration for ollama-launch (claude, codex, opencode, droid)
+  integration?: string;
 }
 
 /**
@@ -28,6 +30,10 @@ export class GenericRunner extends BaseRunner {
     this.workerType = options.workerType;
     this.commandPrefix = options.commandPrefix;
     this.buildCommandFn = options.buildCommandFn;
+    // Set integration from options, with fallback to base runner's integration
+    if (options.integration) {
+      this.integration = options.integration;
+    }
   }
 
   /**
@@ -107,7 +113,7 @@ export class GenericRunner extends BaseRunner {
 
   /**
    * Build Ollama command
-   * Usage: ollama run <model> [prompt] or ollama launch <integration> [--config]
+   * Usage: ollama run <model> [prompt] or ollama launch <integration> --model <model>
    * Note: For 'launch' mode, the initial command is sent via stdin, not as CLI args
    * Integrations: claude, opencode, codex, droid
    */
@@ -123,14 +129,14 @@ export class GenericRunner extends BaseRunner {
         args.push(command);
       }
     } else if (subcommand === 'launch') {
-      // For 'launch' mode: ollama launch <integration> [--config]
-      // model should be an integration name: claude, opencode, codex, droid
-      const integration = this.model || 'claude';
+      // For 'launch' mode: ollama launch <integration> --model <model>
+      // integration: claude, opencode, codex, droid
+      const integration = this.integration || 'claude';
       args.push(integration);
 
-      // Add --config flag for interactive setup/configuration
-      if (autonomous) {
-        args.push('--config');
+      // Add --model flag with the specific model
+      if (this.model) {
+        args.push('--model', this.model);
       }
     }
 

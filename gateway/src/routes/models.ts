@@ -13,43 +13,6 @@ interface ModelsResponse {
   error?: string;
 }
 
-/**
- * Query Ollama API for available models
- */
-async function getOllamaModels(): Promise<ModelOption[]> {
-  try {
-    const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-    const response = await fetch(`${ollamaUrl}/api/tags`, { signal: controller.signal });
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      console.warn(`Ollama API error: ${response.statusText}`);
-      return [];
-    }
-
-    const data = (await response.json()) as {
-      models?: Array<{ name: string; digest: string; size: number; modified_at: string }>;
-    };
-
-    if (!data.models || data.models.length === 0) {
-      return [];
-    }
-
-    const models = data.models.map((m) => ({
-      value: m.name,
-      label: m.name.replace(':latest', ''),
-    }));
-
-    models.push({ value: 'custom', label: 'Custom...' });
-    return models;
-  } catch (err) {
-    console.warn('Failed to query Ollama models:', err);
-    return [];
-  }
-}
 
 /**
  * Query Claude API for available models
@@ -213,13 +176,6 @@ function getDefaultModels(provider: string): ModelOption[] {
       { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
       { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
     ],
-    ollama: [
-      { value: 'qwen2.5-coder:7b', label: 'Qwen 2.5 Coder 7B' },
-      { value: 'codellama:7b', label: 'CodeLlama 7B' },
-      { value: 'codellama:13b', label: 'CodeLlama 13B' },
-      { value: 'deepseek-coder:6.7b', label: 'DeepSeek Coder 6.7B' },
-      { value: 'custom', label: 'Custom...' },
-    ],
   };
 
   return defaults[provider] || [];
@@ -238,15 +194,6 @@ export async function modelsRoutes(fastify: FastifyInstance) {
     let error: string | undefined;
 
     switch (provider.toLowerCase()) {
-      case 'ollama':
-        models = await getOllamaModels();
-        available = models.length > 0;
-        if (!available) {
-          models = getDefaultModels('ollama');
-          error = 'Could not connect to Ollama API, showing default models';
-        }
-        break;
-
       case 'claude':
         models = await getClaudeModels();
         available = models.length > 0;
@@ -295,7 +242,7 @@ export async function modelsRoutes(fastify: FastifyInstance) {
    * GET /api/models
    */
   fastify.get('/api/models', async (request, reply) => {
-    const providers = ['ollama', 'claude', 'codex', 'gemini'];
+    const providers = ['claude', 'codex', 'gemini'];
     const allModels: Record<string, ModelsResponse> = {};
 
     for (const provider of providers) {
@@ -304,15 +251,6 @@ export async function modelsRoutes(fastify: FastifyInstance) {
       let error: string | undefined;
 
       switch (provider) {
-        case 'ollama':
-          models = await getOllamaModels();
-          available = models.length > 0;
-          if (!available) {
-            models = getDefaultModels('ollama');
-            error = 'Could not connect to Ollama API, showing default models';
-          }
-          break;
-
         case 'claude':
           models = await getClaudeModels();
           available = models.length > 0;

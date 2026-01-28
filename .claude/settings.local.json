@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git rebase main)",
+      "Bash(git rebase --continue)",
+      "Bash(git add gateway/src/routes/runs.ts gateway/src/services/database.ts)",
+      "Bash(git checkout --ours gateway/src/routes/runs.ts gateway/src/services/database.ts)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nMerge remote-tracking branch ''origin/claude/agent-workflow-control-lcT6M'' keeping local changes\n\nCo-Authored-By: Claude \\(glm-4.7:cloud\\) <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(npm test)",
+      "Bash(npm install)",
+      "Bash(npm run build)",
+      "Bash(npm run lint)",
+      "Bash(npm run)",
+      "Bash(npm audit)",
+      "Bash(npm audit fix)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(npm test -- wrapper/src/services/worker-registry.test.ts)",
+      "Bash(npm test -- services/worker-registry.test.ts)",
+      "Bash(npm test -- services/generic-runner.test.ts)",
+      "Bash(npm test -- services/base-runner.test.ts)",
+      "Bash(node -c base-runner.test.ts)",
+      "Bash(pwsh:*)",
+      "Bash(npm test:*)",
+      "Bash(node -e:*)",
+      "Bash(node test-paths.js:*)",
+      "Bash(node test-paths.mjs:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

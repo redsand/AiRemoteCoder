@@ -149,8 +149,8 @@ describe('GenericRunner', () => {
 
       const result = runner.buildCommand('explain this code', false);
       // In launch mode, command is sent via stdin, not as CLI args
-      expect(result.args).toEqual(['launch', 'codellama:13b']);
-      expect(result.fullCommand).toBe('ollama launch codellama:13b');
+      expect(result.args).toEqual(['launch', 'claude', '--model', 'codellama:13b']);
+      expect(result.fullCommand).toBe('ollama launch claude --model codellama:13b');
     });
 
     it('should build Ollama launch command with default model', () => {
@@ -164,9 +164,9 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand('test prompt', false);
-      // In launch mode, command is sent via stdin, not as CLI args
+      // In launch mode without model, no --model flag is added
       expect(result.args).toEqual(['launch', 'claude']);
-      expect(result.fullCommand).toContain('claude');
+      expect(result.fullCommand).toBe('ollama launch claude');
     });
 
     it('should build Ollama launch command', () => {
@@ -180,23 +180,22 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand('fix bug', true);
-      // In launch mode, command is sent via stdin, not as CLI args
-      expect(result.args).toEqual(['launch', 'claude', '--config']);
-      expect(result.fullCommand).toBe('ollama launch claude --config');
+      // In launch mode, command is sent via stdin, model is passed with --model flag
+      expect(result.args).toEqual(['launch', 'claude', '--model', 'claude']);
+      expect(result.fullCommand).toBe('ollama launch claude --model claude');
     });
 
-    it('should build Ollama launch command without config flag', () => {
+    it('should build Ollama launch command without model flag when no model', () => {
       const runner = new GenericRunner({
         runId: 'test-run',
         capabilityToken: 'token',
         workingDir: '/test/project',
         autonomous: false,
-        workerType: 'ollama-launch',
-        model: 'claude'
+        workerType: 'ollama-launch'
       });
 
       const result = runner.buildCommand('fix bug', false);
-      // In launch mode, command is sent via stdin, not as CLI args
+      // In launch mode without explicit model
       expect(result.args).toEqual(['launch', 'claude']);
       expect(result.fullCommand).toBe('ollama launch claude');
     });
@@ -268,9 +267,9 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand(undefined, true);
-      // In launch mode with autonomous, --config is added, command is sent via stdin
-      expect(result.args).toEqual(['launch', 'claude', '--config']);
-      expect(result.fullCommand).toBe('ollama launch claude --config');
+      // In launch mode without model
+      expect(result.args).toEqual(['launch', 'claude']);
+      expect(result.fullCommand).toBe('ollama launch claude');
     });
   });
 
@@ -385,7 +384,8 @@ describe('GenericRunner Edge Cases', () => {
     });
 
     const result = runner.buildCommand('test', false);
-    expect(result.args[1]).toBe('claude'); // Uses default for ollama-launch
+    // Integration is 'claude' by default, no --model flag when model is not specified
+    expect(result.args).toEqual(['launch', 'claude']);
   });
 
   it('should handle long commands', () => {
@@ -409,7 +409,7 @@ describe('GenericRunner Edge Cases', () => {
     });
 
     const result = runner.buildCommand('test "quoted" command', false);
-    // In launch mode, command is sent via stdin, not as CLI args
-    expect(result.args).toEqual(['launch', 'custom-model']);
+    // In launch mode, model is passed with --model flag
+    expect(result.args).toEqual(['launch', 'claude', '--model', 'custom-model']);
   });
 });

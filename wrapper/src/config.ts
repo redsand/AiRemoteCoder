@@ -35,7 +35,6 @@ export const config = {
   getWorkerCommand(workerType: string): string {
     const commands: Record<string, string> = {
       claude: this.claudeCommand,
-      ollama: this.ollamaCommand,
       'ollama-launch': this.ollamaCommand,
       codex: this.codexCommand,
       gemini: this.geminiCommand,
