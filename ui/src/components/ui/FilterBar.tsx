@@ -73,7 +73,7 @@ export function FilterSelect({ label, value, options, onChange, icon }: FilterSe
             color: 'var(--text-secondary)',
           }}
         >
-          \u25BC
+          ▼
         </span>
       </div>
     </div>
@@ -113,7 +113,7 @@ export function SearchInput({
           pointerEvents: 'none',
         }}
       >
-        \uD83D\uDD0D
+        🔍
       </span>
       <input
         type="text"
@@ -154,7 +154,7 @@ export function SearchInput({
           }}
           aria-label="Clear search"
         >
-          \u00D7
+          ×
         </button>
       )}
     </div>
@@ -209,7 +209,7 @@ export function FilterBar({ children, onReset, hasActiveFilters }: FilterBarProp
             </span>
           )}
         </span>
-        <span style={{ fontSize: '12px' }}>{expanded ? '\u25B2' : '\u25BC'}</span>
+        <span style={{ fontSize: '12px' }}>{expanded ? '▲' : '▼'}</span>
       </div>
 
       {/* Filter content */}

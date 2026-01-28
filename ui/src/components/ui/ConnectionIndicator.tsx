@@ -7,9 +7,9 @@ export function ConnectionIndicator({ connected, reconnecting }: ConnectionIndic
   const status = connected ? 'connected' : reconnecting ? 'reconnecting' : 'disconnected';
 
   const config = {
-    connected: { color: 'var(--accent-green)', icon: '\u25CF', text: 'Live' },
-    reconnecting: { color: 'var(--accent-yellow)', icon: '\u25CB', text: 'Reconnecting...' },
-    disconnected: { color: 'var(--accent-red)', icon: '\u25CB', text: 'Disconnected' },
+    connected: { color: 'var(--accent-green)', icon: '●', text: 'Live' },
+    reconnecting: { color: 'var(--accent-yellow)', icon: '○', text: 'Reconnecting...' },
+    disconnected: { color: 'var(--accent-red)', icon: '○', text: 'Disconnected' },
   };
 
   const c = config[status];

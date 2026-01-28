@@ -327,9 +327,9 @@ function LogLine({ event, index, searchTerm }: LogLineProps) {
   if (isMarker) {
     try {
       const data = JSON.parse(event.data);
-      content = `\u25B6 ${data.event?.toUpperCase() || event.data}`;
+      content = `▶ ${data.event?.toUpperCase() || event.data}`;
     } catch {
-      content = `\u25B6 ${event.data}`;
+      content = `▶ ${event.data}`;
     }
   } else if (isAssist) {
     try {
@@ -394,7 +394,7 @@ function LogLine({ event, index, searchTerm }: LogLineProps) {
             color: 'var(--text-muted)',
           }}
         >
-          \u00D7{event.collapsed}
+          ×{event.collapsed}
         </span>
       )}
     </div>

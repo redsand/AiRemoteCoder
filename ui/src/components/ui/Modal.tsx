@@ -101,7 +101,7 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: M
               }}
               aria-label="Close modal"
             >
-              \u00D7
+              ×
             </button>
           </div>
         )}

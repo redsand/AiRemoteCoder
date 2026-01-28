@@ -293,7 +293,7 @@ function ActivityListItem({ item }: { item: ActivityItem }) {
           const eventData = JSON.parse(item.data.eventData || '{}');
           const eventName = eventData.event?.toUpperCase() || 'EVENT';
           return {
-            icon: eventName === 'STARTED' ? '\u25B6' : eventName === 'FINISHED' ? '\u2713' : '\u2022',
+            icon: eventName === 'STARTED' ? '▶' : eventName === 'FINISHED' ? '✓' : '•',
             text: `Run ${eventName.toLowerCase()}`,
             subtext: item.data.runLabel || item.data.runId,
             color: eventName === 'FINISHED' && eventData.exitCode === 0
@@ -305,7 +305,7 @@ function ActivityListItem({ item }: { item: ActivityItem }) {
           };
         } catch {
           return {
-            icon: '\u2022',
+            icon: '•',
             text: 'Run event',
             subtext: item.data.runId,
             color: 'var(--text-secondary)',
@@ -315,7 +315,7 @@ function ActivityListItem({ item }: { item: ActivityItem }) {
 
       case 'command':
         return {
-          icon: '\u2318',
+          icon: '⌘',
           text: item.data.status === 'completed' ? 'Command completed' : 'Command queued',
           subtext: item.data.command,
           color: item.data.status === 'completed' ? 'var(--accent-green)' : 'var(--accent-yellow)',
@@ -324,7 +324,7 @@ function ActivityListItem({ item }: { item: ActivityItem }) {
 
       case 'artifact':
         return {
-          icon: '\uD83D\uDCCE',
+          icon: '📎',
           text: 'Artifact uploaded',
           subtext: item.data.name,
           color: 'var(--accent-blue)',
@@ -333,7 +333,7 @@ function ActivityListItem({ item }: { item: ActivityItem }) {
 
       default:
         return {
-          icon: '\u2022',
+          icon: '•',
           text: 'Activity',
           subtext: '',
           color: 'var(--text-secondary)',

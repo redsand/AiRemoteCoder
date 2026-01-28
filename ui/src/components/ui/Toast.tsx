@@ -51,10 +51,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
 function ToastContainer({ toasts, onRemove }: { toasts: Toast[]; onRemove: (id: string) => void }) {
   const typeConfig = {
-    success: { borderColor: 'var(--accent-green)', icon: '\u2713' },
-    error: { borderColor: 'var(--accent-red)', icon: '\u2717' },
-    info: { borderColor: 'var(--accent-blue)', icon: '\u2139' },
-    warning: { borderColor: 'var(--accent-yellow)', icon: '\u26A0' },
+    success: { borderColor: 'var(--accent-green)', icon: '✓' },
+    error: { borderColor: 'var(--accent-red)', icon: '✗' },
+    info: { borderColor: 'var(--accent-blue)', icon: 'ℹ' },
+    warning: { borderColor: 'var(--accent-yellow)', icon: '⚠' },
   };
 
   return (
