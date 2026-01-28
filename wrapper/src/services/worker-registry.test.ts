@@ -24,14 +24,13 @@ import {
   getAllWorkerTypes,
   getWorkerDisplayName,
   getWorkerIcon,
-  OLLAMA_MODELS,
   GEMINI_MODELS
 } from './worker-registry.js';
 
 describe('Worker Registry', () => {
   describe('Worker Configuration', () => {
     it('should have all worker types configured', () => {
-      const workerTypes: WorkerType[] = ['claude', 'ollama', 'ollama-launch', 'codex', 'gemini', 'rev'];
+      const workerTypes: WorkerType[] = ['claude', 'ollama-launch', 'codex', 'gemini', 'rev'];
 
       for (const type of workerTypes) {
         expect(WORKER_CONFIGS[type]).toBeDefined();
@@ -46,16 +45,6 @@ describe('Worker Registry', () => {
       expect(claude.displayName).toBe('Claude');
       expect(claude.supportsModelSelection).toBe(false);
       expect(claude.description).toContain('Anthropic');
-    });
-
-    it('should have correct worker type for Ollama', () => {
-      const ollama = WORKER_CONFIGS.ollama;
-      expect(ollama.type).toBe('ollama');
-      expect(ollama.command).toBe('ollama');
-      expect(ollama.displayName).toBe('Ollama');
-      expect(ollama.defaultModel).toBe('codellama:7b');
-      expect(ollama.supportsModelSelection).toBe(true);
-      expect(ollama.description).toContain('Local LLM');
     });
 
     it('should have correct worker type for Ollama Launch', () => {
@@ -103,8 +92,8 @@ describe('Worker Registry', () => {
       const claude = getWorkerConfig('claude');
       expect(claude?.type).toBe('claude');
 
-      const ollama = getWorkerConfig('ollama');
-      expect(ollama?.type).toBe('ollama');
+      const ollama = getWorkerConfig('ollama-launch');
+      expect(ollama?.type).toBe('ollama-launch');
 
       const invalid = getWorkerConfig('invalid' as any);
       expect(invalid).toBeUndefined();
@@ -112,7 +101,7 @@ describe('Worker Registry', () => {
 
     it('getWorkerCommand should return command for worker type', () => {
       expect(getWorkerCommand('claude')).toBe('claude');
-      expect(getWorkerCommand('ollama')).toBe('ollama');
+      expect(getWorkerCommand('ollama-launch')).toBe('ollama');
       expect(getWorkerCommand('codex')).toBe('codex-cli');
       expect(getWorkerCommand('gemini')).toBe('gemini-cli');
       expect(getWorkerCommand('rev')).toBe('rev');
@@ -122,7 +111,6 @@ describe('Worker Registry', () => {
 
     it('getDefaultModel should return default model for worker type', () => {
       expect(getDefaultModel('claude')).toBeUndefined();
-      expect(getDefaultModel('ollama')).toBe('codellama:7b');
       expect(getDefaultModel('ollama-launch')).toBe('claude');
       expect(getDefaultModel('codex')).toBeUndefined();
       expect(getDefaultModel('gemini')).toBe('gemini-pro');
@@ -132,7 +120,6 @@ describe('Worker Registry', () => {
 
     it('isValidWorkerType should validate worker types', () => {
       expect(isValidWorkerType('claude')).toBe(true);
-      expect(isValidWorkerType('ollama')).toBe(true);
       expect(isValidWorkerType('ollama-launch')).toBe(true);
       expect(isValidWorkerType('codex')).toBe(true);
       expect(isValidWorkerType('gemini')).toBe(true);
@@ -144,7 +131,6 @@ describe('Worker Registry', () => {
     it('getAllWorkerTypes should return all worker types', () => {
       const types = getAllWorkerTypes();
       expect(types).toContain('claude');
-      expect(types).toContain('ollama');
       expect(types).toContain('ollama-launch');
       expect(types).toContain('codex');
       expect(types).toContain('gemini');
@@ -153,7 +139,6 @@ describe('Worker Registry', () => {
 
     it('getWorkerDisplayName should return formatted name', () => {
       expect(getWorkerDisplayName('claude')).toBe('Claude');
-      expect(getWorkerDisplayName('ollama')).toBe('Ollama');
       expect(getWorkerDisplayName('ollama-launch')).toBe('Ollama Launch (Claude)');
       expect(getWorkerDisplayName('codex')).toBe('Codex CLI');
       expect(getWorkerDisplayName('gemini')).toBe('Gemini CLI');
@@ -162,8 +147,7 @@ describe('Worker Registry', () => {
 
     it('getWorkerIcon should return emoji for worker type', () => {
       expect(getWorkerIcon('claude')).toBe('');
-      expect(getWorkerIcon('ollama')).toBe('');
-      expect(getWorkerIcon('ollama-launch')).toBe(undefined);
+      expect(getWorkerIcon('ollama-launch')).toBe('');
       expect(getWorkerIcon('codex')).toBe('');
       expect(getWorkerIcon('gemini')).toBe('');
       expect(getWorkerIcon('rev')).toBe('');
@@ -171,14 +155,6 @@ describe('Worker Registry', () => {
   });
 
   describe('Model Lists', () => {
-    it('OLLAMA_MODELS should have common models', () => {
-      expect(OLLAMA_MODELS.length).toBeGreaterThan(0);
-      expect(OLLAMA_MODELS).toContainEqual({ value: 'codellama:7b', label: 'CodeLlama 7B' });
-      expect(OLLAMA_MODELS).toContainEqual({ value: 'codellama:13b', label: 'CodeLlama 13B' });
-      expect(OLLAMA_MODELS).toContainEqual({ value: 'deepseek-coder:6.7b', label: 'DeepSeek Coder 6.7B' });
-      expect(OLLAMA_MODELS).toContainEqual({ value: 'custom', label: 'Custom...' });
-    });
-
     it('GEMINI_MODELS should have common models', () => {
       expect(GEMINI_MODELS.length).toBeGreaterThan(0);
       expect(GEMINI_MODELS).toContainEqual({ value: 'gemini-pro', label: 'Gemini Pro' });
@@ -189,11 +165,6 @@ describe('Worker Registry', () => {
   });
 
   describe('Worker Subcommands', () => {
-    it('Ollama should have run subcommand', () => {
-      const ollama = WORKER_CONFIGS.ollama;
-      expect(ollama.subcommand).toBe('run');
-    });
-
     it('Ollama Launch should have launch subcommand', () => {
       const ollamaLaunch = WORKER_CONFIGS['ollama-launch'];
       expect(ollamaLaunch.subcommand).toBe('launch');
@@ -215,7 +186,7 @@ describe('Worker Type Validation', () => {
   });
 
   it('should accept all valid worker types', () => {
-    const validTypes: WorkerType[] = ['claude', 'ollama', 'ollama-launch', 'codex', 'gemini', 'rev'];
+    const validTypes: WorkerType[] = ['claude', 'ollama-launch', 'codex', 'gemini', 'rev'];
     for (const type of validTypes) {
       expect(isValidWorkerType(type)).toBe(true);
     }

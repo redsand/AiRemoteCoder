@@ -84,11 +84,10 @@ export class GenericRunner extends BaseRunner {
 
     // Get the worker config to check for subcommand
     const workerConfig = getWorkerConfig(this.workerType);
-    const subcommand = workerConfig?.subcommand || (this.workerType === 'ollama' ? 'run' : undefined);
+    const subcommand = workerConfig?.subcommand;
 
     // Otherwise, use worker-specific command building
     switch (this.workerType) {
-      case 'ollama':
       case 'ollama-launch':
         return this.buildOllamaCommand(command, autonomous, subcommand);
       case 'codex':
@@ -196,7 +195,7 @@ export class GenericRunner extends BaseRunner {
 
     // Worker-specific environment variables
     switch (this.workerType) {
-      case 'ollama':
+      case 'ollama-launch':
         // Ollama-specific env vars
         return {
           ...baseEnv,

@@ -81,11 +81,11 @@ describe('GenericRunner', () => {
         capabilityToken: 'token-abc',
         workingDir: '/test/project',
         autonomous: false,
-        workerType: 'ollama',
+        workerType: 'ollama-launch',
         model: 'codellama:7b'
       });
 
-      expect(runner.getWorkerType()).toBe('ollama');
+      expect(runner.getWorkerType()).toBe('ollama-launch');
     });
 
     it('should create runner for Ollama Launch', () => {
@@ -137,34 +137,36 @@ describe('GenericRunner', () => {
   });
 
   describe('Command Building', () => {
-    it('should build Ollama run command', () => {
+    it('should build Ollama launch command with custom model', () => {
       const runner = new GenericRunner({
         runId: 'test-run',
         capabilityToken: 'token',
         workingDir: '/test/project',
         autonomous: false,
-        workerType: 'ollama',
+        workerType: 'ollama-launch',
         model: 'codellama:13b'
       });
 
       const result = runner.buildCommand('explain this code', false);
-      expect(result.args).toEqual(['run', 'codellama:13b', 'explain this code']);
-      expect(result.fullCommand).toBe('ollama run codellama:13b explain this code');
+      // In launch mode, command is sent via stdin, not as CLI args
+      expect(result.args).toEqual(['launch', 'codellama:13b']);
+      expect(result.fullCommand).toBe('ollama launch codellama:13b');
     });
 
-    it('should build Ollama run command with default model', () => {
+    it('should build Ollama launch command with default model', () => {
       const runner = new GenericRunner({
         runId: 'test-run',
         capabilityToken: 'token',
         workingDir: '/test/project',
         autonomous: false,
-        workerType: 'ollama'
+        workerType: 'ollama-launch'
         // no model specified
       });
 
       const result = runner.buildCommand('test prompt', false);
-      expect(result.args).toEqual(['run', 'codellama:7b', 'test prompt']);
-      expect(result.fullCommand).toContain('codellama:7b');
+      // In launch mode, command is sent via stdin, not as CLI args
+      expect(result.args).toEqual(['launch', 'claude']);
+      expect(result.fullCommand).toContain('claude');
     });
 
     it('should build Ollama launch command', () => {
@@ -178,9 +180,9 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand('fix bug', true);
-      // The prompt is included as an argument when provided
-      expect(result.args).toEqual(['launch', 'claude', 'fix bug', '--config']);
-      expect(result.fullCommand).toBe('ollama launch claude fix bug --config');
+      // In launch mode, command is sent via stdin, not as CLI args
+      expect(result.args).toEqual(['launch', 'claude', '--config']);
+      expect(result.fullCommand).toBe('ollama launch claude --config');
     });
 
     it('should build Ollama launch command without config flag', () => {
@@ -194,9 +196,9 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand('fix bug', false);
-      // The prompt is included as an argument when provided
-      expect(result.args).toEqual(['launch', 'claude', 'fix bug']);
-      expect(result.fullCommand).toBe('ollama launch claude fix bug');
+      // In launch mode, command is sent via stdin, not as CLI args
+      expect(result.args).toEqual(['launch', 'claude']);
+      expect(result.fullCommand).toBe('ollama launch claude');
     });
 
     it('should build Codex command', () => {
@@ -262,12 +264,13 @@ describe('GenericRunner', () => {
         capabilityToken: 'token',
         workingDir: '/test/project',
         autonomous: true,
-        workerType: 'ollama'
+        workerType: 'ollama-launch'
       });
 
       const result = runner.buildCommand(undefined, true);
-      expect(result.args).toEqual(['run', 'codellama:7b']);
-      expect(result.fullCommand).toContain('ollama run codellama:7b');
+      // In launch mode with autonomous, --config is added, command is sent via stdin
+      expect(result.args).toEqual(['launch', 'claude', '--config']);
+      expect(result.fullCommand).toBe('ollama launch claude --config');
     });
   });
 
@@ -276,7 +279,7 @@ describe('GenericRunner', () => {
       const ollamaRunner = new GenericRunner({
         runId: 'test',
         capabilityToken: 'token',
-        workerType: 'ollama'
+        workerType: 'ollama-launch'
       });
       expect(ollamaRunner.getCommand()).toBe('ollama');
 
@@ -301,7 +304,7 @@ describe('GenericRunner', () => {
       const runner = new GenericRunner({
         runId: 'test',
         capabilityToken: 'token',
-        workerType: 'ollama',
+        workerType: 'ollama-launch',
         model: 'codellama:7b'
       });
 
@@ -361,7 +364,7 @@ describe('GenericRunner', () => {
         runId: 'test',
         capabilityToken: 'token',
         workingDir: '/test',
-        workerType: 'ollama',
+        workerType: 'ollama-launch',
         buildCommandFn: customBuilder
       });
 
@@ -377,12 +380,12 @@ describe('GenericRunner Edge Cases', () => {
     const runner = new GenericRunner({
       runId: 'test',
       capabilityToken: 'token',
-      workerType: 'ollama'
+      workerType: 'ollama-launch'
       // model not specified
     });
 
     const result = runner.buildCommand('test', false);
-    expect(result.args[1]).toBe('codellama:7b'); // Uses default
+    expect(result.args[1]).toBe('claude'); // Uses default for ollama-launch
   });
 
   it('should handle long commands', () => {
@@ -401,11 +404,12 @@ describe('GenericRunner Edge Cases', () => {
     const runner = new GenericRunner({
       runId: 'test',
       capabilityToken: 'token',
-      workerType: 'ollama',
+      workerType: 'ollama-launch',
       model: 'custom-model'
     });
 
     const result = runner.buildCommand('test "quoted" command', false);
-    expect(result.args).toEqual(['run', 'custom-model', 'test "quoted" command']);
+    // In launch mode, command is sent via stdin, not as CLI args
+    expect(result.args).toEqual(['launch', 'custom-model']);
   });
 });

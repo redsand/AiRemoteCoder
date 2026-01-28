@@ -453,6 +453,25 @@ export abstract class BaseRunner extends EventEmitter {
       console.log(`✓ Event sent: ${type} (seq: ${this.sequence}, ${data.length} bytes)`);
     } catch (err: any) {
       console.error(`✗ Failed to send event ${type}:`, err.message);
+
+      // Check if this is a fatal error (run deleted, rate limited, etc.)
+      if (err.message) {
+        const errorMessage = err.message.toLowerCase();
+        // Exit on 404 (run not found), 429 (rate limited), or other gateway errors
+        if (errorMessage.includes('not found') ||
+            errorMessage.includes('429') ||
+            errorMessage.includes('rate limit') ||
+            errorMessage.includes('unauthorized') ||
+            errorMessage.includes('forbidden')) {
+          console.error('\n========================================');
+          console.error('Fatal error communicating with gateway.');
+          console.error('The run may have been deleted or rate limit exceeded.');
+          console.error('Exiting gracefully...');
+          console.error('========================================\n');
+          process.exit(1);
+        }
+      }
+
       throw err;
     }
   }
