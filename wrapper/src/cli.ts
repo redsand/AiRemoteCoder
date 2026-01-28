@@ -363,8 +363,9 @@ program
   .description('Create and start a new autonomous run (no prompt needed)')
   .option('-c, --cwd <path>', 'Working directory')
   .option('-p, --prompt <prompt>', 'Initial prompt (optional)')
-  .option('-w, --worker-type <type>', 'Worker type (claude, ollama, ollama-launch, codex, gemini, rev)', 'claude')
+  .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev)', 'claude')
   .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, etc.)')
+  .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
   .option('--autonomous', 'Run in fully autonomous mode', true)
   .option('--no-autonomous', 'Run in interactive mode')
   .action(async (options) => {
@@ -375,7 +376,7 @@ program
       const workerType = options.workerType;
       if (!isValidWorkerType(workerType)) {
         console.error(`Invalid worker type: ${workerType}`);
-        console.error('Valid worker types: claude, ollama, codex, gemini, rev');
+        console.error('Valid worker types: claude, ollama-launch, codex, gemini, rev');
         process.exit(1);
       }
 
@@ -420,7 +421,8 @@ program
           capabilityToken: createResult.capabilityToken,
           workingDir: options.cwd,
           autonomous: options.autonomous,
-          model: options.model
+          model: options.model,
+          integration: options.integration
         });
       }
 
@@ -456,8 +458,9 @@ program
   .requiredOption('--token <token>', 'Capability token from gateway')
   .option('--cmd <command>', 'Worker command/prompt')
   .option('--cwd <path>', 'Working directory (defaults to current)')
-  .option('-w, --worker-type <type>', 'Worker type (claude, ollama, ollama-launch, codex, gemini, rev)', 'claude')
+  .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev)', 'claude')
   .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, etc.)')
+  .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
   .option('--autonomous', 'Run in autonomous mode')
   .action(async (options) => {
     try {
@@ -505,7 +508,8 @@ program
         capabilityToken: options.token,
         workingDir: options.cwd,
         autonomous: options.autonomous,
-        model: options.model
+        model: options.model,
+        integration: options.integration
       });
     }
 
