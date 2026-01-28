@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import { config } from '../config.js';
 import { mkdirSync, existsSync } from 'fs';
 import { dirname } from 'path';
@@ -9,7 +9,7 @@ if (!existsSync(dbDir)) {
   mkdirSync(dbDir, { recursive: true });
 }
 
-export const db = new Database(config.dbPath);
+export const db: DatabaseType = new Database(config.dbPath);
 
 // Enable WAL mode for better concurrency
 db.pragma('journal_mode = WAL');
@@ -107,6 +107,17 @@ db.exec(`
     timestamp INTEGER NOT NULL DEFAULT (unixepoch())
   );
   CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);
+
+  -- Session state for resume/restart functionality
+  CREATE TABLE IF NOT EXISTS run_state (
+    run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+    working_dir TEXT NOT NULL,
+    original_command TEXT,
+    last_sequence INTEGER DEFAULT 0,
+    stdin_buffer TEXT,
+    environment TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `);
 
 // Helper functions

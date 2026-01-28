@@ -92,7 +92,7 @@ export async function authRoutes(fastify: FastifyInstance) {
     if (!user) {
       // Prevent timing attacks by still doing hash comparison
       await argon2.hash('dummy');
-      logAudit(null, 'login.failed', 'user', null, { username: body.username, reason: 'user_not_found' }, request.ip);
+      logAudit(undefined, 'login.failed', 'user', undefined, { username: body.username, reason: 'user_not_found' }, request.ip);
       return reply.code(401).send({ error: 'Invalid credentials' });
     }
 
