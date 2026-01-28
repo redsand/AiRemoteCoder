@@ -57,7 +57,7 @@ export class GenericRunner extends BaseRunner {
 
     // Get the worker config to check for subcommand
     const workerConfig = getWorkerConfig(this.workerType);
-    const subcommand = workerConfig?.subcommand || (this.workerType === 'ollama' ? 'run' : null);
+    const subcommand = workerConfig?.subcommand || (this.workerType === 'ollama' ? 'run' : undefined);
 
     // Otherwise, use worker-specific command building
     switch (this.workerType) {

@@ -7,6 +7,7 @@ import {
   FilterSelect,
   SearchInput,
   type FilterOption,
+  Modal,
   ConfirmModal,
   useToast,
 } from '../components/ui';

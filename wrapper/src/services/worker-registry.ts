@@ -118,17 +118,17 @@ export function getWorkerConfig(workerType: WorkerType): WorkerConfig | undefine
 /**
  * Get CLI command for a worker type
  */
-export function getWorkerCommand(workerType: WorkerType): string {
-  const workerConfig = getWorkerConfig(workerType);
-  return workerConfig?.command || workerType;
+export function getWorkerCommand(workerType: string | WorkerType): string {
+  const config = WORKER_CONFIGS[workerType as WorkerType];
+  return config?.command || workerType;
 }
 
 /**
  * Get default model for a worker type (if supported)
  */
-export function getDefaultModel(workerType: WorkerType): string | undefined {
-  const workerConfig = getWorkerConfig(workerType);
-  return workerConfig?.defaultModel;
+export function getDefaultModel(workerType: string | WorkerType): string | undefined {
+  const config = WORKER_CONFIGS[workerType as WorkerType];
+  return config?.defaultModel;
 }
 
 /**
@@ -155,8 +155,8 @@ export function getWorkerDisplayName(workerType: WorkerType): string {
 /**
  * Get worker icon (emoji)
  */
-export function getWorkerIcon(workerType: WorkerType): string {
-  const icons: Record<WorkerType, string> = {
+export function getWorkerIcon(workerType: string): string | undefined {
+  const icons: Record<string, string> = {
     claude: '',
     ollama: '',
     codex: '',

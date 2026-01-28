@@ -3,6 +3,9 @@ import { config } from '../config.js';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join, resolve as pathResolve, relative as pathRelative, normalize as pathNormalize } from 'path';
 
+// Re-export RunnerOptions for convenience
+export type { RunnerOptions };
+
 export interface ClaudeRunnerOptions extends RunnerOptions {
   // No Claude-specific options needed currently
 }

@@ -22,7 +22,6 @@ export interface Run {
   metadata?: {
     model?: string;
     workerType?: string;
-    model?: string;
   } | null;
 }
 
@@ -82,7 +81,6 @@ export function RunCard({ run, compact = false, showClient = true, onClick }: Ru
   const displayTitle = run.label || run.command?.slice(0, 60) || `Run ${run.id}`;
   const needsApproval = run.waiting_approval === 1;
   const workerType = run.worker_type || run.metadata?.workerType || 'claude';
-  const model = run.metadata?.model;
   const workerIcon = getWorkerIcon(workerType);
   const workerColor = getWorkerColor(workerType);
   // Format worker display name: capitalize first letter, handle hyphens

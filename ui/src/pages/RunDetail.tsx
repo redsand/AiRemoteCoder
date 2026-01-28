@@ -127,11 +127,6 @@ export function RunDetail({ user }: Props) {
   const reconnectTimeout = useRef<NodeJS.Timeout>();
   const keyboardInputRef = useRef<HTMLInputElement>(null);
 
-  // Refs
-  const wsRef = useRef<WebSocket | null>(null);
-  const lastEventId = useRef(0);
-  const reconnectTimeout = useRef<NodeJS.Timeout>();
-
   const canOperate = user?.role === 'admin' || user?.role === 'operator';
   const isActive = run?.status === 'running';
 

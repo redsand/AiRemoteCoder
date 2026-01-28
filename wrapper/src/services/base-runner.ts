@@ -217,7 +217,7 @@ export abstract class BaseRunner extends EventEmitter {
       stopRequested: this.stopRequested,
       workerType: this.getWorkerType(),
       model: this.model,
-      haltRequested: this.haltRequested
+      haltRequested: this.haltRequested || undefined
     };
   }
 
