@@ -40,14 +40,23 @@ const statusOptions: FilterOption[] = [
 const workerTypeOptions: FilterOption[] = [
   { value: 'all', label: 'All Workers' },
   { value: 'claude', label: 'Claude' },
-  { value: 'ollama', label: 'Ollama' },
-  { value: 'ollama-launch', label: 'Ollama Launch (Claude)' },
+  { value: 'ollama-launch', label: 'Ollama Launch' },
   { value: 'codex', label: 'Codex' },
   { value: 'gemini', label: 'Gemini' },
   { value: 'rev', label: 'Rev' },
 ];
 
+const ollamaIntegrations = [
+  { value: 'claude', label: 'Claude (Anthropic)' },
+  { value: 'codex', label: 'Codex (OpenAI)' },
+  { value: 'opencode', label: 'OpenCode' },
+  { value: 'droid', label: 'Droid' },
+];
+
 const ollamaModels = [
+  { value: 'claude-opus', label: 'Claude Opus' },
+  { value: 'claude-sonnet', label: 'Claude Sonnet' },
+  { value: 'claude-haiku', label: 'Claude Haiku' },
   { value: 'codellama:7b', label: 'CodeLlama 7B' },
   { value: 'codellama:13b', label: 'CodeLlama 13B' },
   { value: 'codellama:34b', label: 'CodeLlama 34B' },
@@ -77,6 +86,7 @@ export function Runs({ user }: Props) {
   // Create run modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createWorkerType, setCreateWorkerType] = useState('claude');
+  const [createIntegration, setCreateIntegration] = useState('claude');
   const [createModel, setCreateModel] = useState('');
   const [createCustomModel, setCreateCustomModel] = useState('');
   const [createCommand, setCreateCommand] = useState('');
@@ -207,8 +217,12 @@ export function Runs({ user }: Props) {
         requestBody.command = createCommand.trim();
       }
 
-      if (model && (createWorkerType === 'ollama' || createWorkerType === 'gemini')) {
+      if (model && (createWorkerType === 'ollama-launch' || createWorkerType === 'gemini')) {
         requestBody.model = model;
+      }
+
+      if (createWorkerType === 'ollama-launch') {
+        requestBody.integration = createIntegration;
       }
 
       const res = await fetch('/api/runs', {
@@ -222,10 +236,20 @@ export function Runs({ user }: Props) {
         addToast('success', `Run ${data.id} created`);
 
         // Show credentials modal
-        const cmd = `ai-runner start --run-id ${data.id} --token ${data.capabilityToken}` +
-          ` --worker-type ${createWorkerType}` +
-          (model ? ` --model "${model}"` : '') +
-          (createCommand ? ` --cmd "${createCommand}"` : '');
+        let cmd = `ai-runner start --run-id ${data.id} --token ${data.capabilityToken}` +
+          ` --worker-type ${createWorkerType}`;
+
+        if (createWorkerType === 'ollama-launch') {
+          cmd += ` --integration ${createIntegration}`;
+        }
+
+        if (model) {
+          cmd += ` --model "${model}"`;
+        }
+
+        if (createCommand) {
+          cmd += ` --cmd "${createCommand}"`;
+        }
 
         setCredentials({
           id: data.id,
@@ -238,6 +262,7 @@ export function Runs({ user }: Props) {
         setShowCreateModal(false);
         // Reset form
         setCreateWorkerType('claude');
+        setCreateIntegration('claude');
         setCreateModel('');
         setCreateCustomModel('');
         setCreateCommand('');
@@ -253,9 +278,10 @@ export function Runs({ user }: Props) {
     }
   };
 
-  const supportsModelSelection = createWorkerType === 'ollama' || createWorkerType === 'ollama-launch' || createWorkerType === 'gemini';
-  const availableModels = createWorkerType === 'ollama' || createWorkerType === 'ollama-launch' ? ollamaModels :
-                         createWorkerType === 'gemini' ? geminiModels : [];
+  const supportsModelSelection = createWorkerType === 'ollama-launch' || createWorkerType === 'gemini';
+  const supportsIntegrationSelection = createWorkerType === 'ollama-launch';
+  const availableModels = createWorkerType === 'ollama-launch' || createWorkerType === 'gemini' ?
+                         (createWorkerType === 'gemini' ? geminiModels : ollamaModels) : [];
 
   // Toggle run selection
   const toggleRunSelection = (runId: string) => {
@@ -499,6 +525,7 @@ export function Runs({ user }: Props) {
                 value={createWorkerType}
                 onChange={(e) => {
                   setCreateWorkerType(e.target.value);
+                  setCreateIntegration('claude');
                   setCreateModel('');
                   setCreateCustomModel('');
                 }}
@@ -506,15 +533,33 @@ export function Runs({ user }: Props) {
                 style={{ cursor: 'pointer' }}
               >
                 <option value="claude">Claude (Anthropic)</option>
-                <option value="ollama">Ollama (Local LLM)</option>
-                <option value="ollama-launch">Ollama Launch (Claude)</option>
+                <option value="ollama-launch">Ollama Launch</option>
                 <option value="codex">Codex CLI</option>
                 <option value="gemini">Gemini CLI</option>
                 <option value="rev">Rev</option>
               </select>
             </div>
 
-            {/* Model Selection (for Ollama/Gemini) */}
+            {/* Integration Selection (for Ollama Launch) */}
+            {supportsIntegrationSelection && (
+              <div>
+                <label className="form-label">IDE Integration</label>
+                <select
+                  value={createIntegration}
+                  onChange={(e) => setCreateIntegration(e.target.value)}
+                  className="form-input"
+                  style={{ cursor: 'pointer' }}
+                >
+                  {ollamaIntegrations.map((integration) => (
+                    <option key={integration.value} value={integration.value}>
+                      {integration.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Model Selection (for Ollama Launch/Gemini) */}
             {supportsModelSelection && (
               <div>
                 <label className="form-label">Model</label>
