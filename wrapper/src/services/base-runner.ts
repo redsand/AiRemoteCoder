@@ -2,6 +2,7 @@ import { spawn, ChildProcess, execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { createWriteStream, existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
+import os from 'os';
 import { config } from '../config.js';
 import { redactSecrets } from '../utils/crypto.js';
 import {
@@ -10,9 +11,12 @@ import {
   pollCommands,
   ackCommand,
   updateRunState,
+  registerClient,
+  sendHeartbeat,
   type RunAuth,
   type Command
 } from './gateway-client.js';
+import { nanoid } from 'nanoid';
 
 export interface RunnerOptions {
   runId: string;
@@ -38,6 +42,7 @@ export interface WorkerCommandResult {
  */
 export abstract class BaseRunner extends EventEmitter {
   protected auth: RunAuth;
+  protected agentId: string; // Unique identifier for this client/agent
   protected process: ChildProcess | null = null;
   protected logPath: string;
   protected logStream: ReturnType<typeof createWriteStream> | null = null;
@@ -58,6 +63,7 @@ export abstract class BaseRunner extends EventEmitter {
   private processedCommandExpire: Map<string, NodeJS.Timeout> = new Map(); // Track expiration timers
   private lastOutputTime = 0; // Track when we last received output
   private outputWarningTimer: NodeJS.Timeout | null = null; // Warn if no output for a while
+  private spawnedProcesses: Set<ChildProcess> = new Set(); // Track spawned prompt processes
 
   constructor(options: RunnerOptions) {
     super();
@@ -65,6 +71,11 @@ export abstract class BaseRunner extends EventEmitter {
       runId: options.runId,
       capabilityToken: options.capabilityToken
     };
+    // Generate a unique agent ID based on hostname and a random component
+    // This allows the same machine to register once and then update on subsequent runs
+    const hostname = os.hostname();
+    this.agentId = `${hostname}-${nanoid(8)}`;
+
     this.workingDir = options.workingDir || process.cwd();
     // Store the sandbox root - cannot go above this directory
     (this as any).sandboxRoot = this.workingDir;
@@ -117,15 +128,23 @@ export abstract class BaseRunner extends EventEmitter {
     this.isRunning = true;
     this.logStream = createWriteStream(this.logPath, { flags: 'a' });
 
-    // Build command based on worker type and mode
-    const { args, fullCommand } = this.buildCommand(command, this.autonomous);
-
-    console.log(`Starting ${this.getWorkerType()}: ${fullCommand}`);
+    console.log(`Starting ${this.getWorkerType()}`);
     console.log(`Working directory: ${this.workingDir}`);
+    console.log(`Agent ID: ${this.agentId}`);
 
-    // Send start marker
-    const startMarker = this.buildStartMarker(fullCommand);
-    await this.sendMarker('started', startMarker);
+    // Register client with gateway
+    try {
+      await registerClient(
+        `ai-runner@${os.hostname()}`,
+        this.agentId,
+        undefined,
+        ['run_execution', 'log_streaming', 'command_polling']
+      );
+      console.log('Client registered successfully');
+    } catch (err) {
+      console.error('Failed to register client:', err);
+      // Don't fail startup if registration fails
+    }
 
     // Save initial state
     this.saveState();
@@ -140,7 +159,27 @@ export abstract class BaseRunner extends EventEmitter {
       console.error('Failed to update run state:', err);
     }
 
-    // Spawn worker process with stdin available
+    // If no initial command provided, just wait for prompts from gateway
+    if (!command) {
+      console.log(`Waiting for prompts from gateway...`);
+      const startMarker = this.buildStartMarker(`${this.getWorkerType()} (waiting for prompt)`);
+      await this.sendMarker('started', startMarker);
+
+      // Start command polling and heartbeat
+      this.startCommandPolling();
+      this.startHeartbeat();
+      return;
+    }
+
+    // Otherwise, spawn worker process with initial command
+    console.log(`Starting with prompt: ${command.substring(0, 100)}`);
+    const { args, fullCommand } = this.buildCommand(command, this.autonomous);
+
+    // Send start marker
+    const startMarker = this.buildStartMarker(fullCommand);
+    await this.sendMarker('started', startMarker);
+
+    // Spawn worker process
     const cmd = this.getCommand();
     const env = this.buildEnvironment();
 
@@ -151,10 +190,15 @@ export abstract class BaseRunner extends EventEmitter {
     // shell: true can interfere with output capture, but some CLIs need it
     const useShell = process.platform === 'win32';
 
+    // Inherit stdin so child processes can detect TTY (required for interactive REPL mode)
+    // Pipe stdout/stderr so we can capture output for the gateway
+    // Users should send input via the UI's __INPUT__ mechanism, not manual terminal input
+    const stdio: any = ['inherit', 'pipe', 'pipe'];
+
     this.process = spawn(cmd, args, {
       cwd: this.workingDir,
       shell: useShell,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio,
       env,
       windowsHide: false, // Show window on Windows for interactive processes
     });
@@ -313,6 +357,13 @@ export abstract class BaseRunner extends EventEmitter {
       } catch (err) {
         // Ignore heartbeat errors
       }
+
+      // Send client heartbeat to keep client alive in registry
+      try {
+        await sendHeartbeat(this.agentId);
+      } catch (err) {
+        // Ignore client heartbeat errors
+      }
     }, config.heartbeatInterval);
   }
 
@@ -331,10 +382,13 @@ export abstract class BaseRunner extends EventEmitter {
    */
   sendInput(data: string): boolean {
     if (!this.process?.stdin) {
+      console.error('Cannot send input: process stdin not available');
       return false;
     }
     try {
-      this.process.stdin.write(data);
+      console.log(`Writing to stdin: ${JSON.stringify(data)} (${data.length} bytes)`);
+      const success = this.process.stdin.write(data);
+      console.log(`stdin.write() returned: ${success}`);
       // Notify that prompt has been resolved (input sent)
       this.emit('prompt_resolved', data);
       return true;
@@ -571,38 +625,86 @@ export abstract class BaseRunner extends EventEmitter {
    * Request graceful stop (SIGINT, then SIGKILL after timeout)
    */
   async stop(): Promise<void> {
-    if (!this.isRunning || !this.process) {
+    if (!this.isRunning) {
       return;
     }
 
     this.stopRequested = true;
     await this.sendEvent('info', 'Stop requested by operator');
 
-    // Send SIGINT first (graceful)
-    this.process.kill('SIGINT');
-
-    // Force kill after timeout
-    setTimeout(() => {
-      if (this.isRunning && this.process) {
-        console.log('Force killing process...');
-        this.process.kill('SIGKILL');
+    // Kill all spawned prompt processes first
+    console.log(`Stopping ${this.spawnedProcesses.size} spawned processes...`);
+    for (const proc of this.spawnedProcesses) {
+      try {
+        proc.kill('SIGKILL');
+      } catch (err) {
+        console.error('Error killing spawned process:', err);
       }
-    }, 10000);
+    }
+    this.spawnedProcesses.clear();
+
+    // If no main process, we're done
+    if (!this.process) {
+      return;
+    }
+
+    // On Windows, SIGINT may not work reliably, so use SIGKILL immediately
+    // On other platforms, try SIGINT first but timeout quickly
+    const signal = process.platform === 'win32' ? 'SIGKILL' : 'SIGINT';
+    console.log(`Sending ${signal} to main process...`);
+    this.process.kill(signal);
+
+    // Force kill with SIGKILL after short timeout (2 seconds)
+    // This ensures the process doesn't hang
+    return new Promise<void>((resolve) => {
+      const killTimer = setTimeout(() => {
+        if (this.isRunning && this.process) {
+          console.log('Timeout - force killing main process with SIGKILL...');
+          try {
+            this.process.kill('SIGKILL');
+          } catch (err) {
+            console.error('Error killing main process:', err);
+          }
+        }
+        resolve();
+      }, 2000);
+
+      // Clear timeout if process exits naturally
+      if (this.process) {
+        this.process.once('close', () => {
+          clearTimeout(killTimer);
+          resolve();
+        });
+      }
+    });
   }
 
   /**
    * Hard halt (immediate SIGKILL)
    */
   async halt(): Promise<void> {
-    if (!this.isRunning || !this.process) {
+    if (!this.isRunning) {
       return;
     }
 
     this.haltRequested = true;
     await this.sendEvent('info', 'Hard halt requested by operator - killing immediately');
 
-    // Immediate SIGKILL
-    this.process.kill('SIGKILL');
+    // Kill all spawned prompt processes first
+    console.log(`Hard halting ${this.spawnedProcesses.size} spawned processes...`);
+    for (const proc of this.spawnedProcesses) {
+      try {
+        proc.kill('SIGKILL');
+      } catch (err) {
+        console.error('Error halting spawned process:', err);
+      }
+    }
+    this.spawnedProcesses.clear();
+
+    // Kill main process if it exists
+    if (this.process) {
+      this.process.kill('SIGKILL');
+    }
   }
 
   /**
@@ -705,19 +807,24 @@ export abstract class BaseRunner extends EventEmitter {
 
     if (cmd.command.startsWith('__INPUT__:')) {
       const input = cmd.command.substring('__INPUT__:'.length);
-      const success = this.sendInput(input);
+
       try {
-        if (success) {
-          // Send prompt_resolved event to indicate the prompt was answered
-          await this.sendEvent('prompt_resolved', `Response: ${input.replace(/\n/g, '\\n')}`);
-          await this.sendEvent('info', `Input sent: ${input.length} bytes`);
-          await ackCommand(this.auth, cmd.id, `Sent ${input.length} bytes to stdin`);
-        } else {
-          await ackCommand(this.auth, cmd.id, undefined, 'Failed to send input - process not running');
-        }
+        // For workers that support command-line prompts (rev, claude, codex, etc.),
+        // spawn a new process with the prompt instead of trying to send input to stdin
+        const { args, fullCommand } = this.buildCommand(input, this.autonomous);
+
+        console.log(`Executing prompt via new process: ${fullCommand}`);
+        await this.sendEvent('info', `Executing: ${input}`);
+        await this.sendEvent('prompt_resolved', `Response: ${input.replace(/\n/g, '\\n')}`);
+
+        // Spawn new process for this prompt
+        await this.executePrompt(input, args);
+
+        await ackCommand(this.auth, cmd.id, `Executed prompt: ${input.substring(0, 100)}`);
       } catch (err: any) {
-        console.error(`Failed to acknowledge input command ${cmd.id}:`, err.message);
-        await this.sendEvent('error', `Failed to acknowledge input: ${err.message}`);
+        console.error(`Failed to execute prompt ${cmd.id}:`, err.message);
+        await this.sendEvent('error', `Failed to execute prompt: ${err.message}`);
+        await ackCommand(this.auth, cmd.id, undefined, `Error: ${err.message}`);
       }
       return;
     }
@@ -810,6 +917,71 @@ export abstract class BaseRunner extends EventEmitter {
       await this.sendEvent('error', `Command failed: ${sanitized}`);
       await ackCommand(this.auth, cmd.id, undefined, sanitized);
     }
+  }
+
+  /**
+   * Execute a prompt by spawning a new worker process
+   * Used for handling __INPUT__ commands that contain prompts for workers
+   */
+  private async executePrompt(prompt: string, args: string[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const cmd = this.getCommand();
+      const env = this.buildEnvironment();
+      const useShell = process.platform === 'win32';
+
+      console.log(`Executing prompt with: ${cmd} ${args.join(' ')}`);
+
+      const promptProcess = spawn(cmd, args, {
+        cwd: this.workingDir,
+        shell: useShell,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env,
+        windowsHide: false,
+      });
+
+      // Track this process so we can kill it on stop
+      this.spawnedProcesses.add(promptProcess);
+
+      // Close stdin immediately since we're not sending any input
+      // This allows the spawned process to not wait for stdin
+      if (promptProcess.stdin) {
+        promptProcess.stdin.end();
+      }
+
+      // Capture stdout
+      promptProcess.stdout?.on('data', (data: Buffer) => {
+        const output = data.toString();
+        console.log(`Prompt stdout: ${output.substring(0, 100)}`);
+        this.handleOutput('stdout', data);
+      });
+
+      // Capture stderr
+      promptProcess.stderr?.on('data', (data: Buffer) => {
+        const output = data.toString();
+        console.log(`Prompt stderr: ${output.substring(0, 100)}`);
+        this.handleOutput('stderr', data);
+      });
+
+      // Handle process completion
+      promptProcess.on('close', (code, signal) => {
+        console.log(`Prompt process exited with code ${code}, signal ${signal}`);
+        // Remove from tracked processes
+        this.spawnedProcesses.delete(promptProcess);
+
+        if (code === 0 || code === null) {
+          resolve();
+        } else {
+          reject(new Error(`Process exited with code ${code}`));
+        }
+      });
+
+      // Handle process errors
+      promptProcess.on('error', (err) => {
+        console.error(`Prompt process error:`, err);
+        this.spawnedProcesses.delete(promptProcess);
+        reject(err);
+      });
+    });
   }
 
   /**

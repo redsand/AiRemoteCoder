@@ -257,7 +257,7 @@ describe('GenericRunner', () => {
       expect(result.fullCommand).toBe('rev analyze');
     });
 
-    it('should build Rev command without prompt (REPL mode)', () => {
+    it('should build Rev command without prompt', () => {
       const runner = new GenericRunner({
         runId: 'test-run',
         capabilityToken: 'token',
@@ -267,8 +267,9 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand(undefined, false);
-      expect(result.args).toEqual(['--repl']);
-      expect(result.fullCommand).toBe('rev --repl');
+      // When no prompt provided, rev is run with no args (single execution mode)
+      expect(result.args).toEqual([]);
+      expect(result.fullCommand).toBe('rev');
     });
 
     it('should build Rev command with provider, model, and prompt', () => {

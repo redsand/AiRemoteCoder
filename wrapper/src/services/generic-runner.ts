@@ -187,11 +187,12 @@ export class GenericRunner extends BaseRunner {
 
   /**
    * Build Rev command
-   * Usage: rev [--llm-provider <provider>] [--model <model>] [--repl] [--trust-workspace] <prompt>
+   * Usage: rev [--llm-provider <provider>] [--model <model>] [--trust-workspace] <task>
    * Providers: ollama, claude, etc.
    * Flags:
-   *  - --repl: Run in interactive mode (used when no prompt provided)
    *  - --trust-workspace: Skip trust notice (useful in autonomous mode)
+   * Note: Rev runs in single-execution mode. Each task/prompt is a separate execution.
+   * The task is passed as positional arguments, not via REPL or stdin.
    */
   private buildRevCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
     const args = [];
@@ -211,12 +212,8 @@ export class GenericRunner extends BaseRunner {
       args.push('--trust-workspace');
     }
 
-    // If no command provided, run in REPL mode for continuous interaction
-    if (!command) {
-      args.push('--repl');
-    }
-
-    // Add command/prompt if provided
+    // Add command/prompt if provided as positional argument
+    // Rev treats everything after the flags as the task description
     if (command) {
       args.push(command);
     }

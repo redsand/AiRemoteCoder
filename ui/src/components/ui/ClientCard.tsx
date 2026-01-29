@@ -53,6 +53,9 @@ export function ClientCard({ client, compact = false, onClick }: ClientCardProps
         borderRadius: '8px',
         cursor: 'pointer',
         transition: 'all 0.15s ease',
+        width: '100%',
+        minWidth: 0,
+        overflow: 'hidden',
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = 'var(--accent-blue)';
@@ -90,7 +93,7 @@ export function ClientCard({ client, compact = false, onClick }: ClientCardProps
         }}
       >
         {!compact && (
-          <span style={{ fontSize: '24px' }}>\uD83D\uDCBB</span>
+          <span style={{ fontSize: '24px' }}>💻</span>
         )}
       </div>
 
@@ -117,7 +120,11 @@ export function ClientCard({ client, compact = false, onClick }: ClientCardProps
                 color: 'var(--text-secondary)',
                 fontFamily: 'monospace',
                 marginBottom: '8px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
+              title={client.agent_id}
             >
               {client.agent_id}
             </div>
@@ -136,7 +143,7 @@ export function ClientCard({ client, compact = false, onClick }: ClientCardProps
               {client.version && <span>v{client.version}</span>}
               {!client.operator_enabled && (
                 <span style={{ color: 'var(--accent-yellow)' }}>
-                  \u26A0 Operator disabled
+                  ⚠ Operator disabled
                 </span>
               )}
             </div>

@@ -30,7 +30,8 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(grep:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(ls:*)"
     ]
   }
 }

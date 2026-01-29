@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
 export interface LogEvent {
   id: number;
@@ -15,9 +15,6 @@ interface LiveLogViewerProps {
   maxHeight?: string;
   searchTerm?: string;
 }
-
-const LINE_HEIGHT = 24;
-const BUFFER_SIZE = 20;
 
 // Color mapping for event types
 const typeColors: Record<string, string> = {
@@ -39,126 +36,78 @@ export function LiveLogViewer({
   searchTerm,
 }: LiveLogViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [containerHeight, setContainerHeight] = useState(0);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [localAutoScroll, setLocalAutoScroll] = useState(autoScroll);
-  const [userToggledAutoScroll, setUserToggledAutoScroll] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
 
-  // Process events - collapse consecutive similar lines
-  const processedEvents = useMemo(() => {
-    const result: (LogEvent & { collapsed?: number; isError?: boolean })[] = [];
-    let lastLine = '';
-    let collapseCount = 0;
+  // Sanitize content - remove control characters and carriage returns
+  const sanitizeContent = (text: string): string => {
+    return text
+      .replace(/\r/g, '') // Remove carriage returns
+      .replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, ''); // Remove other control chars
+  };
 
-    for (const event of events) {
-      // Detect errors
-      const isError = event.type === 'stderr' ||
-        event.type === 'error' ||
-        /error|exception|failed|fatal/i.test(event.data);
-
-      // Collapse repeated lines
-      if (event.data === lastLine && event.type === 'stdout') {
-        collapseCount++;
-        if (result.length > 0) {
-          result[result.length - 1].collapsed = collapseCount;
-        }
-        continue;
-      }
-
-      lastLine = event.data;
-      collapseCount = 1;
-      result.push({ ...event, isError });
+  // Split multi-line stdout/stderr events into individual lines
+  const processedEvents = events.flatMap((event) => {
+    if (event.type === 'stdout' || event.type === 'stderr') {
+      const lines = sanitizeContent(event.data).split('\n').filter(line => line !== '');
+      return lines.map((line, idx) => ({
+        ...event,
+        data: line,
+        id: event.id + idx * 0.1, // Keep related events grouped
+      }));
     }
+    return [{ ...event, data: sanitizeContent(event.data) }];
+  });
 
-    return result;
-  }, [events]);
-
-  // Filter events by search term
-  const filteredEvents = useMemo(() => {
-    if (!searchTerm) return processedEvents;
-    const term = searchTerm.toLowerCase();
-    return processedEvents.filter(e => e.data.toLowerCase().includes(term));
-  }, [processedEvents, searchTerm]);
-
-  // Virtualization
-  const totalHeight = filteredEvents.length * LINE_HEIGHT;
-  const startIndex = Math.max(0, Math.floor(scrollTop / LINE_HEIGHT) - BUFFER_SIZE);
-  const endIndex = Math.min(
-    filteredEvents.length,
-    Math.ceil((scrollTop + containerHeight) / LINE_HEIGHT) + BUFFER_SIZE
-  );
-  const visibleEvents = filteredEvents.slice(startIndex, endIndex);
-  const offsetY = startIndex * LINE_HEIGHT;
+  // Filter by search term
+  const filteredEvents = searchTerm
+    ? processedEvents.filter(e =>
+        e.data.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    : processedEvents;
 
   // Handle scroll
   const handleScroll = useCallback(() => {
     if (!containerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    setScrollTop(scrollTop);
 
-    // Check if user scrolled up manually
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+    const { scrollHeight, scrollTop, clientHeight } = containerRef.current;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
 
-    // Only auto-enable scroll if user hasn't manually disabled it
-    if (!isAtBottom && localAutoScroll && !userToggledAutoScroll) {
+    if (!isAtBottom && localAutoScroll) {
       setLocalAutoScroll(false);
       onAutoScrollChange?.(false);
     }
-    // Don't automatically re-enable if user manually disabled it
-  }, [localAutoScroll, userToggledAutoScroll, onAutoScrollChange]);
-
-  // Update container height on resize
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setContainerHeight(entry.contentRect.height);
-      }
-    });
-
-    resizeObserver.observe(container);
-    return () => resizeObserver.disconnect();
-  }, []);
+  }, [localAutoScroll, onAutoScrollChange]);
 
   // Auto-scroll to bottom when new events arrive
   useEffect(() => {
-    if (localAutoScroll && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
+    if (!localAutoScroll || !contentRef.current) return;
+
+    // Use requestAnimationFrame to ensure layout is complete
+    const animationId = requestAnimationFrame(() => {
+      if (containerRef.current) {
+        containerRef.current.scrollTop = containerRef.current.scrollHeight;
+      }
+    });
+
+    return () => cancelAnimationFrame(animationId);
   }, [filteredEvents.length, localAutoScroll]);
-
-  // Find error indices for "jump to errors"
-  const errorIndices = useMemo(() => {
-    return filteredEvents
-      .map((e, i) => e.isError ? i : -1)
-      .filter(i => i !== -1);
-  }, [filteredEvents]);
-
-  const jumpToError = (index: number) => {
-    if (containerRef.current && errorIndices[index] !== undefined) {
-      containerRef.current.scrollTop = errorIndices[index] * LINE_HEIGHT;
-      setLocalAutoScroll(false);
-      onAutoScrollChange?.(false);
-    }
-  };
 
   const toggleAutoScroll = () => {
     const newValue = !localAutoScroll;
     setLocalAutoScroll(newValue);
-    setUserToggledAutoScroll(true);
     onAutoScrollChange?.(newValue);
+
     if (newValue && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
   };
 
-  // Copy log content to clipboard
+  // Copy log to clipboard
   const copyToClipboard = async () => {
     const allText = filteredEvents
-      .map((event, i) => `${i + 1} ${event.data}`)
+      .map((event) => event.data)
       .join('\n');
 
     try {
@@ -170,6 +119,10 @@ export function LiveLogViewer({
     }
   };
 
+  const errorCount = filteredEvents.filter(e =>
+    e.type === 'stderr' || e.type === 'error' || /error|failed|exception/i.test(e.data)
+  ).length;
+
   return (
     <div
       className="log-viewer"
@@ -178,6 +131,8 @@ export function LiveLogViewer({
         border: '1px solid var(--border-color)',
         borderRadius: '8px',
         overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
       {/* Header */}
@@ -201,22 +156,18 @@ export function LiveLogViewer({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {errorIndices.length > 0 && (
-            <button
-              onClick={() => jumpToError(0)}
+          {errorCount > 0 && (
+            <span
               style={{
                 padding: '4px 8px',
                 fontSize: '11px',
                 background: 'rgba(248, 81, 73, 0.15)',
-                border: 'none',
                 borderRadius: '4px',
                 color: 'var(--accent-red)',
-                cursor: 'pointer',
               }}
-              aria-label={`Jump to errors (${errorIndices.length} found)`}
             >
-              {errorIndices.length} errors
-            </button>
+              {errorCount} errors
+            </span>
           )}
 
           <button
@@ -232,7 +183,6 @@ export function LiveLogViewer({
               transition: 'all 0.3s ease',
             }}
             title="Copy all log output to clipboard"
-            aria-label="Copy log output"
           >
             {copyFeedback ? '✓ Copied' : '📋 Copy'}
           </button>
@@ -248,63 +198,44 @@ export function LiveLogViewer({
               color: localAutoScroll ? 'var(--accent-green)' : 'var(--text-secondary)',
               cursor: 'pointer',
             }}
-            aria-label={`Auto-scroll ${localAutoScroll ? 'enabled' : 'disabled'}`}
-            aria-pressed={localAutoScroll}
+            title={localAutoScroll ? 'Disable auto-scroll' : 'Enable auto-scroll'}
           >
             Auto-scroll: {localAutoScroll ? 'ON' : 'OFF'}
           </button>
         </div>
       </div>
 
-      {/* Log content with virtualization */}
+      {/* Log content */}
       <div
         ref={containerRef}
         onScroll={handleScroll}
         style={{
-          height: maxHeight,
+          flex: 1,
           maxHeight: maxHeight,
           overflowY: 'auto',
           overflowX: 'hidden',
-          position: 'relative',
+          fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
+          fontSize: '13px',
+          lineHeight: '1.5',
         }}
       >
-        {/* Virtual scroll spacer */}
-        <div style={{ height: totalHeight, position: 'relative' }}>
-          <div
-            style={{
-              position: 'absolute',
-              top: offsetY,
-              left: 0,
-              right: 0,
-              fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
-              fontSize: '13px',
-              lineHeight: `${LINE_HEIGHT}px`,
-            }}
-          >
-            {visibleEvents.length === 0 ? (
-              <div
-                style={{
-                  padding: '24px',
-                  textAlign: 'center',
-                  color: 'var(--text-muted)',
-                  fontStyle: 'italic',
-                }}
-              >
-                {events.length === 0
-                  ? 'Waiting for output...'
-                  : 'No matching lines found'}
-              </div>
-            ) : (
-              visibleEvents.map((event, i) => (
-                <LogLine
-                  key={event.id}
-                  event={event}
-                  index={startIndex + i}
-                  searchTerm={searchTerm}
-                />
-              ))
-            )}
-          </div>
+        <div ref={contentRef} style={{ padding: '12px' }}>
+          {filteredEvents.length === 0 ? (
+            <div
+              style={{
+                padding: '24px',
+                textAlign: 'center',
+                color: 'var(--text-muted)',
+                fontStyle: 'italic',
+              }}
+            >
+              {events.length === 0 ? 'Waiting for output...' : 'No matching lines found'}
+            </div>
+          ) : (
+            filteredEvents.map((event) => (
+              <LogLine key={event.id} event={event} searchTerm={searchTerm} />
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -312,18 +243,18 @@ export function LiveLogViewer({
 }
 
 interface LogLineProps {
-  event: LogEvent & { collapsed?: number; isError?: boolean };
-  index: number;
+  event: LogEvent;
   searchTerm?: string;
 }
 
-function LogLine({ event, index, searchTerm }: LogLineProps) {
+function LogLine({ event, searchTerm }: LogLineProps) {
   const color = typeColors[event.type] || 'var(--text-primary)';
   const isMarker = event.type === 'marker';
   const isAssist = event.type === 'assist';
+  const isError = event.type === 'stderr' || event.type === 'error' || /error|failed/i.test(event.data);
 
-  // Format marker content
   let content = event.data;
+
   if (isMarker) {
     try {
       const data = JSON.parse(event.data);
@@ -334,69 +265,60 @@ function LogLine({ event, index, searchTerm }: LogLineProps) {
   } else if (isAssist) {
     try {
       const data = JSON.parse(event.data);
-      content = `\uD83D\uDD17 Assist: ${data.url || event.data}`;
+      content = `🔗 Assist: ${data.url || event.data}`;
     } catch {
-      content = `\uD83D\uDD17 ${event.data}`;
+      content = `🔗 ${event.data}`;
     }
   }
 
   // Highlight search term
   if (searchTerm && content.toLowerCase().includes(searchTerm.toLowerCase())) {
-    const parts = content.split(new RegExp(`(${escapeRegExp(searchTerm)})`, 'gi'));
-    content = parts.map((part) =>
-      part.toLowerCase() === searchTerm.toLowerCase()
-        ? `<mark style="background: rgba(210, 153, 34, 0.4); padding: 0 2px;">${part}</mark>`
-        : part
-    ).join('');
+    const regex = new RegExp(`(${escapeRegExp(searchTerm)})`, 'gi');
+    const parts = content.split(regex);
+
+    return (
+      <div
+        style={{
+          padding: '4px 8px',
+          color,
+          fontWeight: isMarker || isAssist ? 600 : 400,
+          background: isError ? 'rgba(248, 81, 73, 0.05)' : undefined,
+          marginBottom: '2px',
+        }}
+      >
+        {parts.map((part, idx) =>
+          part.toLowerCase() === searchTerm.toLowerCase() ? (
+            <mark
+              key={idx}
+              style={{
+                background: 'rgba(210, 153, 34, 0.4)',
+                padding: '0 2px',
+                borderRadius: '2px',
+              }}
+            >
+              {part}
+            </mark>
+          ) : (
+            part
+          )
+        )}
+      </div>
+    );
   }
 
   return (
     <div
       style={{
-        display: 'flex',
-        padding: '0 12px',
-        height: LINE_HEIGHT,
-        alignItems: 'center',
+        padding: '4px 8px',
         color,
         fontWeight: isMarker || isAssist ? 600 : 400,
-        background: event.isError ? 'rgba(248, 81, 73, 0.05)' : undefined,
+        background: isError ? 'rgba(248, 81, 73, 0.05)' : undefined,
+        marginBottom: '2px',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
       }}
     >
-      <span
-        style={{
-          width: '48px',
-          color: 'var(--text-muted)',
-          fontSize: '11px',
-          userSelect: 'none',
-          flexShrink: 0,
-        }}
-      >
-        {index + 1}
-      </span>
-      <span
-        style={{
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-all',
-          flex: 1,
-        }}
-        dangerouslySetInnerHTML={searchTerm ? { __html: content } : undefined}
-      >
-        {!searchTerm ? content : undefined}
-      </span>
-      {event.collapsed && event.collapsed > 1 && (
-        <span
-          style={{
-            marginLeft: '8px',
-            padding: '2px 6px',
-            fontSize: '10px',
-            background: 'var(--bg-tertiary)',
-            borderRadius: '3px',
-            color: 'var(--text-muted)',
-          }}
-        >
-          ×{event.collapsed}
-        </span>
-      )}
+      {content}
     </div>
   );
 }

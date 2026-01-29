@@ -15,858 +15,809 @@ vi.mock('../config.js', () => ({
 }));
 
 // Mock database
-const mockPreparedStmts = {
-  getUserBySession: vi.fn(),
-  getUserByWrapperId: vi.fn(),
-  getUserByCfId: vi.fn(),
-  createSession: vi.fn(),
-  deleteSession: vi.fn(),
-  getNonce: vi.fn(),
-  createNonce: vi.fn(),
-  deleteNonce: vi.fn()
+const mockPreparedStatement = {
+  bind: vi.fn().mockReturnThis(),
+  run: vi.fn().mockResolvedValue({}),
+  get: vi.fn().mockResolvedValue(null),
+  all: vi.fn().mockResolvedValue([])
 };
 
-vi.mock('../db.js', () => ({
-  db: {
-    prepare: vi.fn(() => mockPreparedStmts)
-  }
+const mockDb = {
+  prepare: vi.fn().mockReturnValue(mockPreparedStatement),
+  exec: vi.fn().mockResolvedValue({})
+};
+
+vi.mock('better-sqlite3', () => ({
+  default: vi.fn(() => mockDb)
 }));
 
-// Import after mocks
-import * as authMiddleware from './auth.js';
-import { config } from '../config.js';
+import { authMiddleware } from './auth.js';
 
 describe('Authentication Middleware', () => {
   let mockRequest: Partial<FastifyRequest>;
   let mockReply: Partial<FastifyReply>;
+  let mockNext: () => Promise<void>;
 
   beforeEach(() => {
     mockRequest = {
       headers: {},
       cookies: {},
       body: {},
-      log: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn()
-      }
-    } as Partial<FastifyRequest>;
-
+      ip: '127.0.0.1',
+      method: 'GET',
+      url: '/api/test'
+    };
+    
     mockReply = {
       status: vi.fn().mockReturnThis(),
       send: vi.fn().mockReturnThis(),
+      header: vi.fn().mockReturnThis(),
       code: vi.fn().mockReturnThis(),
-      header: vi.fn().mockReturnThis()
-    } as Partial<FastifyReply>;
-
+      setCookie: vi.fn().mockReturnThis(),
+      clearCookie: vi.fn().mockReturnThis()
+    };
+    
+    mockNext = vi.fn().mockResolvedValue(undefined);
+    
     vi.clearAllMocks();
+    mockPreparedStatement.get.mockResolvedValue(null);
+    mockPreparedStatement.run.mockResolvedValue({});
+    mockPreparedStatement.all.mockResolvedValue([]);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  describe('Wrapper Authentication', () => {
-    it('should authenticate valid wrapper token', async () => {
-      const wrapperId = 'wrapper-123';
-      const timestamp = Date.now();
-      const signature = crypto
-        .createHmac('sha256', config.hmacSecret)
-        .update(`${wrapperId}:${timestamp}`)
-        .digest('hex');
+  // ============================================================================
+  // TOKEN VALIDATION TESTS
+  // ============================================================================
 
-      mockRequest.headers = {
-        'x-wrapper-id': wrapperId,
-        'x-wrapper-signature': signature,
-        'x-wrapper-timestamp': timestamp.toString()
-      };
+  describe('Token Validation', () => {
+    it('should accept valid JWT token', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
 
-      mockPreparedStmts.getUserByWrapperId.mockResolvedValue({
-        id: 'user-1',
-        wrapper_id: wrapperId,
-        email: 'wrapper@example.com'
-      });
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      const result = await authMiddleware.authenticateWrapper(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(true);
-      expect(mockRequest.user).toBeDefined();
-      expect(mockRequest.user.id).toBe('user-1');
+      expect(mockNext).toHaveBeenCalled();
+      expect(mockReply.status).not.toHaveBeenCalled();
     });
 
-    it('should reject wrapper auth with missing headers', async () => {
+    it('should reject missing authorization header', async () => {
       mockRequest.headers = {};
 
-      const result = await authMiddleware.authenticateWrapper(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      expect(result).toBe(false);
       expect(mockReply.status).toHaveBeenCalledWith(401);
       expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Missing wrapper authentication headers' })
+        expect.objectContaining({
+          error: expect.stringContaining('Unauthorized')
+        })
       );
+      expect(mockNext).not.toHaveBeenCalled();
     });
 
-    it('should reject wrapper auth with invalid signature', async () => {
-      mockRequest.headers = {
-        'x-wrapper-id': 'wrapper-123',
-        'x-wrapper-signature': 'invalid-signature',
-        'x-wrapper-timestamp': Date.now().toString()
-      };
+    it('should reject invalid authorization format', async () => {
+      mockRequest.headers = { authorization: 'InvalidFormat token123' };
 
-      const result = await authMiddleware.authenticateWrapper(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      expect(result).toBe(false);
       expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Invalid wrapper signature' })
-      );
+      expect(mockNext).not.toHaveBeenCalled();
     });
 
-    it('should reject wrapper auth with expired timestamp', async () => {
-      const wrapperId = 'wrapper-123';
-      const expiredTimestamp = Date.now() - (config.clockSkewSeconds + 100) * 1000;
-      const signature = crypto
-        .createHmac('sha256', config.hmacSecret)
-        .update(`${wrapperId}:${expiredTimestamp}`)
-        .digest('hex');
+    it('should reject malformed JWT token', async () => {
+      mockRequest.headers = { authorization: 'Bearer invalid.jwt.token' };
 
-      mockRequest.headers = {
-        'x-wrapper-id': wrapperId,
-        'x-wrapper-signature': signature,
-        'x-wrapper-timestamp': expiredTimestamp.toString()
-      };
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      const result = await authMiddleware.authenticateWrapper(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
       expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Timestamp too old' })
-      );
+      expect(mockNext).not.toHaveBeenCalled();
     });
 
-    it('should reject wrapper auth when user not found', async () => {
-      const wrapperId = 'wrapper-123';
-      const timestamp = Date.now();
-      const signature = crypto
-        .createHmac('sha256', config.hmacSecret)
-        .update(`${wrapperId}:${timestamp}`)
-        .digest('hex');
+    it('should reject expired JWT token', async () => {
+      const expiredToken = generateExpiredToken('user123');
+      mockRequest.headers = { authorization: `Bearer ${expiredToken}` };
 
-      mockRequest.headers = {
-        'x-wrapper-id': wrapperId,
-        'x-wrapper-signature': signature,
-        'x-wrapper-timestamp': timestamp.toString()
-      };
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      mockPreparedStmts.getUserByWrapperId.mockResolvedValue(undefined);
-
-      const result = await authMiddleware.authenticateWrapper(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
       expect(mockReply.status).toHaveBeenCalledWith(401);
       expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Wrapper user not found' })
+        expect.objectContaining({
+          error: expect.stringContaining('expired')
+        })
       );
+      expect(mockNext).not.toHaveBeenCalled();
+    });
+
+    it('should reject token with invalid signature', async () => {
+      const tamperedToken = generateTamperedToken('user123');
+      mockRequest.headers = { authorization: `Bearer ${tamperedToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.status).toHaveBeenCalledWith(401);
+      expect(mockNext).not.toHaveBeenCalled();
+    });
+
+    it('should reject token issued before allowed time (nbf)', async () => {
+      const futureToken = generateFutureNbfToken('user123');
+      mockRequest.headers = { authorization: `Bearer ${futureToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.status).toHaveBeenCalledWith(401);
+      expect(mockNext).not.toHaveBeenCalled();
+    });
+
+    it('should reject token with invalid issuer', async () => {
+      const invalidIssuerToken = generateTokenWithInvalidIssuer('user123');
+      mockRequest.headers = { authorization: `Bearer ${invalidIssuerToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.status).toHaveBeenCalledWith(401);
+      expect(mockNext).not.toHaveBeenCalled();
+    });
+
+    it('should reject token with invalid audience', async () => {
+      const invalidAudienceToken = generateTokenWithInvalidAudience('user123');
+      mockRequest.headers = { authorization: `Bearer ${invalidAudienceToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.status).toHaveBeenCalledWith(401);
+      expect(mockNext).not.toHaveBeenCalled();
+    });
+
+    it('should accept token within clock skew tolerance', async () => {
+      const skewedToken = generateTokenWithClockSkew('user123', -299);
+      mockRequest.headers = { authorization: `Bearer ${skewedToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should reject token outside clock skew tolerance', async () => {
+      const skewedToken = generateTokenWithClockSkew('user123', -301);
+      mockRequest.headers = { authorization: `Bearer ${skewedToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.status).toHaveBeenCalledWith(401);
+      expect(mockNext).not.toHaveBeenCalled();
     });
   });
 
-  describe('Session Authentication', () => {
-    it('should authenticate valid session cookie', async () => {
-      const sessionId = crypto.randomUUID();
-      mockRequest.cookies = {
-        session: sessionId
-      };
+  // ============================================================================
+  // SESSION MANAGEMENT TESTS
+  // ============================================================================
 
-      mockPreparedStmts.getUserBySession.mockResolvedValue({
-        id: 'user-1',
-        email: 'user@example.com',
-        session_id: sessionId
+  describe('Session Management', () => {
+    it('should create new session for valid token', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      
+      mockPreparedStatement.run.mockResolvedValue({ lastInsertRowid: 1 });
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockPreparedStatement.run).toHaveBeenCalled();
+      expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should retrieve existing session from cookie', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      const sessionId = 'session-abc-123';
+      
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      mockRequest.cookies = { session_id: sessionId };
+      
+      mockPreparedStatement.get.mockResolvedValue({
+        id: sessionId,
+        user_id: 'user123',
+        created_at: Date.now() / 1000,
+        expires_at: (Date.now() / 1000) + 3600,
+        data: JSON.stringify({ lastActivity: Date.now() })
       });
 
-      const result = await authMiddleware.authenticateSession(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      expect(result).toBe(true);
-      expect(mockRequest.user).toBeDefined();
-      expect(mockRequest.user.id).toBe('user-1');
+      expect(mockPreparedStatement.get).toHaveBeenCalled();
+      expect(mockNext).toHaveBeenCalled();
     });
 
-    it('should reject session auth with missing cookie', async () => {
-      mockRequest.cookies = {};
-
-      const result = await authMiddleware.authenticateSession(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'No session cookie' })
-      );
-    });
-
-    it('should reject session auth with invalid session', async () => {
-      mockRequest.cookies = {
-        session: 'invalid-session-id'
-      };
-
-      mockPreparedStmts.getUserBySession.mockResolvedValue(undefined);
-
-      const result = await authMiddleware.authenticateSession(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Invalid session' })
-      );
-    });
-
-    it('should reject session auth with expired session', async () => {
-      const sessionId = crypto.randomUUID();
-      mockRequest.cookies = {
-        session: sessionId
-      };
-
-      mockPreparedStmts.getUserBySession.mockResolvedValue({
-        id: 'user-1',
-        email: 'user@example.com',
-        session_id: sessionId,
-        expires_at: new Date(Date.now() - 3600000) // Expired 1 hour ago
+    it('should reject expired session', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      const sessionId = 'session-abc-123';
+      
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      mockRequest.cookies = { session_id: sessionId };
+      
+      mockPreparedStatement.get.mockResolvedValue({
+        id: sessionId,
+        user_id: 'user123',
+        created_at: Date.now() / 1000 - 7200,
+        expires_at: Date.now() / 1000 - 3600,
+        data: JSON.stringify({ lastActivity: Date.now() - 3600000 })
       });
 
-      const result = await authMiddleware.authenticateSession(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      expect(result).toBe(false);
       expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Session expired' })
-      );
+      expect(mockReply.clearCookie).toHaveBeenCalledWith('session_id');
+      expect(mockNext).not.toHaveBeenCalled();
     });
 
-    it('should handle database errors gracefully', async () => {
-      mockRequest.cookies = {
-        session: crypto.randomUUID()
-      };
+    it('should refresh session on valid request', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      const sessionId = 'session-abc-123';
+      
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      mockRequest.cookies = { session_id: sessionId };
+      
+      mockPreparedStatement.get.mockResolvedValue({
+        id: sessionId,
+        user_id: 'user123',
+        created_at: Date.now() / 1000 - 1800,
+        expires_at: (Date.now() / 1000) + 1800,
+        data: JSON.stringify({ lastActivity: Date.now() - 1000 })
+      });
+      
+      mockPreparedStatement.run.mockResolvedValue({ changes: 1 });
 
-      mockPreparedStmts.getUserBySession.mockRejectedValue(new Error('Database error'));
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      const result = await authMiddleware.authenticateSession(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
+      expect(mockPreparedStatement.run).toHaveBeenCalled();
+      expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should invalidate session on logout', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      const sessionId = 'session-abc-123';
+      
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      mockRequest.cookies = { session_id: sessionId };
+      mockRequest.method = 'POST';
+      mockRequest.url = '/api/auth/logout';
+      
+      mockPreparedStatement.get.mockResolvedValue({
+        id: sessionId,
+        user_id: 'user123',
+        created_at: Date.now() / 1000,
+        expires_at: (Date.now() / 1000) + 3600,
+        data: '{}'
+      });
+      
+      mockPreparedStatement.run.mockResolvedValue({ changes: 1 });
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockPreparedStatement.run).toHaveBeenCalled();
+      expect(mockReply.clearCookie).toHaveBeenCalledWith('session_id');
+    });
+
+    it('should handle concurrent session requests correctly', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      
+      const promises = Array(5).fill(null).map(() => 
+        authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext)
       );
 
-      expect(result).toBe(false);
+      await Promise.all(promises);
+
+      expect(mockNext).toHaveBeenCalledTimes(5);
+    });
+
+    it('should clean up expired sessions periodically', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      
+      mockPreparedStatement.all.mockResolvedValue([]);
+      mockPreparedStatement.run.mockResolvedValue({ changes: 10 });
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockPreparedStatement.all).toHaveBeenCalled();
+      expect(mockNext).toHaveBeenCalled();
+    });
+  });
+
+  // ============================================================================
+  // ROLE-BASED ACCESS CONTROL TESTS
+  // ============================================================================
+
+  describe('Role-Based Access Control', () => {
+    it('should grant access to admin user for admin routes', async () => {
+      const adminToken = generateValidToken('admin123', ['admin']);
+      mockRequest.headers = { authorization: `Bearer ${adminToken}` };
+      mockRequest.url = '/api/admin/users';
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockNext).toHaveBeenCalled();
+      expect(mockReply.status).not.toHaveBeenCalled();
+    });
+
+    it('should deny access to regular user for admin routes', async () => {
+      const userToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${userToken}` };
+      mockRequest.url = '/api/admin/users';
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.status).toHaveBeenCalledWith(403);
+      expect(mockReply.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining('Forbidden')
+        })
+      );
+      expect(mockNext).not.toHaveBeenCalled();
+    });
+
+    it('should grant access to moderator for moderator routes', async () => {
+      const moderatorToken = generateValidToken('mod123', ['moderator']);
+      mockRequest.headers = { authorization: `Bearer ${moderatorToken}` };
+      mockRequest.url = '/api/moderate/content';
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should grant access to user with multiple roles', async () => {
+      const multiRoleToken = generateValidToken('user123', ['user', 'moderator']);
+      mockRequest.headers = { authorization: `Bearer ${multiRoleToken}` };
+      mockRequest.url = '/api/moderate/content';
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should handle public routes without authentication', async () => {
+      mockRequest.url = '/api/public/info';
+      mockRequest.headers = {};
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockNext).toHaveBeenCalled();
+      expect(mockReply.status).not.toHaveBeenCalled();
+    });
+
+    it('should check role hierarchy correctly', async () => {
+      const adminToken = generateValidToken('admin123', ['admin']);
+      mockRequest.headers = { authorization: `Bearer ${adminToken}` };
+      mockRequest.url = '/api/user/profile';
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should deny access when token lacks required permission', async () => {
+      const userToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${userToken}` };
+      mockRequest.url = '/api/settings/system';
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.status).toHaveBeenCalledWith(403);
+      expect(mockNext).not.toHaveBeenCalled();
+    });
+
+    it('should handle custom role definitions from database', async () => {
+      const customToken = generateValidToken('user123', ['custom_role']);
+      mockRequest.headers = { authorization: `Bearer ${customToken}` };
+      
+      mockPreparedStatement.get.mockResolvedValue({
+        id: 'user123',
+        roles: JSON.stringify(['custom_role', 'user']),
+        permissions: JSON.stringify(['read:custom', 'write:custom'])
+      });
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockPreparedStatement.get).toHaveBeenCalled();
+    });
+  });
+
+  // ============================================================================
+  // ERROR HANDLING TESTS
+  // ============================================================================
+
+  describe('Error Handling', () => {
+    it('should handle database connection errors gracefully', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      
+      mockPreparedStatement.get.mockRejectedValue(new Error('Database connection failed'));
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.status).toHaveBeenCalledWith(500);
+      expect(mockReply.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining('Internal server error')
+        })
+      );
+      expect(mockNext).not.toHaveBeenCalled();
+    });
+
+    it('should handle malformed request body', async () => {
+      mockRequest.body = { invalid: 'data' };
+      mockRequest.headers = { authorization: 'Bearer invalid' };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.status).toHaveBeenCalledWith(400);
+      expect(mockNext).not.toHaveBeenCalled();
+    });
+
+    it('should handle missing required headers', async () => {
+      mockRequest.headers = { 'content-type': 'application/json' };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.status).toHaveBeenCalledWith(401);
+      expect(mockNext).not.toHaveBeenCalled();
+    });
+
+    it('should handle timeout scenarios', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      
+      mockPreparedStatement.get.mockImplementation(
+        () => new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout')), 100)
+        )
+      );
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
       expect(mockReply.status).toHaveBeenCalledWith(500);
     });
-  });
 
-  describe('Cloudflare Access Authentication', () => {
-    it('should authenticate valid Cloudflare Access JWT', async () => {
-      const cfId = 'cf-user-123';
-      const jwtPayload = {
-        aud: config.cfAccessAudience,
-        email: 'cf@example.com',
-        sub: cfId,
-        exp: Math.floor(Date.now() / 1000) + 3600
-      };
+    it('should log authentication failures', async () => {
+      mockRequest.headers = { authorization: 'Bearer invalid.token.here' };
 
-      mockRequest.headers = {
-        'cf-access-jwt-assertion': btoa(JSON.stringify(jwtPayload))
-      };
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      mockPreparedStmts.getUserByCfId.mockResolvedValue({
-        id: 'user-1',
-        cf_id: cfId,
-        email: 'cf@example.com'
-      });
-
-      const result = await authMiddleware.authenticateCloudflare(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(true);
-      expect(mockRequest.user).toBeDefined();
-      expect(mockRequest.user.id).toBe('user-1');
-    });
-
-    it('should reject Cloudflare auth with missing JWT', async () => {
-      mockRequest.headers = {};
-
-      const result = await authMiddleware.authenticateCloudflare(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
       expect(mockReply.status).toHaveBeenCalledWith(401);
+    });
+
+    it('should handle concurrent authentication failures', async () => {
+      const promises = Array(3).fill(null).map(() =>
+        authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext)
+      );
+
+      await Promise.all(promises);
+
+      expect(mockReply.status).toHaveBeenCalledTimes(3);
+    });
+
+    it('should provide detailed error messages for debugging', async () => {
+      const expiredToken = generateExpiredToken('user123');
+      mockRequest.headers = { authorization: `Bearer ${expiredToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
       expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Missing Cloudflare Access JWT' })
+        expect.objectContaining({
+          error: expect.any(String),
+          code: expect.any(String)
+        })
       );
     });
 
-    it('should reject Cloudflare auth with invalid JWT format', async () => {
-      mockRequest.headers = {
-        'cf-access-jwt-assertion': 'invalid-jwt'
-      };
-
-      const result = await authMiddleware.authenticateCloudflare(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Invalid JWT format' })
-      );
-    });
-
-    it('should reject Cloudflare auth with wrong audience', async () => {
-      const jwtPayload = {
-        aud: 'https://wrong-audience.com',
-        email: 'cf@example.com',
-        sub: 'cf-user-123',
-        exp: Math.floor(Date.now() / 1000) + 3600
-      };
-
-      mockRequest.headers = {
-        'cf-access-jwt-assertion': btoa(JSON.stringify(jwtPayload))
-      };
-
-      const result = await authMiddleware.authenticateCloudflare(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Invalid JWT audience' })
-      );
-    });
-
-    it('should reject Cloudflare auth with expired JWT', async () => {
-      const jwtPayload = {
-        aud: config.cfAccessAudience,
-        email: 'cf@example.com',
-        sub: 'cf-user-123',
-        exp: Math.floor(Date.now() / 1000) - 3600
-      };
-
-      mockRequest.headers = {
-        'cf-access-jwt-assertion': btoa(JSON.stringify(jwtPayload))
-      };
-
-      const result = await authMiddleware.authenticateCloudflare(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'JWT expired' })
-      );
-    });
-
-    it('should create new user on first Cloudflare login', async () => {
-      const cfId = 'cf-new-user';
-      const jwtPayload = {
-        aud: config.cfAccessAudience,
-        email: 'newuser@example.com',
-        sub: cfId,
-        exp: Math.floor(Date.now() / 1000) + 3600
-      };
-
-      mockRequest.headers = {
-        'cf-access-jwt-assertion': btoa(JSON.stringify(jwtPayload))
-      };
-
-      mockPreparedStmts.getUserByCfId.mockResolvedValue(undefined);
-      mockPreparedStmts.createSession.mockResolvedValue({ session_id: 'new-session' });
-
-      const result = await authMiddleware.authenticateCloudflare(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(true);
-      expect(mockPreparedStmts.createSession).toHaveBeenCalled();
-    });
-  });
-
-  describe('Signature Verification', () => {
-    it('should verify valid HMAC signature', async () => {
-      const payload = JSON.stringify({ action: 'test', data: 'sample' });
-      const signature = crypto
-        .createHmac('sha256', config.hmacSecret)
-        .update(payload)
-        .digest('hex');
-
-      mockRequest.headers = {
-        'x-signature': signature
-      };
-      mockRequest.body = JSON.parse(payload);
-
-      const result = await authMiddleware.verifySignature(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(true);
-    });
-
-    it('should reject invalid signature', async () => {
-      const payload = JSON.stringify({ action: 'test', data: 'sample' });
-      const invalidSignature = 'invalid-signature-here';
-
-      mockRequest.headers = {
-        'x-signature': invalidSignature
-      };
-      mockRequest.body = JSON.parse(payload);
-
-      const result = await authMiddleware.verifySignature(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Invalid signature' })
-      );
-    });
-
-    it('should reject missing signature', async () => {
-      mockRequest.headers = {};
-      mockRequest.body = { action: 'test' };
-
-      const result = await authMiddleware.verifySignature(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Missing signature' })
-      );
-    });
-
-    it('should handle signature with different hash algorithms', async () => {
-      const payload = 'test-payload';
+    it('should handle rate limit exceeded errors', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
       
-      // Test SHA256
-      const sha256Sig = crypto
-        .createHmac('sha256', config.hmacSecret)
-        .update(payload)
-        .digest('hex');
-
-      mockRequest.headers = {
-        'x-signature': sha256Sig,
-        'x-signature-algo': 'sha256'
-      };
-      mockRequest.body = payload;
-
-      let result = await authMiddleware.verifySignature(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-      expect(result).toBe(true);
-
-      // Test SHA512
-      const sha512Sig = crypto
-        .createHmac('sha512', config.hmacSecret)
-        .update(payload)
-        .digest('hex');
-
-      mockRequest.headers = {
-        'x-signature': sha512Sig,
-        'x-signature-algo': 'sha512'
-      };
-
-      result = await authMiddleware.verifySignature(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-      expect(result).toBe(true);
-    });
-
-    it('should verify signature with timestamp and nonce', async () => {
-      const nonce = crypto.randomUUID();
-      const timestamp = Date.now();
-      const payload = JSON.stringify({ action: 'test' });
-      const dataToSign = `${nonce}:${timestamp}:${payload}`;
-      const signature = crypto
-        .createHmac('sha256', config.hmacSecret)
-        .update(dataToSign)
-        .digest('hex');
-
-      mockRequest.headers = {
-        'x-signature': signature,
-        'x-nonce': nonce,
-        'x-timestamp': timestamp.toString()
-      };
-      mockRequest.body = JSON.parse(payload);
-
-      mockPreparedStmts.getNonce.mockResolvedValue(undefined);
-      mockPreparedStmts.createNonce.mockResolvedValue(undefined);
-
-      const result = await authMiddleware.verifySignature(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(true);
-      expect(mockPreparedStmts.createNonce).toHaveBeenCalled();
-    });
-
-    it('should reject replayed nonce', async () => {
-      const nonce = crypto.randomUUID();
-      const timestamp = Date.now();
-      const payload = JSON.stringify({ action: 'test' });
-      const dataToSign = `${nonce}:${timestamp}:${payload}`;
-      const signature = crypto
-        .createHmac('sha256', config.hmacSecret)
-        .update(dataToSign)
-        .digest('hex');
-
-      mockRequest.headers = {
-        'x-signature': signature,
-        'x-nonce': nonce,
-        'x-timestamp': timestamp.toString()
-      };
-      mockRequest.body = JSON.parse(payload);
-
-      mockPreparedStmts.getNonce.mockResolvedValue({ nonce, created_at: new Date() });
-
-      const result = await authMiddleware.verifySignature(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Nonce already used' })
-      );
-    });
-
-    it('should reject expired timestamp in signature', async () => {
-      const nonce = crypto.randomUUID();
-      const expiredTimestamp = Date.now() - (config.clockSkewSeconds + 100) * 1000;
-      const payload = JSON.stringify({ action: 'test' });
-      const dataToSign = `${nonce}:${expiredTimestamp}:${payload}`;
-      const signature = crypto
-        .createHmac('sha256', config.hmacSecret)
-        .update(dataToSign)
-        .digest('hex');
-
-      mockRequest.headers = {
-        'x-signature': signature,
-        'x-nonce': nonce,
-        'x-timestamp': expiredTimestamp.toString()
-      };
-      mockRequest.body = JSON.parse(payload);
-
-      mockPreparedStmts.getNonce.mockResolvedValue(undefined);
-
-      const result = await authMiddleware.verifySignature(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({ error: 'Timestamp expired' })
-      );
-    });
-
-    it('should clean up expired nonces', async () => {
-      const nonce = crypto.randomUUID();
-      const timestamp = Date.now();
-      const payload = JSON.stringify({ action: 'test' });
-      const dataToSign = `${nonce}:${timestamp}:${payload}`;
-      const signature = crypto
-        .createHmac('sha256', config.hmacSecret)
-        .update(dataToSign)
-        .digest('hex');
-
-      mockRequest.headers = {
-        'x-signature': signature,
-        'x-nonce': nonce,
-        'x-timestamp': timestamp.toString()
-      };
-      mockRequest.body = JSON.parse(payload);
-
-      mockPreparedStmts.getNonce.mockResolvedValue(undefined);
-      mockPreparedStmts.deleteNonce.mockResolvedValue(undefined);
-      mockPreparedStmts.createNonce.mockResolvedValue(undefined);
-
-      await authMiddleware.verifySignature(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      // Should attempt to clean up old nonces
-      expect(mockPreparedStmts.deleteNonce).toHaveBeenCalled();
-    });
-  });
-
-  describe('Multi-Method Authentication', () => {
-    it('should try multiple auth methods in order', async () => {
-      // Set up session auth
-      const sessionId = crypto.randomUUID();
-      mockRequest.cookies = { session: sessionId };
-      mockPreparedStmts.getUserBySession.mockResolvedValue({
-        id: 'user-1',
-        email: 'user@example.com'
+      mockPreparedStatement.get.mockResolvedValue({
+        id: 'user123',
+        rateLimitCount: 1000,
+        rateLimitWindow: Date.now()
       });
 
-      const result = await authMiddleware.authenticate(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      expect(result).toBe(true);
-      expect(mockRequest.user).toBeDefined();
-    });
-
-    it('should fall through to next auth method if first fails', async () => {
-      // Session fails, wrapper succeeds
-      mockRequest.cookies = { session: 'invalid' };
-      mockPreparedStmts.getUserBySession.mockResolvedValue(undefined);
-
-      const wrapperId = 'wrapper-123';
-      const timestamp = Date.now();
-      const signature = crypto
-        .createHmac('sha256', config.hmacSecret)
-        .update(`${wrapperId}:${timestamp}`)
-        .digest('hex');
-
-      mockRequest.headers = {
-        'x-wrapper-id': wrapperId,
-        'x-wrapper-signature': signature,
-        'x-wrapper-timestamp': timestamp.toString()
-      };
-
-      mockPreparedStmts.getUserByWrapperId.mockResolvedValue({
-        id: 'user-1',
-        wrapper_id: wrapperId
-      });
-
-      const result = await authMiddleware.authenticate(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(true);
-    });
-
-    it('should fail when all auth methods fail', async () => {
-      mockRequest.cookies = {};
-      mockRequest.headers = {};
-      mockPreparedStmts.getUserBySession.mockResolvedValue(undefined);
-      mockPreparedStmts.getUserByWrapperId.mockResolvedValue(undefined);
-      mockPreparedStmts.getUserByCfId.mockResolvedValue(undefined);
-
-      const result = await authMiddleware.authenticate(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-    });
-
-    it('should skip signature verification for GET requests', async () => {
-      mockRequest.method = 'GET';
-      mockRequest.cookies = { session: 'valid-session' };
-      mockPreparedStmts.getUserBySession.mockResolvedValue({
-        id: 'user-1',
-        email: 'user@example.com'
-      });
-
-      const result = await authMiddleware.authenticate(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(true);
-    });
-
-    it('should require signature for POST requests', async () => {
-      mockRequest.method = 'POST';
-      mockRequest.cookies = { session: 'valid-session' };
-      mockRequest.headers = {};
-      mockRequest.body = { action: 'test' };
-      mockPreparedStmts.getUserBySession.mockResolvedValue({
-        id: 'user-1',
-        email: 'user@example.com'
-      });
-
-      const result = await authMiddleware.authenticate(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-    });
-  });
-
-  describe('Rate Limiting Integration', () => {
-    it('should track failed authentication attempts', async () => {
-      mockRequest.cookies = { session: 'invalid' };
-      mockRequest.ip = '192.168.1.1';
-      mockPreparedStmts.getUserBySession.mockResolvedValue(undefined);
-
-      for (let i = 0; i < 5; i++) {
-        await authMiddleware.authenticateSession(
-          mockRequest as FastifyRequest,
-          mockReply as FastifyReply
-        );
-      }
-
-      expect(mockReply.status).toHaveBeenCalledWith(401);
-    });
-
-    it('should lock out after too many failed attempts', async () => {
-      mockRequest.cookies = { session: 'invalid' };
-      mockRequest.ip = '192.168.1.1';
-      mockPreparedStmts.getUserBySession.mockResolvedValue(undefined);
-
-      // Simulate rate limit exceeded
-      const result = await authMiddleware.checkRateLimit(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
-
-      expect(result).toBe(false);
       expect(mockReply.status).toHaveBeenCalledWith(429);
+      expect(mockReply.header).toHaveBeenCalledWith('Retry-After', expect.any(Number));
     });
   });
 
-  describe('Security Headers', () => {
-    it('should add security headers after successful auth', async () => {
-      const sessionId = crypto.randomUUID();
-      mockRequest.cookies = { session: sessionId };
-      mockPreparedStmts.getUserBySession.mockResolvedValue({
-        id: 'user-1',
-        email: 'user@example.com'
-      });
+  // ============================================================================
+  // REQUEST/RESPONSE MODIFICATION TESTS
+  // ============================================================================
 
-      await authMiddleware.authenticate(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
+  describe('Request/Response Modification', () => {
+    it('should attach user information to request object', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
 
-      expect(mockReply.header).toHaveBeenCalledWith(
-        'X-Content-Type-Options',
-        'nosniff'
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockRequest.user).toBeDefined();
+      expect(mockRequest.user?.id).toBe('user123');
+      expect(mockRequest.user?.roles).toContain('user');
+    });
+
+    it('should add security headers to response', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.header).toHaveBeenCalledWith('X-Content-Type-Options', 'nosniff');
+      expect(mockReply.header).toHaveBeenCalledWith('X-Frame-Options', 'DENY');
+      expect(mockReply.header).toHaveBeenCalledWith('X-XSS-Protection', '1; mode=block');
+    });
+
+    it('should set session cookie with correct options', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      
+      mockPreparedStatement.run.mockResolvedValue({ lastInsertRowid: 'session-123' });
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.setCookie).toHaveBeenCalledWith(
+        'session_id',
+        expect.any(String),
+        expect.objectContaining({
+          httpOnly: true,
+          secure: false,
+          sameSite: 'strict',
+          path: '/'
+        })
       );
     });
 
-    it('should add CSRF token for state-changing requests', async () => {
+    it('should add CSRF token to response for state-changing requests', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
       mockRequest.method = 'POST';
-      mockRequest.cookies = { session: 'valid-session' };
-      mockRequest.headers = {
-        'x-signature': crypto
-          .createHmac('sha256', config.hmacSecret)
-          .update('{"action":"test"}')
-          .digest('hex')
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.header).toHaveBeenCalledWith('X-CSRF-Token', expect.any(String));
+    });
+
+    it('should preserve existing request properties', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { 
+        authorization: `Bearer ${validToken}`,
+        'x-custom-header': 'custom-value'
       };
-      mockRequest.body = { action: 'test' };
-      mockPreparedStmts.getUserBySession.mockResolvedValue({
-        id: 'user-1',
-        email: 'user@example.com'
-      });
+      mockRequest.body = { customData: 'test' };
 
-      await authMiddleware.authenticate(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      expect(mockReply.header).toHaveBeenCalledWith(
-        'X-CSRF-Token',
-        expect.any(String)
-      );
+      expect(mockRequest.headers['x-custom-header']).toBe('custom-value');
+      expect(mockRequest.body).toEqual({ customData: 'test' });
+    });
+
+    it('should add request ID for tracing', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockRequest.id).toBeDefined();
+      expect(typeof mockRequest.id).toBe('string');
+    });
+
+    it('should add timestamp to request object', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockRequest.authTimestamp).toBeDefined();
+      expect(mockRequest.authTimestamp).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('should sanitize user data before attaching to request', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockRequest.user).not.toHaveProperty('password');
+      expect(mockRequest.user).not.toHaveProperty('secret');
     });
   });
 
-  describe('Token Refresh', () => {
-    it('should refresh expiring session', async () => {
-      const sessionId = crypto.randomUUID();
-      const expiringSession = {
-        id: 'user-1',
-        email: 'user@example.com',
-        session_id: sessionId,
-        expires_at: new Date(Date.now() + 300000) // Expires in 5 minutes
-      };
+  // ============================================================================
+  // INTEGRATION TESTS
+  // ============================================================================
 
-      mockRequest.cookies = { session: sessionId };
-      mockPreparedStmts.getUserBySession.mockResolvedValue(expiringSession);
-      mockPreparedStmts.createSession.mockResolvedValue({
-        session_id: 'new-session-id'
-      });
+  describe('Integration Tests', () => {
+    it('should handle complete authentication flow', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      
+      mockPreparedStatement.run.mockResolvedValue({ lastInsertRowid: 'session-123' });
 
-      await authMiddleware.authenticateSession(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      expect(mockPreparedStmts.createSession).toHaveBeenCalled();
-      expect(mockReply.header).toHaveBeenCalledWith(
-        'Set-Cookie',
-        expect.stringContaining('new-session-id')
-      );
+      expect(mockNext).toHaveBeenCalled();
+      expect(mockRequest.user).toBeDefined();
+      expect(mockReply.setCookie).toHaveBeenCalled();
     });
 
-    it('should not refresh fresh session', async () => {
-      const sessionId = crypto.randomUUID();
-      const freshSession = {
-        id: 'user-1',
-        email: 'user@example.com',
-        session_id: sessionId,
-        expires_at: new Date(Date.now() + 86400000) // Expires in 24 hours
-      };
+    it('should handle session refresh with role changes', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      const sessionId = 'session-abc-123';
+      
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      mockRequest.cookies = { session_id: sessionId };
+      
+      mockPreparedStatement.get.mockResolvedValue({
+        id: sessionId,
+        user_id: 'user123',
+        roles: JSON.stringify(['user', 'moderator']),
+        created_at: Date.now() / 1000 - 1800,
+        expires_at: (Date.now() / 1000) + 1800
+      });
 
-      mockRequest.cookies = { session: sessionId };
-      mockPreparedStmts.getUserBySession.mockResolvedValue(freshSession);
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
 
-      await authMiddleware.authenticateSession(
-        mockRequest as FastifyRequest,
-        mockReply as FastifyReply
-      );
+      expect(mockRequest.user?.roles).toContain('moderator');
+      expect(mockNext).toHaveBeenCalled();
+    });
 
-      expect(mockPreparedStmts.createSession).not.toHaveBeenCalled();
+    it('should handle logout flow with session cleanup', async () => {
+      const validToken = generateValidToken('user123', ['user']);
+      const sessionId = 'session-abc-123';
+      
+      mockRequest.headers = { authorization: `Bearer ${validToken}` };
+      mockRequest.cookies = { session_id: sessionId };
+      mockRequest.method = 'POST';
+      mockRequest.url = '/api/auth/logout';
+      
+      mockPreparedStatement.get.mockResolvedValue({
+        id: sessionId,
+        user_id: 'user123',
+        created_at: Date.now() / 1000,
+        expires_at: (Date.now() / 1000) + 3600
+      });
+      
+      mockPreparedStatement.run.mockResolvedValue({ changes: 1 });
+
+      await authMiddleware(mockRequest as FastifyRequest, mockReply as FastifyReply, mockNext);
+
+      expect(mockReply.clearCookie).toHaveBeenCalledWith('session_id');
+      expect(mockReply.status).toHaveBeenCalledWith(200);
     });
   });
 });
+
+// ============================================================================
+// HELPER FUNCTIONS FOR TEST TOKEN GENERATION
+// ============================================================================
+
+function generateValidToken(userId: string, roles: string[]): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const now = Math.floor(Date.now() / 1000);
+  const payload = btoa(JSON.stringify({
+    sub: userId,
+    roles,
+    iat: now,
+    exp: now + 3600,
+    iss: 'test-issuer',
+    aud: 'https://example.com'
+  }));
+  const signature = crypto
+    .createHmac('sha256', 'test-secret-key-that-is-long-enough-for-hmac')
+    .update(`${header}.${payload}`)
+    .digest('base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+function generateExpiredToken(userId: string): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const payload = btoa(JSON.stringify({
+    sub: userId,
+    roles: ['user'],
+    iat: Math.floor(Date.now() / 1000) - 7200,
+    exp: Math.floor(Date.now() / 1000) - 3600,
+    iss: 'test-issuer',
+    aud: 'https://example.com'
+  }));
+  const signature = crypto
+    .createHmac('sha256', 'test-secret-key-that-is-long-enough-for-hmac')
+    .update(`${header}.${payload}`)
+    .digest('base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+function generateTamperedToken(userId: string): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const payload = btoa(JSON.stringify({
+    sub: userId,
+    roles: ['user'],
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 3600,
+    iss: 'test-issuer',
+    aud: 'https://example.com'
+  }));
+  return `${header}.${payload}.tamperedsignature`;
+}
+
+function generateFutureNbfToken(userId: string): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const now = Math.floor(Date.now() / 1000);
+  const payload = btoa(JSON.stringify({
+    sub: userId,
+    roles: ['user'],
+    iat: now,
+    nbf: now + 3600,
+    exp: now + 7200,
+    iss: 'test-issuer',
+    aud: 'https://example.com'
+  }));
+  const signature = crypto
+    .createHmac('sha256', 'test-secret-key-that-is-long-enough-for-hmac')
+    .update(`${header}.${payload}`)
+    .digest('base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+function generateTokenWithInvalidIssuer(userId: string): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const now = Math.floor(Date.now() / 1000);
+  const payload = btoa(JSON.stringify({
+    sub: userId,
+    roles: ['user'],
+    iat: now,
+    exp: now + 3600,
+    iss: 'invalid-issuer',
+    aud: 'https://example.com'
+  }));
+  const signature = crypto
+    .createHmac('sha256', 'test-secret-key-that-is-long-enough-for-hmac')
+    .update(`${header}.${payload}`)
+    .digest('base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+function generateTokenWithInvalidAudience(userId: string): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const now = Math.floor(Date.now() / 1000);
+  const payload = btoa(JSON.stringify({
+    sub: userId,
+    roles: ['user'],
+    iat: now,
+    exp: now + 3600,
+    iss: 'test-issuer',
+    aud: 'https://invalid.com'
+  }));
+  const signature = crypto
+    .createHmac('sha256', 'test-secret-key-that-is-long-enough-for-hmac')
+    .update(`${header}.${payload}`)
+    .digest('base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+function generateTokenWithClockSkew(userId: string, skewSeconds: number): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const now = Math.floor(Date.now() / 1000) + skewSeconds;
+  const payload = btoa(JSON.stringify({
+    sub: userId,
+    roles: ['user'],
+    iat: now,
+    exp: now + 3600,
+    iss: 'test-issuer',
+    aud: 'https://example.com'
+  }));
+  const signature = crypto
+    .createHmac('sha256', 'test-secret-key-that-is-long-enough-for-hmac')
+    .update(`${header}.${payload}`)
+    .digest('base64url');
+  return `${header}.${payload}.${signature}`;
+}

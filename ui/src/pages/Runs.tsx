@@ -633,13 +633,14 @@ export function Runs({ user }: Props) {
 
             {/* Command/Prompt */}
             <div>
-              <label className="form-label">Command / Prompt (optional)</label>
+              <label className="form-label">Command / Prompt {createAutonomous ? '(disabled in autonomous mode)' : '(optional)'}</label>
               <input
                 type="text"
                 value={createCommand}
                 onChange={(e) => setCreateCommand(e.target.value)}
-                placeholder="Enter initial command or prompt..."
+                placeholder={createAutonomous ? "Disabled when autonomous mode is enabled" : "Enter initial command or prompt..."}
                 className="form-input"
+                disabled={createAutonomous}
               />
             </div>
 

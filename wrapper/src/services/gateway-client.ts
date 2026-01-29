@@ -138,6 +138,32 @@ export async function ackCommand(
 }
 
 /**
+ * Register client with gateway
+ */
+export async function registerClient(
+  displayName: string,
+  agentId: string,
+  version?: string,
+  capabilities?: string[]
+): Promise<{ id: string; updated: boolean }> {
+  return request('POST', '/api/clients/register', {
+    displayName,
+    agentId,
+    version,
+    capabilities
+  });
+}
+
+/**
+ * Send heartbeat to keep client alive
+ */
+export async function sendHeartbeat(agentId: string): Promise<void> {
+  return request('POST', '/api/clients/heartbeat', {
+    agentId
+  });
+}
+
+/**
  * Test gateway connectivity
  */
 export async function testConnection(): Promise<boolean> {
