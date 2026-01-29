@@ -266,6 +266,10 @@ export function Runs({ user }: Props) {
           cmd += ` --cmd "${createCommand}"`;
         }
 
+        if (createAutonomous) {
+          cmd += ' --autonomous';
+        }
+
         setCredentials({
           id: data.id,
           token: data.capabilityToken,
