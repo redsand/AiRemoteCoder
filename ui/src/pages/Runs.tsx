@@ -577,10 +577,10 @@ export function Runs({ user }: Props) {
               </div>
             )}
 
-            {/* Provider Selection (for Rev) */}
+            {/* LLM Provider Selection (for Rev) */}
             {supportsProviderSelection && (
               <div>
-                <label className="form-label">Provider</label>
+                <label className="form-label">LLM Provider</label>
                 <select
                   value={createProvider}
                   onChange={(e) => setCreateProvider(e.target.value)}

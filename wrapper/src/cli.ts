@@ -366,7 +366,7 @@ program
   .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev)', 'claude')
   .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, Rev, etc.)')
   .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
-  .option('--provider <provider>', 'Provider for Rev (ollama, claude, etc.) - for rev only')
+  .option('--provider <provider>', 'LLM provider for Rev (ollama, claude, gemini) - for rev only')
   .option('--autonomous', 'Run in fully autonomous mode', true)
   .option('--no-autonomous', 'Run in interactive mode')
   .action(async (options) => {
@@ -463,7 +463,7 @@ program
   .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev)', 'claude')
   .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, Rev, etc.)')
   .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
-  .option('--provider <provider>', 'Provider for Rev (ollama, claude, etc.) - for rev only')
+  .option('--provider <provider>', 'LLM provider for Rev (ollama, claude, gemini) - for rev only')
   .option('--autonomous', 'Run in autonomous mode')
   .action(async (options) => {
     try {
