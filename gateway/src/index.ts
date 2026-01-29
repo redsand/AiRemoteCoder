@@ -19,6 +19,7 @@ import { clientsRoutes } from './routes/clients.js';
 import { alertsRoutes } from './routes/alerts.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { modelsRoutes } from './routes/models.js';
+import { vncRoutes } from './routes/vnc.js';
 import { rawBodyPlugin } from './middleware/auth.js';
 
 // Validate configuration
@@ -142,6 +143,7 @@ await fastify.register(clientsRoutes);
 await fastify.register(alertsRoutes);
 await fastify.register(dashboardRoutes);
 await fastify.register(modelsRoutes);
+await fastify.register(vncRoutes);
 
 // Health check
 fastify.get('/api/health', async () => {
@@ -180,3 +182,6 @@ try {
   fastify.log.error(err);
   process.exit(1);
 }
+
+// Export logger for use in other modules
+export const logger = fastify.log;

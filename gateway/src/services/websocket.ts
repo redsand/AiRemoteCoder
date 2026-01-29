@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import { db } from './database.js';
+import { vncTunnelManager } from './vnc-tunnel.js';
 
 interface WSClient {
   socket: WebSocket;
@@ -124,6 +125,44 @@ export function setupWebSocket(fastify: FastifyInstance): void {
       message: 'WebSocket connected. Send { "type": "subscribe", "runId": "<id>" } to subscribe to run events.'
     }));
   });
+
+  /**
+   * VNC WebSocket endpoint - binary tunnel for RFB protocol frames
+   * /ws/vnc/:runId - bidirectional binary tunnel between Python VNC client and noVNC viewer
+   */
+  fastify.get<{ Params: { runId: string } }>(
+    '/ws/vnc/:runId',
+    { websocket: true },
+    (connection, request) => {
+      const { runId } = request.params;
+      const socket = connection;
+
+      // Verify run exists and is VNC type
+      const run = db.prepare('SELECT id, worker_type FROM runs WHERE id = ?').get(runId) as { id: string; worker_type: string } | undefined;
+      if (!run || run.worker_type !== 'vnc') {
+        socket.close(1008, 'Invalid run or not VNC type');
+        return;
+      }
+
+      // Determine if this is client (Python VNC) or viewer (Web UI)
+      const headers = request.headers;
+      const userAgent = headers['user-agent'] || '';
+
+      // Python VNC runner identifies itself
+      const isClient = userAgent.includes('python') || headers['x-vnc-client'] === 'true';
+
+      if (isClient) {
+        // Python VNC client connection
+        vncTunnelManager.setClientConnection(runId, socket);
+      } else {
+        // Web UI viewer connection
+        vncTunnelManager.setViewerConnection(runId, socket);
+      }
+
+      // Note: Handlers are setup in vnc-tunnel.ts
+      // Messages are forwarded bidirectionally between client and viewer
+    }
+  );
 
   // Keep-alive interval
   const pingInterval = setInterval(() => {

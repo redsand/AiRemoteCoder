@@ -209,10 +209,14 @@ class PythonVNCRunner:
             ws_url = f'{self.args.gateway_url.replace("http", "ws")}/ws/vnc/{self.args.run_id}'
             logger.info(f'Connecting to {ws_url}')
 
+            # Add custom header to identify as Python VNC client
+            extra_headers = {'X-VNC-Client': 'true'}
+
             self.ws_connection = await websockets.connect(
                 ws_url,
                 ping_interval=30,
                 ping_timeout=10,
+                extra_headers=extra_headers,
             )
 
             self.streaming = True
@@ -244,7 +248,7 @@ class PythonVNCRunner:
                     # Capture and encode frame
                     frame_data = await self.vnc.capture_frame()
 
-                    # Send over WebSocket
+                    # Send over WebSocket (binary frame)
                     await self.ws_connection.send(frame_data)
 
                     # Control framerate
