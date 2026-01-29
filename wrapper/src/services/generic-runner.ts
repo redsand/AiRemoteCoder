@@ -187,15 +187,15 @@ export class GenericRunner extends BaseRunner {
 
   /**
    * Build Rev command
-   * Usage: rev [--provider <provider>] [--model <model>] <prompt>
+   * Usage: rev [--llm-provider <provider>] [--model <model>] <prompt>
    * Providers: ollama, claude, etc.
    */
   private buildRevCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
     const args = [];
 
-    // Add provider if specified
+    // Add LLM provider if specified
     if (this.provider) {
-      args.push('--provider', this.provider);
+      args.push('--llm-provider', this.provider);
     }
 
     // Add model if specified

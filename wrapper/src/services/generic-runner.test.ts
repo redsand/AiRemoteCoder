@@ -257,6 +257,22 @@ describe('GenericRunner', () => {
       expect(result.fullCommand).toBe('rev analyze');
     });
 
+    it('should build Rev command with provider and model', () => {
+      const runner = new GenericRunner({
+        runId: 'test-run',
+        capabilityToken: 'token',
+        workingDir: '/test/project',
+        autonomous: false,
+        workerType: 'rev',
+        provider: 'ollama',
+        model: 'glm-4.7:cloud'
+      });
+
+      const result = runner.buildCommand('analyze this code', false);
+      expect(result.args).toEqual(['--llm-provider', 'ollama', '--model', 'glm-4.7:cloud', 'analyze this code']);
+      expect(result.fullCommand).toBe('rev --llm-provider ollama --model glm-4.7:cloud analyze this code');
+    });
+
     it('should handle empty command for autonomous mode', () => {
       const runner = new GenericRunner({
         runId: 'test-run',
