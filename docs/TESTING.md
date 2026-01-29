@@ -7,17 +7,26 @@ This document outlines the comprehensive test coverage for the Connect-Back Gate
 ## Running Tests
 
 ```bash
-# All tests
+# All tests (gateway and wrapper)
 npm test
 
 # Gateway tests only
-npm test -w gateway
+npm run test -w gateway
 
 # Wrapper tests only
-npm test -w wrapper
+npm run test -w wrapper
 
-# With coverage report
-npm test -- --coverage
+# UI tests only
+npm run test -w ui
+
+# Gateway tests with coverage
+npm run test -w gateway -- --coverage
+
+# Wrapper tests with coverage
+npm run test -w wrapper -- --coverage
+
+# All tests with coverage
+npm run test -w gateway -- --coverage && npm run test -w wrapper -- --coverage
 ```
 
 ## Test Structure

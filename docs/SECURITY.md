@@ -11,213 +11,380 @@
 
 ### Threat Actors
 1. **Network attackers** - Can intercept traffic, attempt MITM
-2. **Unauthorized users** - Attempt to access UI without credentials
-3. **Compromised wrapper** - Attacker gains access to a wrapper's credentials
-4. **Replay attackers** - Capture and replay valid requests
+2. **Authenticated users** - May attempt privilege escalation
+3. **Compromised wrappers** - Wrappers with valid auth tokens but malicious intent
+4. **External API callers** - Attempting to access gateway endpoints without proper authorization
 
----
+### Security Assumptions
+1. TLS is terminated at the edge (Cloudflare Workers)
+2. Database access is secured and not directly exposed
+3. Wrapper hosts run in trusted environments
+4. Admin credentials are stored securely (hashed passwords, encrypted TOTP secrets)
 
-## Security Controls
+## Authentication Architecture
 
-### 1. Transport Layer Security (TLS)
+### Authentication Sources
 
-**Threat**: Network eavesdropping, MITM attacks
+The gateway supports three authentication sources, each with different trust levels and use cases:
 
-**Mitigations**:
-- All gateway communications use HTTPS/WSS
-- Self-signed certificates for development
-- Production should use trusted CA certificates
-- HSTS headers enforced
+#### 1. Cloudflare Access (cloudflare)
+- **Trust Level**: High
+- **Use Case**: Admin/operator access via web UI
+- **Mechanism**: JWT tokens signed by Cloudflare
+- **Validation**: Token signature verification, audience/issuer checks
+- **User Info**: Extracted from CF Access JWT (email, user identity)
 
-**Configuration**:
-```env
-TLS_ENABLED=true
+#### 2. Session-based (session)
+- **Trust Level**: Medium
+- **Use Case**: Web UI sessions after initial login
+- **Mechanism**: HTTP cookies with encrypted session tokens
+- **Validation**: Session token verification against database
+- **User Info**: Retrieved from active session record
+
+#### 3. Wrapper Authentication (wrapper)
+- **Trust Level**: Conditional (depends on run authorization)
+- **Use Case**: Wrapper-to-gateway communication for run updates
+- **Mechanism**: Shared secret + HMAC signatures
+- **Validation**: Signature verification, timestamp validation
+- **User Info**: Limited to run-specific authorization context
+
+### Authenticated Request Interface
+
+All authenticated requests extend the FastifyRequest interface with user information:
+
+```typescript
+interface AuthenticatedRequest extends FastifyRequest {
+  user?: {
+    id: string;           // Unique user identifier
+    username: string;     // Display username/email
+    role: 'admin' | 'operator' | 'viewer';  // User role
+    source: 'cloudflare' | 'session' | 'wrapper';  // Auth source
+  };
+  runAuth?: {
+    runId: string;        // Authorized run identifier
+    capabilities: string[];  // Permitted actions
+  };
+}
 ```
 
----
+## Authentication Middleware Implementation
 
-### 2. Wrapper Authentication (Connect-Back)
+### Middleware Components
 
-**Threat**: Unauthorized wrapper connections, request forgery
+The authentication middleware (`gateway/src/middleware/auth.ts`) provides:
 
-**Mitigations**:
-- HMAC-SHA256 signature over:
-  - HTTP method
-  - Request path
-  - Body hash (SHA256)
-  - Unix timestamp
-  - Random nonce
-  - Run ID
-  - Capability token
-- Clock skew limited to ±5 minutes
-- Nonce stored in SQLite with TTL (prevents replay)
-- Per-run capability tokens (limits blast radius)
+1. **Cloudflare Access Authentication**
+   - Validates CF Access JWT tokens
+   - Extracts user identity from token claims
+   - Maps to internal user roles
 
-**Request Headers**:
+2. **Session Authentication**
+   - Validates session cookies
+   - Checks session expiration
+   - Retrieves user from database
+
+3. **Wrapper Authentication**
+   - Verifies HMAC signatures on request bodies
+   - Validates timestamps to prevent replay attacks
+   - Authorizes specific run access
+
+4. **Role-based Authorization**
+   - Enforces role-based access control
+   - Maps roles to endpoint permissions
+
+### Request Flow
+
 ```
-X-Signature: <hmac-hex>
-X-Timestamp: <unix-seconds>
-X-Nonce: <random-hex>
-X-Run-Id: <run-id>
-X-Capability-Token: <token>
+Incoming Request
+    ↓
+[Auth Middleware]
+    ↓
+┌─────────────────┬─────────────────┬─────────────────┐
+│ Cloudflare Auth │ Session Auth    │ Wrapper Auth    │
+└────────┬────────┴────────┬────────┴────────┬────────┘
+         ↓                 ↓                 ↓
+   Verify JWT        Verify Cookie     Verify HMAC
+   Extract User      Check Session     Check Timestamp
+   Map Role          Get User Data     Authorize Run
+         ↓                 ↓                 ↓
+         └─────────────────┴─────────────────┘
+                     ↓
+            [Attach user to request]
+                     ↓
+              [Role-based checks]
+                     ↓
+              Route Handler
 ```
 
-**Verification Algorithm**:
+### Security Features
+
+#### Signature Verification
+- Requests from wrappers must include HMAC signatures
+- Signatures computed over request body using shared secrets
+- Prevents request tampering and spoofing
+
+#### Timestamp Validation
+- All wrapper requests include timestamps
+- Rejects requests outside configurable time window
+- Prevents replay attacks
+
+#### Role-based Access Control (RBAC)
+- **Admin**: Full access to all resources and settings
+- **Operator**: Can create and manage runs, view results
+- **Viewer**: Read-only access to runs and results
+
+#### Rate Limiting
+- Per-IP rate limits on authentication endpoints
+- Prevents brute force attacks
+- Configurable limits per route
+
+## Authorization Model
+
+### User Roles
+
+#### Admin
+- Create and manage users
+- Configure system settings
+- View all runs and operations
+- Access admin endpoints
+- Manage authentication secrets
+
+#### Operator
+- Create and manage runs
+- View run results and logs
+- Execute commands within authorized runs
+- Manage wrapper connections
+
+#### Viewer
+- View run results and logs
+- Monitor system status
+- No write access to resources
+
+### Run Authorization
+
+Run-level authorization provides scoped access for wrapper communication:
+
+```typescript
+interface RunAuthorization {
+  runId: string;           // Specific run identifier
+  capabilities: string[];  // Allowed actions:
+                           // - 'read': Read run state
+                           // - 'update': Update run status
+                           // - 'command': Execute commands
+                           // - 'output': Send code output
+}
 ```
-message = method + "\n" + path + "\n" + sha256(body) + "\n" + timestamp + "\n" + nonce + "\n" + runId + "\n" + capabilityToken
-expected = hmac_sha256(secret, message)
-valid = timing_safe_equal(signature, expected)
+
+### Endpoint Permissions
+
+| Endpoint | Admin | Operator | Viewer | Wrapper |
+|----------|-------|----------|--------|---------|
+| GET /api/runs | ✓ | ✓ | ✓ | ✗ |
+| POST /api/runs | ✓ | ✓ | ✗ | ✗ |
+| GET /api/runs/:id | ✓ | ✓ | ✓ | ✓ (if authorized) |
+| PUT /api/runs/:id | ✓ | ✓ | ✗ | ✓ (if authorized) |
+| DELETE /api/runs/:id | ✓ | ✗ | ✗ | ✗ |
+| POST /api/runs/:id/command | ✓ | ✓ | ✗ | ✓ (if authorized) |
+| POST /api/runs/:id/output | ✗ | ✗ | ✗ | ✓ (if authorized) |
+| GET /api/users | ✓ | ✗ | ✗ | ✗ |
+| POST /api/users | ✓ | ✗ | ✗ | ✗ |
+| GET /api/settings | ✓ | ✗ | ✗ | ✗ |
+| PUT /api/settings | ✓ | ✗ | ✗ | ✗ |
+
+## Cryptographic Implementation
+
+### Hash Functions
+- **Body Hashing**: SHA-256 for request body integrity
+- **Password Hashing**: bcrypt with configurable cost factor
+- **Signature Generation**: HMAC-SHA256 for wrapper authentication
+
+### Key Management
+- **Wrapper Secrets**: Stored encrypted in database
+- **Session Secrets**: Environment-specific, rotated regularly
+- **TOTP Secrets**: Encrypted at rest, used for 2FA
+
+### Secure Headers
+All responses include security headers via Fastify Helmet:
+- `Content-Security-Policy`
+- `X-Frame-Options`
+- `X-Content-Type-Options`
+- `Referrer-Policy`
+- `Permissions-Policy`
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Authentication
+AUTH_CF_AUDIENCE=your-audience
+AUTH_CF_ISSUER=https://your.cloudflare-access.com
+AUTH_CF_TEAM_DOMAIN=your-team.cloudflareaccess.com
+
+# Session Management
+SESSION_SECRET=your-secret-key-min-32-chars
+SESSION_MAX_AGE=86400  # 24 hours
+
+# Wrapper Authentication
+WRAPPER_SECRET_ENCRYPTION_KEY=your-encryption-key
+AUTH_TIMESTAMP_TOLERANCE=300  # 5 minutes
+
+# Rate Limiting
+RATE_LIMIT_MAX=100
+RATE_LIMIT_TIME_WINDOW=60  # seconds
 ```
 
----
+### Security Best Practices
 
-### 3. UI Authentication
+1. **Secret Management**
+   - Use environment variables for all secrets
+   - Rotate secrets regularly
+   - Never commit secrets to version control
+   - Use secret management services in production
 
-**Threat**: Unauthorized UI access
+2. **TLS Configuration**
+   - Always use HTTPS in production
+   - Configure TLS 1.2+ only
+   - Use strong cipher suites
+   - Enable HSTS
 
-**Mitigations**:
+3. **Session Security**
+   - Use `HttpOnly` and `Secure` flags on cookies
+   - Implement proper session expiration
+   - Invalidate sessions on password changes
+   - Use short session timeouts for high-risk operations
 
-#### Option A: Cloudflare Access (Recommended)
-- Zero-trust identity verification
-- SSO with Google, GitHub, etc.
-- Access policies per application
-- Headers validated by gateway:
-  - `Cf-Access-Authenticated-User-Email`
-  - `Cf-Access-Jwt-Assertion`
+4. **Wrapper Authentication**
+   - Use unique secrets per wrapper
+   - Rotate wrapper secrets periodically
+   - Monitor for failed authentication attempts
+   - Implement IP allowlisting if possible
 
-#### Option B: Local Authentication
-- Password hashed with Argon2id:
-  - Memory: 64 MB
-  - Iterations: 3
-  - Parallelism: 4
-- Optional TOTP two-factor authentication
-- Session tokens: 48 random bytes
-- Session duration: 24 hours
-- HTTPOnly, Secure, SameSite=Strict cookies
+5. **Monitoring and Logging**
+   - Log all authentication attempts
+   - Alert on repeated failures
+   - Monitor for suspicious patterns
+   - Implement audit logging for sensitive operations
 
----
+## Deployment Considerations
 
-### 4. Authorization
+### Production Checklist
 
-**Threat**: Privilege escalation
+- [ ] All secrets stored in secure vault
+- [ ] TLS/HTTPS enabled
+- [ ] Security headers configured
+- [ ] Rate limiting enabled
+- [ ] Input validation on all endpoints
+- [ ] Database connections encrypted
+- [ ] CORS properly configured
+- [ ] Session cookies use Secure flag
+- [ ] Logging enabled for security events
+- [ ] Monitoring and alerting configured
 
-**Mitigations**:
-- Role-based access control:
-  - `admin`: Full access, user management
-  - `operator`: Start/stop runs, send commands
-  - `viewer`: Read-only access to runs and logs
-- Role checked on every protected endpoint
-- Audit log of all operator actions
+### Cloudflare Access Integration
 
----
+1. Create Cloudflare Access application
+2. Configure allowed email domains or identities
+3. Set up JWT audience and issuer
+4. Configure CORS for your domain
+5. Test authentication flow end-to-end
 
-### 5. Command Safety
+### Database Security
 
-**Threat**: Arbitrary code execution via commands
-
-**Mitigations**:
-- **Allowlist-only execution**: Only pre-approved commands run
-- Default allowlist:
-  ```
-  npm test, npm run test
-  pnpm test, pnpm run test
-  yarn test
-  pytest, pytest -v
-  go test ./...
-  cargo test
-  git diff, git diff --cached
-  git status
-  git log --oneline -10
-  ls -la, pwd
-  ```
-- Commands run in repo working directory only
-- No shell metacharacters (commands are not passed through shell)
-- Configurable via `EXTRA_ALLOWED_COMMANDS`
-
----
-
-### 6. Secret Redaction
-
-**Threat**: Secrets leaked in logs
-
-**Mitigations**:
-- Output scanned before transmission
-- Redaction patterns:
-  - API keys, tokens, passwords (common formats)
-  - OpenAI keys: `sk-[a-zA-Z0-9]{20,}`
-  - GitHub tokens: `ghp_`, `ghs_`
-  - NPM tokens: `npm_`
-  - PEM private keys
-- Configurable patterns in config
-- Redaction also applied on gateway side
-
----
-
-### 7. Rate Limiting
-
-**Threat**: DoS, brute force attacks
-
-**Mitigations**:
-- 100 requests per minute per IP
-- Uses Cloudflare headers for true client IP
-- Configurable limits
-
----
-
-### 8. Input Validation
-
-**Threat**: Injection attacks, malformed input
-
-**Mitigations**:
-- Zod schema validation on all endpoints
-- Maximum body size: 10 MB
-- Maximum artifact size: 50 MB
-- File type restrictions for uploads
-- Path traversal prevention for artifacts
-
----
-
-## Security Checklist for Production
-
-### Required
-- [ ] Use production TLS certificates (Let's Encrypt or CA-signed)
-- [ ] Set strong, unique HMAC_SECRET (32+ random bytes)
-- [ ] Set strong, unique AUTH_SECRET (32+ random bytes)
-- [ ] Enable Cloudflare Access or strong local auth
-- [ ] Review and restrict allowlisted commands
-- [ ] Set appropriate RUN_RETENTION_DAYS
-
-### Recommended
-- [ ] Run gateway behind reverse proxy (nginx, Caddy)
-- [ ] Enable Cloudflare Access with MFA requirement
-- [ ] Restrict gateway network access (firewall)
-- [ ] Monitor audit logs
-- [ ] Set up log aggregation
-- [ ] Regular security updates (npm audit)
-
-### Network
-- [ ] Wrapper connects outbound only (no inbound ports)
-- [ ] Gateway exposed only through Cloudflare Tunnel
-- [ ] No direct exposure to internet if possible
-
----
+- Use connection pooling with TLS
+- Implement least-privilege database user
+- Encrypt sensitive fields at rest
+- Regular database backups
+- Enable database audit logging
 
 ## Incident Response
 
-### Compromised Wrapper Token
-1. Immediately invalidate the run in the database
-2. Rotate HMAC_SECRET
-3. Kill any running processes
-4. Review audit logs for unauthorized commands
+### Security Event Categories
 
-### Compromised User Account
-1. Delete/disable the user account
-2. Rotate AUTH_SECRET to invalidate all sessions
-3. Review audit logs
-4. Reset TOTP if applicable
+1. **Failed Authentication Attempts**
+   - Threshold: 10 failures per IP per hour
+   - Response: Temporary IP block, alert admin
 
-### Suspected Data Breach
-1. Disable gateway access
-2. Export and review audit logs
-3. Check for unauthorized data access
-4. Notify affected parties as required
+2. **Suspicious Request Patterns**
+   - Unusual timing or request rates
+   - Invalid signature attempts
+   - Response: Investigate, potential blocking
+
+3. **Unauthorized Access Attempts**
+   - Access to restricted endpoints
+   - Privilege escalation attempts
+   - Response: Immediate alert, session invalidation
+
+### Response Procedures
+
+1. **Immediate Actions**
+   - Block malicious IPs
+   - Invalidate compromised sessions
+   - Rotate exposed secrets
+   - Enable enhanced logging
+
+2. **Investigation**
+   - Review access logs
+   - Identify affected accounts
+   - Determine attack vector
+   - Assess data exposure
+
+3. **Recovery**
+   - Patch vulnerabilities
+   - Update authentication mechanisms
+   - Notify affected users
+   - Document lessons learned
+
+## Compliance
+
+### Data Protection
+- Encrypt sensitive data at rest
+- Encrypt data in transit
+- Implement data retention policies
+- Provide data export/deletion capabilities
+
+### Audit Trail
+- Log all authentication events
+- Track user actions
+- Maintain immutable logs
+- Regular audit reviews
+
+### Access Control
+- Principle of least privilege
+- Regular access reviews
+- Prompt access revocation
+- Role separation where possible
+
+## Testing Security
+
+### Authentication Testing
+```bash
+# Test Cloudflare authentication
+curl -H "Cf-Access-Jwt-Assertion: <token>" https://gateway.example.com/api/runs
+
+# Test session authentication
+curl -H "Cookie: session=<token>" https://gateway.example.com/api/runs
+
+# Test wrapper authentication
+curl -H "X-Wrapper-Signature: <hmac>" \
+     -H "X-Wrapper-Timestamp: <ts>" \
+     -d '{"runId":"..."}' \
+     https://gateway.example.com/api/runs/:id/output
+```
+
+### Security Testing Checklist
+- [ ] SQL injection testing
+- [ ] XSS testing
+- [ ] CSRF testing
+- [ ] Authentication bypass testing
+- [ ] Authorization testing
+- [ ] Rate limit testing
+- [ ] Input validation testing
+- [ ] Error handling testing
+
+## Additional Resources
+
+- [OWASP Top 10](https://owasp.org/www-project-top-ten/)
+- [Cloudflare Access Documentation](https://developers.cloudflare.com/cloudflare-one/)
+- [Fastify Security Best Practices](https://www.fastify.io/docs/latest/Guides/Security-Guidelines/)
+- [Node.js Security Checklist](https://github.com/lirantal/nodejs-security-checklist)

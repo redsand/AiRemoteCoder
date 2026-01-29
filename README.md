@@ -3,6 +3,51 @@
 A secure, mobile-friendly gateway for remotely monitoring and assisting Claude Code sessions.
 
 ```
+# Claude Code Connect-Back Gateway
+
+A secure, mobile-friendly gateway for remotely monitoring and assisting Claude Code sessions.
+
+## Setup
+
+1. Install dependencies:
+   ```bash
+   npm run setup
+   ```
+
+2. Run in development mode:
+   ```bash
+   npm run dev
+   ```
+
+   This starts both the gateway and UI servers concurrently.
+
+3. Build for production:
+   ```bash
+   npm run build
+   ```
+
+4. Start production server:
+   ```bash
+   npm run start
+   ```
+
+5. Run tests:
+   ```bash
+   npm run test
+   ```
+
+## Available Scripts
+
+- `npm run setup` - Install all dependencies across workspaces
+- `npm run dev` - Start gateway and UI in development mode
+- `npm run dev:gateway` - Start only the gateway in development mode
+- `npm run dev:ui` - Start only the UI in development mode
+- `npm run build` - Build all workspaces for production
+- `npm run start` - Start the production server
+- `npm run test` - Run all tests
+
+## Architecture
+
 ┌─────────────────┐         ┌─────────────────┐
 │  Phone/Browser  │◄───────►│    Gateway      │
 │    (UI)         │  HTTPS  │  (Fastify)      │

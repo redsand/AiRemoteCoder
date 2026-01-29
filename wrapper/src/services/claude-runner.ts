@@ -43,22 +43,32 @@ export class ClaudeRunner extends BaseRunner {
 
   /**
    * Build Claude command arguments based on mode
+   *
+   * Claude Code requires specific flags to prevent getting stuck at permission/trust prompts:
+   * - --dangerously-skip-permissions: Skip the workspace trust check
+   *
+   * When a prompt is provided via __INPUT__, we pass it as a positional argument:
+   * - claude --dangerously-skip-permissions "Your task here"
+   *
+   * This allows Claude to work within the ai-runner workflow without interruption.
    */
   buildCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
     let claudeArgs: string[] = [];
     let fullCommand: string;
 
-    if (autonomous) {
-      // Autonomous mode: no prompt, just start Claude in interactive mode
-      // Use --dangerously-skip-permissions if available for full autonomy
-      claudeArgs = ['--dangerously-skip-permissions'];
-      fullCommand = `${this.getCommand()} (autonomous mode)`;
-    } else if (command) {
-      claudeArgs = [command];
-      fullCommand = `${this.getCommand()} ${claudeArgs.join(' ')}`.trim();
+    // Always use --dangerously-skip-permissions to prevent permission prompts
+    // This is essential when running through ai-runner with piped I/O
+    claudeArgs.push('--dangerously-skip-permissions');
+
+    if (command) {
+      // When we have a prompt, pass it as a positional argument
+      // Format: claude --dangerously-skip-permissions "Your task"
+      claudeArgs.push(command);
+      fullCommand = `${this.getCommand()} ${claudeArgs.join(' ')}`;
     } else {
-      // Interactive mode without prompt
-      fullCommand = this.getCommand();
+      // No prompt provided - Claude will start in interactive mode
+      // but with permissions already skipped
+      fullCommand = `${this.getCommand()} ${claudeArgs.join(' ')}`;
     }
 
     return { args: claudeArgs, fullCommand };

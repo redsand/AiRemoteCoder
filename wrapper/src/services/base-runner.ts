@@ -64,6 +64,7 @@ export abstract class BaseRunner extends EventEmitter {
   private lastOutputTime = 0; // Track when we last received output
   private outputWarningTimer: NodeJS.Timeout | null = null; // Warn if no output for a while
   private spawnedProcesses: Set<ChildProcess> = new Set(); // Track spawned prompt processes
+  private lastExecutedCommandId: string | null = null; // Track last executed command to prevent re-execution
 
   constructor(options: RunnerOptions) {
     super();
@@ -220,7 +221,12 @@ export abstract class BaseRunner extends EventEmitter {
     // Handle process exit
     this.process.on('close', async (code, signal) => {
       console.log(`\n========================================`);
-      console.log(`${this.getWorkerType()} exited with code ${code}, signal ${signal}`);
+      console.log(`Process Summary:`);
+      console.log(`  Worker: ${this.getWorkerType()}`);
+      console.log(`  Exit Code: ${code}`);
+      console.log(`  Signal: ${signal}`);
+      console.log(`  Commands Processed: ${this.processedCommandIds.size}`);
+      console.log(`  Log File: ${this.logPath}`);
       console.log(`========================================\n`);
       await this.handleExit(code, signal);
     });
@@ -711,20 +717,49 @@ export abstract class BaseRunner extends EventEmitter {
    * Start polling for commands
    */
   private startCommandPolling(): void {
+    let pollCount = 0;
+    let consecutiveEmptyPolls = 0;
     this.commandPollTimer = setInterval(async () => {
       if (!this.isRunning) return;
 
       try {
         const commands = await pollCommands(this.auth);
-        for (const cmd of commands) {
-          // Skip if this command was recently processed
-          if (this.processedCommandIds.has(cmd.id)) {
-            console.warn(`Skipping recently processed command: ${cmd.id}`);
-            continue;
-          }
+        pollCount++;
+
+        console.log(`\n[POLL #${pollCount}] Retrieved ${commands.length} command(s) from gateway`);
+
+        if (commands.length === 0) {
+          consecutiveEmptyPolls++;
+          console.log(`[POLL #${pollCount}] No pending commands (${consecutiveEmptyPolls} empty polls in a row)`);
+          return;
+        }
+
+        consecutiveEmptyPolls = 0;
+
+        // Filter out commands that are already in the dedup window
+        const newCommands = commands.filter(cmd => !this.processedCommandIds.has(cmd.id));
+        const skippedCount = commands.length - newCommands.length;
+
+        if (skippedCount > 0) {
+          console.log(`[POLL #${pollCount}] ⊘ ${skippedCount} command(s) already processed (in dedup window)`);
+        }
+
+        if (newCommands.length === 0) {
+          console.log(`[POLL #${pollCount}] All commands are in dedup window - nothing new to execute`);
+          return;
+        }
+
+        console.log(`[POLL #${pollCount}] ✓ ${newCommands.length} new command(s) to execute`);
+
+        for (let i = 0; i < newCommands.length; i++) {
+          const cmd = newCommands[i];
+
+          console.log(`[POLL #${pollCount}.${i + 1}] Executing: ID=${cmd.id}, Command=${cmd.command.substring(0, 100)}`);
           await this.executeCommand(cmd);
+          console.log(`[POLL #${pollCount}.${i + 1}] ✓ Command execution completed\n`);
         }
       } catch (err) {
+        console.error(`[POLL #${pollCount}] Error during polling:`, err);
         // Ignore polling errors
       }
     }, config.commandPollInterval);
@@ -744,19 +779,30 @@ export abstract class BaseRunner extends EventEmitter {
    * Mark a command as processed to prevent duplicate execution
    */
   private markCommandProcessed(commandId: string, expireMs: number = 5000): void {
+    const wasAlreadyProcessed = this.processedCommandIds.has(commandId);
     this.processedCommandIds.add(commandId);
 
     // Clear any existing timeout
     const existingTimer = this.processedCommandExpire.get(commandId);
-    if (existingTimer) clearTimeout(existingTimer);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
 
     // Set new timeout to remove from set after expiration
     const timer = setTimeout(() => {
       this.processedCommandIds.delete(commandId);
       this.processedCommandExpire.delete(commandId);
+      console.log(`    [DEDUPE EXPIRED] Command ${commandId} removed from deduplication set after ${expireMs / 60000} minute window`);
     }, expireMs);
 
     this.processedCommandExpire.set(commandId, timer);
+
+    const minutes = expireMs / 60000;
+    if (wasAlreadyProcessed) {
+      console.log(`    [DEDUPE REFRESH] Command ${commandId} dedup window refreshed to ${minutes} minutes`);
+    } else {
+      console.log(`    [DEDUPE ADDED] Command ${commandId} added to dedup set (${minutes} minute window)`);
+    }
   }
 
   /**
@@ -766,8 +812,9 @@ export abstract class BaseRunner extends EventEmitter {
     console.log(`Executing command: ${cmd.command}`);
 
     // Mark command as being processed to prevent duplicate execution
-    // if ack fails, it will be re-polled after expiration
-    this.markCommandProcessed(cmd.id, 10000);
+    // Use 30-minute window so even if ack fails, we won't re-execute within that time
+    // This prevents infinite loops from vague prompts that trigger recursive optimization
+    this.markCommandProcessed(cmd.id, 30 * 60 * 1000);
 
     // Handle special commands
     if (cmd.command === '__STOP__') {
@@ -813,18 +860,42 @@ export abstract class BaseRunner extends EventEmitter {
         // spawn a new process with the prompt instead of trying to send input to stdin
         const { args, fullCommand } = this.buildCommand(input, this.autonomous);
 
-        console.log(`Executing prompt via new process: ${fullCommand}`);
-        await this.sendEvent('info', `Executing: ${input}`);
-        await this.sendEvent('prompt_resolved', `Response: ${input.replace(/\n/g, '\\n')}`);
+        console.log(`\n>>> Executing task via new process`);
+        console.log(`    Full command: ${fullCommand}`);
+        console.log(`    Command ID: ${cmd.id}`);
+        console.log(`    Task text: ${input.substring(0, 150)}${input.length > 150 ? '...' : ''}`);
 
-        // Spawn new process for this prompt
+        // Send info event about what we're executing
+        await this.sendEvent('info', `Executing task: ${input}`);
+
+        // Mark as processed BEFORE execution to prevent duplicates
+        // Use 30-minute window to prevent re-execution even if ack fails
+        const dedupeMs = 30 * 60 * 1000;
+        this.markCommandProcessed(cmd.id, dedupeMs);
+        console.log(`    ✓ Marked command ${cmd.id} as processed for ${dedupeMs / 60000} minutes`);
+
+        // Track execution start
+        const startTime = Date.now();
+
+        // Spawn new process for this task
+        console.log(`    ► Starting task execution...`);
         await this.executePrompt(input, args);
+        const duration = Date.now() - startTime;
 
-        await ackCommand(this.auth, cmd.id, `Executed prompt: ${input.substring(0, 100)}`);
+        console.log(`    ◄ Task execution completed after ${duration}ms`);
+        const ackResult = await ackCommand(this.auth, cmd.id, `Executed task: ${input.substring(0, 100)}`);
+        console.log(`    ✓ Command acknowledged successfully`, ackResult);
       } catch (err: any) {
-        console.error(`Failed to execute prompt ${cmd.id}:`, err.message);
-        await this.sendEvent('error', `Failed to execute prompt: ${err.message}`);
-        await ackCommand(this.auth, cmd.id, undefined, `Error: ${err.message}`);
+        console.error(`\n>>> FAILED to execute task ${cmd.id}`);
+        console.error(`    Error: ${err.message}`);
+        await this.sendEvent('error', `Failed to execute task: ${err.message}`);
+        try {
+          const ackResult = await ackCommand(this.auth, cmd.id, undefined, `Error: ${err.message}`);
+          console.log(`    ✓ Error acknowledged:`, ackResult);
+        } catch (ackErr: any) {
+          console.error(`    ✗ Failed to acknowledge error for ${cmd.id}:`, ackErr.message);
+          await this.sendEvent('error', `Failed to acknowledge command: ${ackErr.message}`);
+        }
       }
       return;
     }
@@ -922,6 +993,8 @@ export abstract class BaseRunner extends EventEmitter {
   /**
    * Execute a prompt by spawning a new worker process
    * Used for handling __INPUT__ commands that contain prompts for workers
+   * Note: Rev can get stuck in prompt optimization loops in non-interactive mode,
+   * so we timeout execution to prevent infinite loops.
    */
   private async executePrompt(prompt: string, args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -948,6 +1021,17 @@ export abstract class BaseRunner extends EventEmitter {
         promptProcess.stdin.end();
       }
 
+      let processCompleted = false;
+
+      // Set a timeout to prevent infinite loops (Rev's prompt optimization can loop indefinitely)
+      // Most tasks should complete within 5 minutes; if not, force kill
+      const timeoutHandle = setTimeout(() => {
+        if (!processCompleted && promptProcess) {
+          console.warn(`Prompt execution timeout (5 minutes) - force killing process`);
+          promptProcess.kill('SIGKILL');
+        }
+      }, 5 * 60 * 1000);
+
       // Capture stdout
       promptProcess.stdout?.on('data', (data: Buffer) => {
         const output = data.toString();
@@ -964,6 +1048,8 @@ export abstract class BaseRunner extends EventEmitter {
 
       // Handle process completion
       promptProcess.on('close', (code, signal) => {
+        processCompleted = true;
+        clearTimeout(timeoutHandle);
         console.log(`Prompt process exited with code ${code}, signal ${signal}`);
         // Remove from tracked processes
         this.spawnedProcesses.delete(promptProcess);
@@ -977,6 +1063,8 @@ export abstract class BaseRunner extends EventEmitter {
 
       // Handle process errors
       promptProcess.on('error', (err) => {
+        processCompleted = true;
+        clearTimeout(timeoutHandle);
         console.error(`Prompt process error:`, err);
         this.spawnedProcesses.delete(promptProcess);
         reject(err);
