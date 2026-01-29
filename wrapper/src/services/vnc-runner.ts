@@ -1,8 +1,6 @@
 import { BaseRunner, RunnerOptions, WorkerCommandResult } from './base-runner.js';
-import { config } from '../config.js';
-import { spawn, ChildProcess } from 'child_process';
-import { existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { spawn, execSync, ChildProcess } from 'child_process';
+import { ackCommand } from './gateway-client.js';
 
 /**
  * VNC Runner Options
@@ -12,6 +10,16 @@ export interface VncRunnerOptions extends RunnerOptions {
   displayMode?: 'screen' | 'window';  // 'screen' for full desktop, 'window' for selected window
   windowTitle?: string;   // For window mode: target window title
   resolution?: string;    // Resolution e.g., "1920x1080"
+}
+
+/**
+ * VNC Start Marker - extends with VNC-specific properties
+ */
+interface VncStartMarker extends Record<string, any> {
+  vncPort: number;
+  displayMode: 'screen' | 'window';
+  resolution: string;
+  capabilities: string[];
 }
 
 /**
@@ -27,6 +35,9 @@ export interface VncRunnerOptions extends RunnerOptions {
  * - Mouse and keyboard control from remote
  * - Acts as fallback when agents fail
  * - Integrates with hands-on AI runner launcher
+ *
+ * CRITICAL: VNC is a remote desktop tool, not a command executor.
+ * It does not process commands from the gateway - it only streams the desktop.
  */
 export class VncRunner extends BaseRunner {
   private vncProcess: ChildProcess | null = null;
@@ -34,8 +45,10 @@ export class VncRunner extends BaseRunner {
   private displayMode: 'screen' | 'window';
   private windowTitle?: string;
   private resolution: string;
-  private vncPassword?: string;
   private vncReady = false;
+  private startupPromise: Promise<void> | null = null;
+  private startupResolve: (() => void) | null = null;
+  private startupReject: ((error: Error) => void) | null = null;
 
   constructor(options: VncRunnerOptions) {
     super(options);
@@ -45,13 +58,9 @@ export class VncRunner extends BaseRunner {
     this.windowTitle = options.windowTitle;
     this.resolution = options.resolution || '1920x1080';
 
-    // Override log path for VNC-specific logging
-    const runDir = join(config.runsDir, options.runId);
-    if (!existsSync(runDir)) {
-      mkdirSync(runDir, { recursive: true });
-    }
-    (this as any).logPath = join(runDir, 'vnc.log');
-    (this as any).stateFile = join(runDir, 'vnc-state.json');
+    // NOTE: DO NOT override log path here
+    // BaseRunner handles logging correctly relative to working directory
+    // Overriding causes logs to be written to wrong directory
   }
 
   /**
@@ -66,20 +75,18 @@ export class VncRunner extends BaseRunner {
    * Supports x11vnc (most common) and falls back to vncserver
    */
   getCommand(): string {
-    // Check for x11vnc first (preferred - no Xvfb needed)
+    // Import execSync once at the top to avoid repeated require calls
     try {
-      const { execSync } = require('child_process');
       execSync('which x11vnc', { stdio: 'ignore' });
       return 'x11vnc';
     } catch {
       // Fall back to vncserver
       try {
-        const { execSync } = require('child_process');
         execSync('which vncserver', { stdio: 'ignore' });
         return 'vncserver';
       } catch {
-        // Last resort: return x11vnc (will error if not installed)
-        return 'x11vnc';
+        // If neither is found, throw error instead of silently failing
+        throw new Error('Neither x11vnc nor vncserver found. Please install VNC server: sudo apt-get install x11vnc OR tigervnc-server');
       }
     }
   }
@@ -93,7 +100,12 @@ export class VncRunner extends BaseRunner {
 
     if (cmd === 'x11vnc') {
       // x11vnc arguments for screen sharing
-      args.push('-display', process.env.DISPLAY || ':0');
+      // Note: DISPLAY must be set or default to :0
+      const display = process.env.DISPLAY || ':0';
+      if (!display) {
+        throw new Error('DISPLAY environment variable not set. Cannot start VNC server without a display.');
+      }
+      args.push('-display', display);
       args.push('-listen', '127.0.0.1');  // Listen on localhost
       args.push('-port', this.vncPort.toString());
       args.push('-forever');  // Keep running until stopped
@@ -116,12 +128,15 @@ export class VncRunner extends BaseRunner {
       // Add resolution if specified
       if (this.resolution) {
         const [width, height] = this.resolution.split('x');
-        args.push('-scale', `${width}x${height}`);
+        if (width && height) {
+          args.push('-scale', `${width}x${height}`);
+        }
       }
 
     } else if (cmd === 'vncserver') {
       // vncserver arguments (TigerVNC or TightVNC)
-      args.push(`:${this.vncPort - 5900}`);
+      const displayNum = (this.vncPort - 5900).toString();
+      args.push(`:${displayNum}`);
       args.push('-geometry', this.resolution);
       args.push('-depth', '24');
       args.push('-pixelformat', 'rgb888');
@@ -137,55 +152,76 @@ export class VncRunner extends BaseRunner {
 
   /**
    * Start the VNC server
+   * Returns a promise that resolves when VNC is ready or rejects on startup failure
    */
   async start(command?: string): Promise<void> {
-    if (this.isRunning) {
+    if ((this as any).isRunning) {
       throw new Error('VNC runner already started');
     }
 
-    this.isRunning = true;
+    // Create a promise that can be rejected if startup fails
+    this.startupPromise = new Promise<void>((resolve, reject) => {
+      this.startupResolve = resolve;
+      this.startupReject = reject;
+    });
+
+    (this as any).isRunning = true;
 
     console.log(`Starting VNC server`);
     console.log(`Display mode: ${this.displayMode}`);
     console.log(`VNC port: ${this.vncPort}`);
     console.log(`Resolution: ${this.resolution}`);
 
-    const { args, fullCommand } = this.buildCommand(command, this.autonomous);
-
-    // Send start marker
-    const startMarker = this.buildStartMarker(fullCommand);
-    (startMarker as any).vncPort = this.vncPort;
-    (startMarker as any).displayMode = this.displayMode;
-    (startMarker as any).resolution = this.resolution;
-    await this.sendMarker('started', startMarker);
-
-    // Spawn VNC server process
-    const cmd = this.getCommand();
-    const env = this.buildEnvironment();
-
-    console.log(`Spawning VNC server: ${cmd} with args: ${JSON.stringify(args)}`);
-
     try {
+      const { args, fullCommand } = this.buildCommand(command, (this as any).autonomous);
+
+      // Send start marker
+      const startMarker: VncStartMarker = {
+        ...this.buildStartMarker(fullCommand),
+        vncPort: this.vncPort,
+        displayMode: this.displayMode,
+        resolution: this.resolution,
+        capabilities: ['vnc_access', 'remote_desktop', 'mouse_control', 'keyboard_control']
+      };
+      await this.sendMarker('started', startMarker);
+
+      // Spawn VNC server process
+      const cmd = this.getCommand();
+      const env = this.buildEnvironment();
+
+      console.log(`Spawning VNC server: ${cmd} with args: ${JSON.stringify(args)}`);
+
       this.vncProcess = spawn(cmd, args, {
-        cwd: this.workingDir,
+        cwd: (this as any).workingDir,
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe'],
         env,
         detached: false
       });
 
+      if (!this.vncProcess) {
+        throw new Error('Failed to spawn VNC process');
+      }
+
       console.log(`VNC process spawned with PID: ${this.vncProcess.pid}`);
       this.vncReady = true;
 
       // Handle stdout for VNC server output
-      this.vncProcess.stdout?.on('data', (data: Buffer) => {
+      this.vncProcess.stdout?.on('data', async (data: Buffer) => {
         const output = data.toString('utf-8');
         console.log(`VNC stdout: ${output}`);
-        this.handleOutput('stdout', data);
+        // handleOutput is private in BaseRunner, use type casting
+        await (this as any).handleOutput('stdout', data);
 
         // Detect VNC ready messages
         if (output.includes('Listening') || output.includes('accepting') || output.includes('started')) {
           this.vncReady = true;
+          console.log('VNC server ready for connections');
+          // Resolve the startup promise when ready
+          if (this.startupResolve) {
+            this.startupResolve();
+            this.startupResolve = null;
+          }
         }
       });
 
@@ -193,7 +229,7 @@ export class VncRunner extends BaseRunner {
       this.vncProcess.stderr?.on('data', (data: Buffer) => {
         const output = data.toString('utf-8');
         console.log(`VNC stderr: ${output}`);
-        this.handleOutput('stderr', data);
+        (this as any).handleOutput('stderr', data);
       });
 
       // Handle process exit
@@ -202,23 +238,67 @@ export class VncRunner extends BaseRunner {
         await this.handleExit(code, signal);
       });
 
+      // Handle process error - THIS IS CRITICAL for startup failure detection
       this.vncProcess.on('error', async (err) => {
         console.error(`VNC process error:`, err);
         await this.sendEvent('error', `VNC server error: ${err.message}`);
         await this.handleExit(1, null);
+        // CRITICAL FIX: Reject the startup promise so caller knows about the error
+        if (this.startupReject) {
+          this.startupReject(err);
+          this.startupReject = null;
+        }
       });
 
       // Start heartbeat (no command polling needed for VNC)
-      this.startHeartbeat();
+      (this as any).startHeartbeat();
 
       // Send ready marker
       await this.sendEvent('info', `VNC server ready on port ${this.vncPort}`);
 
+      // Wait for startup promise or return immediately
+      // VNC might not send "Listening" message, so use a timeout
+      const timeout = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          if (this.startupResolve) {
+            this.startupResolve();
+            this.startupResolve = null;
+          }
+          resolve();
+        }, 2000);
+      });
+
+      await Promise.race([this.startupPromise, timeout]);
+
     } catch (error: any) {
       console.error(`Failed to start VNC server:`, error);
       await this.sendEvent('error', `Failed to start VNC server: ${error.message}`);
-      this.isRunning = false;
+      (this as any).isRunning = false;
+
+      // Reject the startup promise
+      if (this.startupReject) {
+        this.startupReject(error);
+        this.startupReject = null;
+      }
+
       throw error;
+    }
+  }
+
+  /**
+   * Override executeCommand to handle VNC-specific behavior
+   * VNC is a remote desktop tool, not a command executor
+   */
+  async executeCommand(cmd: any): Promise<void> {
+    console.log(`VNC runner received command: ${cmd.id}`);
+    console.log(`VNC is a remote desktop tool and does not execute commands`);
+
+    // VNC runners don't execute commands - they provide remote desktop access
+    // Acknowledge the command but don't process it
+    try {
+      await ackCommand(this.auth, cmd.id, 'VNC runner does not execute commands - provides remote desktop access only');
+    } catch (err: any) {
+      console.error(`Failed to acknowledge command:`, err.message);
     }
   }
 
@@ -226,35 +306,58 @@ export class VncRunner extends BaseRunner {
    * Stop the VNC server
    */
   async stop(): Promise<void> {
-    if (!this.isRunning) {
+    if (!(this as any).isRunning) {
       return;
     }
 
     console.log('Stopping VNC server...');
-    this.stopRequested = true;
+    (this as any).stopRequested = true;
+
+    try {
+      await this.sendEvent('info', 'Stopping VNC server');
+    } catch (err) {
+      console.error('Failed to send stop event:', err);
+    }
 
     if (this.vncProcess && !this.vncProcess.killed) {
-      this.vncProcess.kill('SIGTERM');
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      try {
+        this.vncProcess.kill('SIGTERM');
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
-      if (!this.vncProcess.killed) {
-        this.vncProcess.kill('SIGKILL');
+        if (!this.vncProcess.killed) {
+          this.vncProcess.kill('SIGKILL');
+        }
+      } catch (err) {
+        console.error('Failed to kill VNC process:', err);
       }
     }
 
-    this.isRunning = false;
-
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
+    // Clear heartbeat
+    if ((this as any).heartbeatTimer) {
+      clearInterval((this as any).heartbeatTimer);
+      (this as any).heartbeatTimer = null;
     }
 
-    if (this.logStream) {
-      this.logStream.destroy();
-      this.logStream = null;
+    // Close log stream if exists
+    if ((this as any).logStream) {
+      try {
+        (this as any).logStream.destroy();
+      } catch (err) {
+        console.error('Failed to close log stream:', err);
+      }
+      (this as any).logStream = null;
     }
 
-    await this.sendEvent('info', 'VNC server stopped');
+    (this as any).isRunning = false;
+
+    try {
+      await this.sendEvent('info', 'VNC server stopped');
+    } catch (err) {
+      console.error('Failed to send stop event:', err);
+    }
+
+    // CRITICAL FIX: Call parent class cleanup
+    await super.stop();
   }
 
   /**
