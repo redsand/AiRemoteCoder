@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url';
 import { config, validateConfig } from './config.js';
 import { ClaudeRunner } from './services/claude-runner.js';
 import { GenericRunner, createGenericRunner } from './services/generic-runner.js';
+import { VncRunner } from './services/vnc-runner.js';
+import { HandsOnRunner } from './services/hands-on-runner.js';
 import {
   testConnection,
   login,
@@ -416,6 +418,22 @@ program
           workingDir: options.cwd,
           autonomous: options.autonomous
         });
+      } else if (workerType === 'vnc') {
+        runner = new VncRunner({
+          runId: createResult.id,
+          capabilityToken: createResult.capabilityToken,
+          workingDir: options.cwd,
+          autonomous: false,
+          displayMode: 'screen'
+        });
+      } else if (workerType === 'hands-on') {
+        runner = new HandsOnRunner({
+          runId: createResult.id,
+          capabilityToken: createResult.capabilityToken,
+          workingDir: options.cwd,
+          autonomous: false,
+          reason: 'User launched hands-on mode'
+        });
       } else {
         runner = createGenericRunner(workerType as WorkerType, {
           runId: createResult.id,
@@ -504,6 +522,22 @@ program
         capabilityToken: options.token,
         workingDir: options.cwd,
         autonomous: options.autonomous
+      });
+    } else if (workerType === 'vnc') {
+      runner = new VncRunner({
+        runId: options.runId,
+        capabilityToken: options.token,
+        workingDir: options.cwd,
+        autonomous: false,
+        displayMode: 'screen'
+      });
+    } else if (workerType === 'hands-on') {
+      runner = new HandsOnRunner({
+        runId: options.runId,
+        capabilityToken: options.token,
+        workingDir: options.cwd,
+        autonomous: false,
+        reason: 'User launched hands-on mode'
       });
     } else {
       runner = createGenericRunner(workerType as WorkerType, {
