@@ -145,7 +145,6 @@ export class ClaudeRunner extends BaseRunner {
       this.claudeProcess.on('close', async (code, signal) => {
         console.log(`\nClaude process exited with code ${code}, signal ${signal}`);
         this.claudeProcess = null;
-        this.claudeReady = false;
         await this.handleExit(code, signal);
       });
 
