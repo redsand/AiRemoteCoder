@@ -197,37 +197,47 @@ class PythonVNCRunner:
             await self.gateway.ack_command(cmd.command_id, error=str(e))
 
     async def _start_vnc_streaming(self):
-        """Start VNC streaming over WebSocket."""
+        """Start VNC streaming over WebSocket with reconnection logic."""
         if self.streaming:
             logger.warning('VNC streaming already active')
             return
 
         logger.info('Starting VNC streaming')
+        max_retries = 5
+        retry_delay = 2
 
-        try:
-            # Open WebSocket to gateway
-            ws_url = f'{self.args.gateway_url.replace("http", "ws")}/ws/vnc/{self.args.run_id}'
-            logger.info(f'Connecting to {ws_url}')
+        for attempt in range(max_retries):
+            try:
+                # Open WebSocket to gateway
+                ws_url = f'{self.args.gateway_url.replace("http", "ws")}/ws/vnc/{self.args.run_id}'
+                logger.info(f'Connecting to {ws_url} (attempt {attempt + 1}/{max_retries})')
 
-            # Add custom header to identify as Python VNC client
-            extra_headers = {'X-VNC-Client': 'true'}
+                # Add custom header to identify as Python VNC client
+                extra_headers = {'X-VNC-Client': 'true'}
 
-            self.ws_connection = await websockets.connect(
-                ws_url,
-                ping_interval=30,
-                ping_timeout=10,
-                extra_headers=extra_headers,
-            )
+                self.ws_connection = await websockets.connect(
+                    ws_url,
+                    ping_interval=30,
+                    ping_timeout=10,
+                    extra_headers=extra_headers,
+                )
 
-            self.streaming = True
+                self.streaming = True
+                logger.info('WebSocket connected successfully')
 
-            # Start streaming loop
-            await self._stream_frames()
+                # Start streaming loop
+                await self._stream_frames()
+                return
 
-        except Exception as e:
-            logger.error(f'Failed to start VNC streaming: {e}')
-            self.streaming = False
-            raise
+            except Exception as e:
+                self.streaming = False
+                if attempt < max_retries - 1:
+                    logger.warning(f'Connection attempt {attempt + 1} failed: {e}. Retrying in {retry_delay}s...')
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, 30)  # Exponential backoff, max 30s
+                else:
+                    logger.error(f'Failed to start VNC streaming after {max_retries} attempts: {e}')
+                    raise
 
     async def _stop_vnc_streaming(self):
         """Stop VNC streaming."""

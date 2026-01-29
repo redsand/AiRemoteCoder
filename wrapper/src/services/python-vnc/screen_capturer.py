@@ -142,13 +142,126 @@ class ScreenCapturerDelta(ScreenCapturer):
         current_pixels = current.tobytes()
         last_pixels = self.last_frame.tobytes()
 
-        # Simple comparison: if bytes differ, full redraw
-        # TODO: Implement actual block-based delta detection
-        if current_pixels != last_pixels:
+        # Quick check: if sizes differ or content identical
+        if len(current_pixels) != len(last_pixels):
             self.last_frame = current
             return [(0, 0, self.width, self.height)]
 
-        return []
+        if current_pixels == last_pixels:
+            return []
+
+        # Block-based delta detection
+        dirty_regions = self._find_dirty_blocks(current, self.last_frame)
+        self.last_frame = current
+
+        # Merge adjacent dirty regions for efficiency
+        return self._merge_regions(dirty_regions)
+
+    def _find_dirty_blocks(self, current_img: Image.Image, last_img: Image.Image) -> list:
+        """
+        Find dirty blocks by comparing pixel data.
+
+        Args:
+            current_img: Current frame as PIL Image
+            last_img: Last frame as PIL Image
+
+        Returns:
+            List of (x, y, width, height) tuples
+        """
+        dirty_regions = []
+        current_pixels = current_img.tobytes()
+        last_pixels = last_img.tobytes()
+        bytes_per_pixel = self.vnc.bytes_per_pixel if hasattr(self, 'vnc') else 4
+
+        # Scan blocks
+        for block_y in range(0, self.height, self.block_size):
+            for block_x in range(0, self.width, self.block_size):
+                block_h = min(self.block_size, self.height - block_y)
+                block_w = min(self.block_size, self.width - block_x)
+
+                # Check if block changed
+                if self._block_changed(
+                    current_pixels, last_pixels,
+                    block_x, block_y, block_w, block_h,
+                    bytes_per_pixel
+                ):
+                    dirty_regions.append((block_x, block_y, block_w, block_h))
+
+        return dirty_regions
+
+    def _block_changed(
+        self,
+        current: bytes,
+        last: bytes,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        bytes_per_pixel: int
+    ) -> bool:
+        """Check if a block changed."""
+        stride = self.width * bytes_per_pixel
+
+        for row in range(h):
+            row_start = (y + row) * stride + x * bytes_per_pixel
+            row_end = row_start + w * bytes_per_pixel
+
+            if current[row_start:row_end] != last[row_start:row_end]:
+                return True
+
+        return False
+
+    def _merge_regions(self, regions: list) -> list:
+        """
+        Merge overlapping or adjacent regions to reduce overhead.
+
+        Args:
+            regions: List of (x, y, width, height) tuples
+
+        Returns:
+            Merged region list
+        """
+        if not regions:
+            return []
+
+        # Sort by position
+        sorted_regions = sorted(regions, key=lambda r: (r[1], r[0]))
+
+        merged = [sorted_regions[0]]
+        for current in sorted_regions[1:]:
+            last = merged[-1]
+
+            # Check if regions can be merged (overlapping or adjacent)
+            if self._can_merge(last, current):
+                # Merge regions
+                x1, y1, w1, h1 = last
+                x2, y2, w2, h2 = current
+
+                new_x = min(x1, x2)
+                new_y = min(y1, y2)
+                new_w = max(x1 + w1, x2 + w2) - new_x
+                new_h = max(y1 + h1, y2 + h2) - new_y
+
+                merged[-1] = (new_x, new_y, new_w, new_h)
+            else:
+                merged.append(current)
+
+        return merged
+
+    def _can_merge(self, r1: tuple, r2: tuple) -> bool:
+        """Check if two regions can be merged."""
+        x1, y1, w1, h1 = r1
+        x2, y2, w2, h2 = r2
+
+        # Check if regions overlap or are close (within block_size)
+        margin = self.block_size
+
+        return not (
+            x1 + w1 + margin < x2 or
+            x2 + w2 + margin < x1 or
+            y1 + h1 + margin < y2 or
+            y2 + h2 + margin < y1
+        )
 
     def get_frame_bytes(self, bpp: int = 32) -> bytes:
         """

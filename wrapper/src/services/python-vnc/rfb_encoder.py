@@ -88,8 +88,9 @@ class RFBEncoder:
         y: int = 0,
         width: Optional[int] = None,
         height: Optional[int] = None,
+        encoding: int = 0,  # 0 = Raw, 1 = CopyRect, 2 = RRE, 5 = Hextile, 6 = ZRLE
     ) -> bytes:
-        """Encode a frame update with Raw encoding."""
+        """Encode a frame update with specified encoding."""
         if width is None:
             width = self.width
         if height is None:
@@ -105,20 +106,54 @@ class RFBEncoder:
 
         buf.write(struct.pack('>B', 0))     # type: FramebufferUpdate
         buf.write(struct.pack('>B', 0))     # padding
-        buf.write(struct.pack('>H', 1))     # number of rectangles
+        buf.write(struct.pack('>H', 1))     # number of rectangles (single rectangle)
 
         # Rectangle:
         # CARD16 x position
         # CARD16 y position
         # CARD16 width
         # CARD16 height
-        # INT32 encoding type (0 = raw)
+        # INT32 encoding type
 
         buf.write(struct.pack('>HHHHH', x, y, width, height))
-        buf.write(struct.pack('>i', 0))     # encoding: raw
+        buf.write(struct.pack('>i', encoding))
 
-        # Raw encoding: just the pixel data
-        buf.write(frame_data)
+        # Add frame data
+        if encoding == 0:
+            # Raw encoding: just the pixel data
+            buf.write(frame_data)
+        elif encoding == 2:
+            # RRE encoding would go here (for future implementation)
+            buf.write(frame_data)
+        elif encoding == 5:
+            # Hextile encoding would go here (for future implementation)
+            buf.write(frame_data)
+        else:
+            # Default to raw for unknown encodings
+            buf.write(frame_data)
+
+        return buf.getvalue()
+
+    def encode_multiple_rectangles(self, rectangles: list) -> bytes:
+        """Encode multiple rectangles in a single update.
+
+        Args:
+            rectangles: List of (x, y, width, height, data, encoding) tuples
+
+        Returns:
+            RFB FramebufferUpdate with multiple rectangles
+        """
+        buf = BytesIO()
+
+        buf.write(struct.pack('>B', 0))              # type: FramebufferUpdate
+        buf.write(struct.pack('>B', 0))              # padding
+        buf.write(struct.pack('>H', len(rectangles)))  # number of rectangles
+
+        for rect in rectangles:
+            x, y, width, height, data, encoding = rect
+            buf.write(struct.pack('>HHHHH', x, y, width, height))
+            buf.write(struct.pack('>i', encoding))
+            buf.write(data)
 
         return buf.getvalue()
 
