@@ -66,13 +66,9 @@ All runtime data is stored under `.data/` in the project root.
 
 ## API Routes
 
-### Authentication
-
-All API endpoints (except `/api/auth/login`) require authentication via:
+All API endpoints (except `/api/auth/login` and health endpoints) require authentication via:
 - Header: `Authorization: Bearer <api-key>`
 - Or query parameter: `?api_key=<api-key>`
-
----
 
 ### Authentication Routes
 
