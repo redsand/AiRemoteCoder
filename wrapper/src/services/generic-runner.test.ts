@@ -239,8 +239,8 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand('refactor', false);
-      expect(result.args).toEqual(['--model', 'gemini-1.5-pro', 'refactor']);
-      expect(result.fullCommand).toBe('gemini-cli --model gemini-1.5-pro refactor');
+      expect(result.args).toEqual(['--output-format', 'text', '--model', 'gemini-1.5-pro', '--prompt', 'refactor']);
+      expect(result.fullCommand).toBe('gemini-cli --output-format text --model gemini-1.5-pro --prompt refactor');
     });
 
     it('should build Rev command with prompt', () => {

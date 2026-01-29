@@ -23,14 +23,14 @@ This will:
 - Install dependencies (`npm install`)
 - Build the gateway, wrapper, and UI
 - Generate secure secrets in `.env` (first run only)
-- Generate self-signed TLS certificates
-- Start the gateway on `https://localhost:8443`
+- Generate self-signed TLS certificates (if enabled)
+- Start the gateway on `http://localhost:3100`
 
 ### 2. Access the UI
 
 Open your browser to:
 ```
-https://localhost:8443
+http://localhost:3100
 ```
 
 Note: You may see a certificate warning since we use self-signed certificates for development. This is expected and safe for local development.

@@ -171,14 +171,34 @@ export class GenericRunner extends BaseRunner {
 
   /**
    * Build Gemini CLI command
-   * Usage: gemini-cli --model <model> [prompt]
+   * Usage: gemini [options]
+   *
+   * Key flags:
+   * - --output-format text: Use text output (not JSON)
+   * - --model <model>: Specify model to use
+   * - --prompt "<prompt>": The task/prompt (named flag, not positional)
+   * - --approval-mode yolo: Auto-approve changes (like --trust-workspace)
+   *
+   * Example: gemini --output-format text --model gemini-1.5-pro --prompt "Create a test" --approval-mode yolo
    */
   private buildGeminiCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
-    const model = this.model || config.geminiModel;
-    const args = ['--model', model];
+    const args: string[] = [];
 
+    // Use text output format for consistency
+    args.push('--output-format', 'text');
+
+    // Add model
+    const model = this.model || config.geminiModel;
+    args.push('--model', model);
+
+    // Add prompt as named flag (different from Claude/Rev which use positional)
     if (command) {
-      args.push(command);
+      args.push('--prompt', command);
+    }
+
+    // In autonomous mode, auto-approve changes
+    if (autonomous) {
+      args.push('--approval-mode', 'yolo');
     }
 
     const fullCommand = `${this.getCommand()} ${args.join(' ')}`;
