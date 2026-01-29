@@ -243,7 +243,7 @@ describe('GenericRunner', () => {
       expect(result.fullCommand).toBe('gemini-cli --model gemini-1.5-pro refactor');
     });
 
-    it('should build Rev command', () => {
+    it('should build Rev command with prompt', () => {
       const runner = new GenericRunner({
         runId: 'test-run',
         capabilityToken: 'token',
@@ -257,7 +257,21 @@ describe('GenericRunner', () => {
       expect(result.fullCommand).toBe('rev analyze');
     });
 
-    it('should build Rev command with provider and model', () => {
+    it('should build Rev command without prompt (REPL mode)', () => {
+      const runner = new GenericRunner({
+        runId: 'test-run',
+        capabilityToken: 'token',
+        workingDir: '/test/project',
+        autonomous: false,
+        workerType: 'rev'
+      });
+
+      const result = runner.buildCommand(undefined, false);
+      expect(result.args).toEqual(['--repl']);
+      expect(result.fullCommand).toBe('rev --repl');
+    });
+
+    it('should build Rev command with provider, model, and prompt', () => {
       const runner = new GenericRunner({
         runId: 'test-run',
         capabilityToken: 'token',
@@ -271,6 +285,22 @@ describe('GenericRunner', () => {
       const result = runner.buildCommand('analyze this code', false);
       expect(result.args).toEqual(['--llm-provider', 'ollama', '--model', 'glm-4.7:cloud', 'analyze this code']);
       expect(result.fullCommand).toBe('rev --llm-provider ollama --model glm-4.7:cloud analyze this code');
+    });
+
+    it('should add --trust-workspace in autonomous mode', () => {
+      const runner = new GenericRunner({
+        runId: 'test-run',
+        capabilityToken: 'token',
+        workingDir: '/test/project',
+        autonomous: true,
+        workerType: 'rev',
+        provider: 'ollama',
+        model: 'glm-4.7:cloud'
+      });
+
+      const result = runner.buildCommand('fix this bug', true);
+      expect(result.args).toEqual(['--llm-provider', 'ollama', '--model', 'glm-4.7:cloud', '--trust-workspace', 'fix this bug']);
+      expect(result.fullCommand).toBe('rev --llm-provider ollama --model glm-4.7:cloud --trust-workspace fix this bug');
     });
 
     it('should handle empty command for autonomous mode', () => {

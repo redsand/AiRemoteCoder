@@ -187,8 +187,11 @@ export class GenericRunner extends BaseRunner {
 
   /**
    * Build Rev command
-   * Usage: rev [--llm-provider <provider>] [--model <model>] <prompt>
+   * Usage: rev [--llm-provider <provider>] [--model <model>] [--repl] [--trust-workspace] <prompt>
    * Providers: ollama, claude, etc.
+   * Flags:
+   *  - --repl: Run in interactive mode (used when no prompt provided)
+   *  - --trust-workspace: Skip trust notice (useful in autonomous mode)
    */
   private buildRevCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
     const args = [];
@@ -201,6 +204,16 @@ export class GenericRunner extends BaseRunner {
     // Add model if specified
     if (this.model) {
       args.push('--model', this.model);
+    }
+
+    // In autonomous mode, automatically trust the workspace
+    if (autonomous) {
+      args.push('--trust-workspace');
+    }
+
+    // If no command provided, run in REPL mode for continuous interaction
+    if (!command) {
+      args.push('--repl');
     }
 
     // Add command/prompt if provided
