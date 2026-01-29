@@ -35,7 +35,24 @@
       "Bash(ai-runner:*)",
       "Bash(timeout 3 claude:*)",
       "Bash(echo:*)",
-      "Bash(timeout 10 claude:*)"
+      "Bash(timeout 10 claude:*)",
+      "Bash(SESSION_ID=\"550e8400-e29b-41d4-a716-446655440000\")",
+      "Bash(claude --print --permission-mode acceptEdits --session-id \"$SESSION_ID\" \"Create hello world in JavaScript\")",
+      "Bash(claude --print:*)",
+      "Bash(__NEW_LINE_3a5f8b61751af43e__ echo \"=== Command 1: Create hello world ===\")",
+      "Bash(__NEW_LINE_266e696b83ea3474__ echo \"\")",
+      "Bash(__NEW_LINE_7434cb9398a9b6ac__ echo \"=== Command 1: Create hello world ===\")",
+      "Bash(__NEW_LINE_03803b534597bec8__ echo \"\")",
+      "Bash(__NEW_LINE_1f20107575718ff7__ echo \"=== Command 1: Create hello world ===\")",
+      "Bash(/c/Users/TimShelton/.local/bin/claude --print --permission-mode acceptEdits --session-id \"$SESSION_ID\" \"Create a hello world function in JavaScript\")",
+      "Bash(__NEW_LINE_0057ba64fc018466__ echo \"\")",
+      "Bash(/c/Users/TimShelton/.local/bin/claude --print --permission-mode acceptEdits --session-id \"$SESSION_ID\" \"Now add error handling to that function\")",
+      "Bash(SESSION_ID=\"550e8400-e29b-41d4-a716-446655440000\" echo \"=== Command 1: Create hello world ===\" /c/Users/TimShelton/.local/bin/claude --print --permission-mode acceptEdits --session-id \"$SESSION_ID\" \"Create a hello world function in JavaScript\" 2)",
+      "Bash(1 cat /tmp/claude1.txt)",
+      "Bash(git -C /c/Users/TimShelton/source/repos/AiRemoteCoder log --oneline)",
+      "Bash(dir:*)",
+      "Bash(git log:*)",
+      "Bash(tree:*)"
     ]
   }
 }

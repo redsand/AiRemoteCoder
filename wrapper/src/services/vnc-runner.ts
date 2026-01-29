@@ -1,6 +1,8 @@
 import { BaseRunner, RunnerOptions, WorkerCommandResult } from './base-runner.js';
 import { spawn, execSync, ChildProcess } from 'child_process';
 import { ackCommand } from './gateway-client.js';
+import { config } from '../config.js';
+import { join } from 'path';
 
 /**
  * VNC Runner Options
@@ -71,77 +73,38 @@ export class VncRunner extends BaseRunner {
   }
 
   /**
-   * Get the CLI command for VNC server
-   * Supports x11vnc (most common) and falls back to vncserver
+   * Get the CLI command for Python interpreter
    */
   getCommand(): string {
-    // Import execSync once at the top to avoid repeated require calls
-    try {
-      execSync('which x11vnc', { stdio: 'ignore' });
-      return 'x11vnc';
-    } catch {
-      // Fall back to vncserver
-      try {
-        execSync('which vncserver', { stdio: 'ignore' });
-        return 'vncserver';
-      } catch {
-        // If neither is found, throw error instead of silently failing
-        throw new Error('Neither x11vnc nor vncserver found. Please install VNC server: sudo apt-get install x11vnc OR tigervnc-server');
-      }
-    }
+    // Use python3 on Unix/Mac, python on Windows
+    return process.platform === 'win32' ? 'python' : 'python3';
   }
 
   /**
-   * Build VNC server command arguments
+   * Build Python VNC server command arguments
    */
   buildCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
-    const args: string[] = [];
-    const cmd = this.getCommand();
+    const scriptPath = join(__dirname, 'python-vnc', 'vnc_runner.py');
 
-    if (cmd === 'x11vnc') {
-      // x11vnc arguments for screen sharing
-      // Note: DISPLAY must be set or default to :0
-      const display = process.env.DISPLAY || ':0';
-      if (!display) {
-        throw new Error('DISPLAY environment variable not set. Cannot start VNC server without a display.');
-      }
-      args.push('-display', display);
-      args.push('-listen', '127.0.0.1');  // Listen on localhost
-      args.push('-port', this.vncPort.toString());
-      args.push('-forever');  // Keep running until stopped
-      args.push('-nopw');     // No password (connection should be secured at gateway level)
-      args.push('-shared');   // Allow multiple concurrent connections
-      args.push('-bg');       // Run in background
+    const [width, height] = this.resolution.split('x');
 
-      if (this.displayMode === 'window' && this.windowTitle) {
-        args.push('-windowid', this.windowTitle);
-      }
+    const args: string[] = [
+      scriptPath,
+      '--run-id', (this as any).auth.runId,
+      '--capability-token', (this as any).auth.capabilityToken,
+      '--gateway-url', config.gatewayUrl,
+      '--width', width || '1920',
+      '--height', height || '1080',
+      '--framerate', '30',
+      '--display-mode', this.displayMode,
+    ];
 
-      // Performance settings
-      args.push('-threads');
-      args.push('-wait', '100');
-      args.push('-rfbwait', '100');
-
-      // Disable clipboard sync for security
-      args.push('-noclipboard');
-
-      // Add resolution if specified
-      if (this.resolution) {
-        const [width, height] = this.resolution.split('x');
-        if (width && height) {
-          args.push('-scale', `${width}x${height}`);
-        }
-      }
-
-    } else if (cmd === 'vncserver') {
-      // vncserver arguments (TigerVNC or TightVNC)
-      const displayNum = (this.vncPort - 5900).toString();
-      args.push(`:${displayNum}`);
-      args.push('-geometry', this.resolution);
-      args.push('-depth', '24');
-      args.push('-pixelformat', 'rgb888');
+    // Add insecure flag if self-signed certificates allowed
+    if (config.allowSelfSigned) {
+      args.push('--insecure');
     }
 
+    const cmd = this.getCommand();
     const fullCommand = `${cmd} ${args.join(' ')}`;
 
     return {
