@@ -32,7 +32,10 @@
       "Bash(grep:*)",
       "Bash(npx tsc:*)",
       "Bash(ls:*)",
-      "Bash(ai-runner:*)"
+      "Bash(ai-runner:*)",
+      "Bash(timeout 3 claude:*)",
+      "Bash(echo:*)",
+      "Bash(timeout 10 claude:*)"
     ]
   }
 }
