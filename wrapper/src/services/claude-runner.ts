@@ -42,36 +42,43 @@ export class ClaudeRunner extends BaseRunner {
   }
 
   /**
-   * Build Claude command arguments based on mode
+   * Build Claude Code command arguments
    *
-   * Claude Code requires specific flags to prevent getting stuck at permission/trust prompts:
-   * - --dangerously-skip-permissions: Skip the workspace trust check
+   * Claude Code command structure:
+   * Usage: claude [options] [command] [prompt]
    *
-   * When a prompt is provided via __INPUT__, we pass it as a positional argument:
-   * - claude --dangerously-skip-permissions "Your task here"
+   * Key flags:
+   * - --permission-mode acceptEdits: Auto-accept edits without prompting
+   * - --model <model>: Specify model to use (default from env)
+   * - --output-format text: Use text output format (not JSON)
    *
-   * This allows Claude to work within the ai-runner workflow without interruption.
+   * Example: claude --permission-mode acceptEdits --output-format text "Your task description"
+   *
+   * This matches Rev's pattern: worker [flags] "prompt"
    */
   buildCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
-    let claudeArgs: string[] = [];
-    let fullCommand: string;
+    const args: string[] = [];
 
-    // Always use --dangerously-skip-permissions to prevent permission prompts
-    // This is essential when running through ai-runner with piped I/O
-    claudeArgs.push('--dangerously-skip-permissions');
+    // Always use --permission-mode acceptEdits to prevent permission prompts
+    // This is the Claude equivalent of Rev's --trust-workspace
+    args.push('--permission-mode', 'acceptEdits');
 
-    if (command) {
-      // When we have a prompt, pass it as a positional argument
-      // Format: claude --dangerously-skip-permissions "Your task"
-      claudeArgs.push(command);
-      fullCommand = `${this.getCommand()} ${claudeArgs.join(' ')}`;
-    } else {
-      // No prompt provided - Claude will start in interactive mode
-      // but with permissions already skipped
-      fullCommand = `${this.getCommand()} ${claudeArgs.join(' ')}`;
+    // Use text output format for consistency
+    args.push('--output-format', 'text');
+
+    // Add model if specified
+    if (this.model) {
+      args.push('--model', this.model);
     }
 
-    return { args: claudeArgs, fullCommand };
+    // Add the prompt as positional argument if provided
+    if (command) {
+      args.push(command);
+    }
+
+    const fullCommand = `${this.getCommand()} ${args.join(' ')}`.trim();
+
+    return { args, fullCommand };
   }
 
   /**

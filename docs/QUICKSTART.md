@@ -39,91 +39,95 @@ Note: You may see a certificate warning since we use self-signed certificates fo
 
 The gateway provides RESTful API endpoints organized by feature:
 
-### Authentication Endpoints
+### Health Endpoints
 
-#### POST `/api/auth/register`
-Register a new user account.
-
-**Request Body:**
-```json
-{
-  "username": "string",
-  "email": "string",
-  "password": "string"
-}
-```
-
-**Response (201):**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "string",
-    "username": "string",
-    "email": "string",
-    "createdAt": "string"
-  }
-}
-```
-
-#### POST `/api/auth/login`
-Authenticate and receive a session token.
-
-**Request Body:**
-```json
-{
-  "email": "string",
-  "password": "string"
-}
-```
+#### GET `/api/health`
+Check gateway health status (no authentication required).
 
 **Response (200):**
 ```json
 {
-  "success": true,
-  "data": {
-    "token": "string",
-    "user": {
-      "id": "string",
-      "username": "string",
-      "email": "string"
-    }
-  }
+  "status": "healthy",
+  "version": "string",
+  "uptime": "number",
+  "timestamp": "string"
 }
 ```
 
-#### POST `/api/auth/logout`
-Invalidate the current session.
+### Alert Management Endpoints
+
+#### GET `/api/alerts`
+List all alert rules.
 
 **Headers:**
 ```
 Authorization: Bearer <token>
 ```
 
+**Query Parameters:**
+- `active` (optional): Filter by active status (`true`|`false`)
+- `severity` (optional): Filter by severity level
+- `page` (optional): Page number for pagination
+- `limit` (optional): Items per page
+
 **Response (200):**
 ```json
 {
   "success": true,
-  "message": "Logged out successfully"
+  "data": [...]
 }
 ```
 
-#### POST `/api/auth/refresh`
-Refresh an expired authentication token.
+#### POST `/api/alerts`
+Create a new alert rule.
 
 **Headers:**
 ```
 Authorization: Bearer <token>
 ```
 
-**Response (200):**
+**Request Body:**
 ```json
 {
-  "success": true,
-  "data": {
-    "token": "string"
-  }
+  "name": "string",
+  "description": "string",
+  "severity": "string",
+  "enabled": true,
+  "conditions": {...},
+  "actions": ["string"]
 }
+```
+
+#### GET `/api/alerts/:id`
+Get details for a specific alert rule.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+#### PUT `/api/alerts/:id`
+Update an alert rule.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+#### DELETE `/api/alerts/:id`
+Delete an alert rule.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+#### GET `/api/alerts/history`
+View alert trigger history.
+
+**Headers:**
+```
+Authorization: Bearer <token>
 ```
 
 ### Client Management Endpoints
@@ -144,20 +148,7 @@ Authorization: Bearer <token>
 ```json
 {
   "success": true,
-  "data": [
-    {
-      "id": "string",
-      "name": "string",
-      "status": "connected|disconnected",
-      "lastSeen": "string",
-      "ipAddress": "string"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 100
-  }
+  "data": [...]
 }
 ```
 
@@ -169,54 +160,12 @@ Register a new client.
 Authorization: Bearer <token>
 ```
 
-**Request Body:**
-```json
-{
-  "name": "string",
-  "description": "string",
-  "capabilities": ["string"]
-}
-```
-
-**Response (201):**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "string",
-    "name": "string",
-    "apiKey": "string",
-    "secret": "string",
-    "status": "connected",
-    "createdAt": "string"
-  }
-}
-```
-
 #### GET `/api/clients/:id`
 Get details for a specific client.
 
 **Headers:**
 ```
 Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "string",
-    "name": "string",
-    "description": "string",
-    "status": "connected|disconnected",
-    "capabilities": ["string"],
-    "lastSeen": "string",
-    "ipAddress": "string",
-    "createdAt": "string",
-    "updatedAt": "string"
-  }
-}
 ```
 
 #### PUT `/api/clients/:id`
@@ -227,30 +176,6 @@ Update client information.
 Authorization: Bearer <token>
 ```
 
-**Request Body:**
-```json
-{
-  "name": "string",
-  "description": "string",
-  "capabilities": ["string"]
-}
-```
-
-**Response (200):**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "string",
-    "name": "string",
-    "description": "string",
-    "status": "connected",
-    "capabilities": ["string"],
-    "updatedAt": "string"
-  }
-}
-```
-
 #### DELETE `/api/clients/:id`
 Unregister a client.
 
@@ -259,18 +184,36 @@ Unregister a client.
 Authorization: Bearer <token>
 ```
 
+### Model Management Endpoints
+
+#### GET `/api/models`
+List all available models.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
 **Response (200):**
 ```json
 {
   "success": true,
-  "message": "Client deleted successfully"
+  "data": [...]
 }
 ```
 
-### Alert Management Endpoints
+#### GET `/api/models/:id`
+Get details for a specific model.
 
-#### GET `/api/alerts`
-List all alert rules.
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+### Session Management Endpoints
+
+#### GET `/api/sessions`
+List all active sessions.
 
 **Headers:**
 ```
@@ -278,8 +221,8 @@ Authorization: Bearer <token>
 ```
 
 **Query Parameters:**
-- `active` (optional): Filter by active status (`true`|`false`)
-- `severity` (optional): Filter by severity level (`low`|`medium`|`high`|`critical`)
+- `clientId` (optional): Filter by client ID
+- `active` (optional): Filter by active status
 - `page` (optional): Page number for pagination
 - `limit` (optional): Items per page
 
@@ -287,176 +230,30 @@ Authorization: Bearer <token>
 ```json
 {
   "success": true,
-  "data": [
-    {
-      "id": "string",
-      "name": "string",
-      "description": "string",
-      "severity": "low|medium|high|critical",
-      "enabled": true,
-      "conditions": {
-        "metric": "string",
-        "operator": "gt|lt|eq|gte|lte",
-        "threshold": "number",
-        "duration": "number"
-      },
-      "actions": ["string"],
-      "createdAt": "string"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 10
-  }
+  "data": [...]
 }
 ```
 
-#### POST `/api/alerts`
-Create a new alert rule.
+#### GET `/api/sessions/:id`
+Get details for a specific session.
 
 **Headers:**
 ```
 Authorization: Bearer <token>
 ```
 
-**Request Body:**
-```json
-{
-  "name": "string",
-  "description": "string",
-  "severity": "low|medium|high|critical",
-  "enabled": true,
-  "conditions": {
-    "metric": "string",
-    "operator": "gt|lt|eq|gte|lte",
-    "threshold": "number",
-    "duration": "number"
-  },
-  "actions": ["email", "webhook", "log"]
-}
-```
-
-**Response (201):**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "string",
-    "name": "string",
-    "description": "string",
-    "severity": "high",
-    "enabled": true,
-    "conditions": {
-      "metric": "string",
-      "operator": "gt",
-      "threshold": 90,
-      "duration": 300
-    },
-    "actions": ["email", "webhook", "log"],
-    "createdAt": "string"
-  }
-}
-```
-
-#### GET `/api/alerts/:id`
-Get details for a specific alert rule.
+#### DELETE `/api/sessions/:id`
+Terminate a session.
 
 **Headers:**
 ```
 Authorization: Bearer <token>
 ```
 
-**Response (200):**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "string",
-    "name": "string",
-    "description": "string",
-    "severity": "high",
-    "enabled": true,
-    "conditions": {
-      "metric": "string",
-      "operator": "gt",
-      "threshold": 90,
-      "duration": 300
-    },
-    "actions": ["email", "webhook", "log"],
-    "triggeredCount": 5,
-    "lastTriggered": "string",
-    "createdAt": "string",
-    "updatedAt": "string"
-  }
-}
-```
+### Wrapper Management Endpoints
 
-#### PUT `/api/alerts/:id`
-Update an alert rule.
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "name": "string",
-  "description": "string",
-  "severity": "high",
-  "enabled": true,
-  "conditions": {
-    "metric": "string",
-    "operator": "gt",
-    "threshold": 95,
-    "duration": 300
-  },
-  "actions": ["email", "webhook", "log"]
-}
-```
-
-**Response (200):**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "string",
-    "name": "string",
-    "description": "string",
-    "severity": "high",
-    "enabled": true,
-    "conditions": {
-      "metric": "string",
-      "operator": "gt",
-      "threshold": 95,
-      "duration": 300
-    },
-    "actions": ["email", "webhook", "log"],
-    "updatedAt": "string"
-  }
-}
-```
-
-#### DELETE `/api/alerts/:id`
-Delete an alert rule.
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "success": true,
-  "message": "Alert rule deleted successfully"
-}
-```
-
-#### GET `/api/alerts/history`
-View alert trigger history.
+#### GET `/api/wrappers`
+List all registered wrappers.
 
 **Headers:**
 ```
@@ -464,9 +261,7 @@ Authorization: Bearer <token>
 ```
 
 **Query Parameters:**
-- `ruleId` (optional): Filter by alert rule ID
-- `startDate` (optional): Filter by start date (ISO 8601)
-- `endDate` (optional): Filter by end date (ISO 8601)
+- `status` (optional): Filter by status
 - `page` (optional): Page number for pagination
 - `limit` (optional): Items per page
 
@@ -474,74 +269,48 @@ Authorization: Bearer <token>
 ```json
 {
   "success": true,
-  "data": [
-    {
-      "id": "string",
-      "ruleId": "string",
-      "ruleName": "string",
-      "severity": "high",
-      "triggeredAt": "string",
-      "resolvedAt": "string",
-      "value": "number",
-      "message": "string"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 50
-  }
+  "data": [...]
 }
 ```
 
-### Health & Status Endpoints
-
-#### GET `/api/health`
-Check gateway health status.
-
-**Response (200):**
-```json
-{
-  "status": "healthy",
-  "version": "1.1.0",
-  "uptime": "string",
-  "timestamp": "string"
-}
-```
-
-#### GET `/api/status`
-Get detailed system status.
+#### POST `/api/wrappers`
+Register a new wrapper.
 
 **Headers:**
 ```
 Authorization: Bearer <token>
 ```
 
-**Response (200):**
-```json
-{
-  "success": true,
-  "data": {
-    "gateway": {
-      "status": "running",
-      "version": "1.1.0",
-      "uptime": "string"
-    },
-    "database": {
-      "status": "connected",
-      "latency": "number"
-    },
-    "clients": {
-      "total": 10,
-      "connected": 8,
-      "disconnected": 2
-    },
-    "alerts": {
-      "active": 5,
-      "triggered24h": 12
-    }
-  }
-}
+#### GET `/api/wrappers/:id`
+Get details for a specific wrapper.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+#### PUT `/api/wrappers/:id`
+Update wrapper configuration.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+#### DELETE `/api/wrappers/:id`
+Unregister a wrapper.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+#### POST `/api/wrappers/:id/heartbeat`
+Send heartbeat for a wrapper.
+
+**Headers:**
+```
+Authorization: Bearer <token>
 ```
 
 ## Authentication

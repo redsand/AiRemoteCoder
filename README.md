@@ -38,13 +38,14 @@ A secure, mobile-friendly gateway for remotely monitoring and assisting Claude C
 
 ## Available Scripts
 
-- `npm run setup` - Install all dependencies across workspaces
+- `npm run setup` - Install dependencies and build all workspaces
 - `npm run dev` - Start gateway and UI in development mode
 - `npm run dev:gateway` - Start only the gateway in development mode
 - `npm run dev:ui` - Start only the UI in development mode
 - `npm run build` - Build all workspaces for production
 - `npm run start` - Start the production server
 - `npm run test` - Run all tests
+- `npm run prune` - Prune old data from the database
 
 ## Architecture
 
