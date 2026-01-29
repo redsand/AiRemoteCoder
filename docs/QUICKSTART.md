@@ -54,6 +54,86 @@ Check gateway health status (no authentication required).
 }
 ```
 
+### Authentication Endpoints
+
+#### POST `/api/auth/register`
+Register a new user account.
+
+**Request Body:**
+```json
+{
+  "username": "string",
+  "email": "string",
+  "password": "string"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "token": "string",
+    "user": {...}
+  }
+}
+```
+
+#### POST `/api/auth/login`
+Authenticate and receive a JWT token.
+
+**Request Body:**
+```json
+{
+  "email": "string",
+  "password": "string"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "token": "string",
+    "user": {...}
+  }
+}
+```
+
+#### POST `/api/auth/refresh`
+Refresh an existing JWT token.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "token": "string"
+  }
+}
+```
+
+#### POST `/api/auth/logout`
+Invalidate the current token.
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Response (200):**
+```json
+{
+  "success": true
+}
+```
+
 ### Alert Management Endpoints
 
 #### GET `/api/alerts`

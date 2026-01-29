@@ -2,11 +2,6 @@
 
 A secure, mobile-friendly gateway for remotely monitoring and assisting Claude Code sessions.
 
-```
-# Claude Code Connect-Back Gateway
-
-A secure, mobile-friendly gateway for remotely monitoring and assisting Claude Code sessions.
-
 ## Setup
 
 1. Install dependencies:

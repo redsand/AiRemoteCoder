@@ -10,24 +10,32 @@ This document outlines the comprehensive test coverage for the Connect-Back Gate
 # All tests (gateway and wrapper)
 npm test
 
-# Gateway tests only
-npm run test -w gateway
+# Run tests for a specific workspace
+cd gateway && npm test
+cd wrapper && npm test
 
-# Wrapper tests only
-npm run test -w wrapper
+# Watch mode (if supported by workspace)
+cd gateway && npm run test:watch
+cd wrapper && npm run test:watch
 
-# UI tests only
-npm run test -w ui
+# Coverage (if supported by workspace)
+cd gateway && npm run test:coverage
+cd wrapper && npm run test:coverage
 
-# Gateway tests with coverage
-npm run test -w gateway -- --coverage
+# Run tests matching a pattern
+cd gateway && npm test -- --grep "pattern"
+cd wrapper && npm test -- --grep "pattern"
 
-# Wrapper tests with coverage
-npm run test -w wrapper -- --coverage
+# Run with verbose output
+cd gateway && npm test -- --reporter=verbose
+cd wrapper && npm test -- --reporter=verbose
 
-# All tests with coverage
-npm run test -w gateway -- --coverage && npm run test -w wrapper -- --coverage
+# Run specific test file
+cd gateway && npm test -- src/utils/crypto.test.ts
+cd wrapper && npm test -- src/services/gateway-client.test.ts
 ```
+
+Note: The root `npm test` command runs all tests across gateway and wrapper workspaces as defined in the root package.json. For workspace-specific test options (coverage, watch mode, etc.), navigate to the workspace directory and check its package.json for available scripts.
 
 ## Test Structure
 

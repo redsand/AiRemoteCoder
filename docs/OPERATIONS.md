@@ -98,7 +98,58 @@ Authenticates a client and returns an API key.
 }
 ```
 
+#### POST `/api/auth/register`
+Register a new client and return API credentials.
 
+**Request Body:**
+```json
+{
+  "name": "client-name"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "id": "client-uuid",
+  "name": "client-name",
+  "api_key": "sk-..."
+}
+```
+
+**Response (409 Conflict):**
+```json
+{
+  "error": "Client already exists"
+}
+```
+
+#### POST `/api/auth/verify`
+Verify an API key is valid.
+
+**Request Body:**
+```json
+{
+  "api_key": "sk-..."
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "valid": true,
+  "client_id": "client-uuid",
+  "client_name": "client-name"
+}
+```
+
+**Response (401 Unauthorized):**
+```json
+{
+  "valid": false,
+  "error": "Invalid API key"
+}
+```
 
 ---
 

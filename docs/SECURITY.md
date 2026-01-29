@@ -21,51 +21,141 @@
 3. Wrapper hosts run in trusted environments
 4. Admin credentials are stored securely (hashed passwords, encrypted TOTP secrets)
 
-## Authentication Architecture
+## Authentication Mechanisms
 
-### Authentication Sources
+The gateway implements two primary authentication middleware functions in `gateway/src/middleware/auth.ts`:
 
-The gateway supports three authentication sources, each with different trust levels and use cases:
+### 1. Wrapper Authentication (`wrapperAuth`)
 
-#### 1. Cloudflare Access (cloudflare)
-- **Trust Level**: High
-- **Use Case**: Admin/operator access via web UI
-- **Mechanism**: JWT tokens signed by Cloudflare
-- **Validation**: Token signature verification, audience/issuer checks
-- **User Info**: Extracted from CF Access JWT (email, user identity)
+Used for agent-to-gateway communication with HMAC signature verification and replay protection.
 
-#### 2. Session-based (session)
-- **Trust Level**: Medium
-- **Use Case**: Web UI sessions after initial login
-- **Mechanism**: HTTP cookies with encrypted session tokens
-- **Validation**: Session token verification against database
-- **User Info**: Retrieved from active session record
+**Required Headers:**
+- `X-Signature`: HMAC signature of the request
+- `X-Timestamp`: Unix timestamp for replay prevention
+- `X-Nonce`: Unique value for replay protection
+- `X-Run-ID` (optional): Run identifier for capability-based authorization
+- `X-Capability-Token` (optional): Token authorizing access to a specific run
 
-#### 3. Wrapper Authentication (wrapper)
-- **Trust Level**: Conditional (depends on run authorization)
-- **Use Case**: Wrapper-to-gateway communication for run updates
-- **Mechanism**: Shared secret + HMAC signatures
-- **Validation**: Signature verification, timestamp validation
-- **User Info**: Limited to run-specific authorization context
+**Validation Steps:**
+1. Verifies all required authentication headers are present
+2. Checks timestamp validity (within configured tolerance for clock skew)
+3. Validates nonce against database to prevent replay attacks
+4. Calculates SHA-256 hash of request body
+5. Verifies HMAC signature using shared secrets
+6. If run ID and capability token provided, validates against stored run data
+7. Stores nonce in database to prevent future reuse
+
+**Signature Computation:**
+The signature is verified using cryptographic utilities that hash the request body and validate the HMAC signature against expected values including:
+- HTTP method
+- Request path
+- Body hash (SHA-256)
+- Timestamp
+- Nonce
+- Run ID (if provided)
+- Capability token (if provided)
+
+**User Context:**
+Authenticated wrapper requests receive user context:
+```typescript
+{
+  id: 'wrapper',
+  username: 'wrapper',
+  role: 'operator',
+  source: 'wrapper'
+}
+```
+
+### 2. UI Authentication (`uiAuth`)
+
+Supports both Cloudflare Access and local session-based authentication for web UI access.
+
+**Cloudflare Access Flow:**
+1. Checks for `CF-Access-Authenticated-User-Email` header
+2. Checks for `CF-Access-Jwt-Assertion` header
+3. If Cloudflare Access team is configured and headers present, trusts the authentication
+4. User receives role 'operator' (configurable per-user in production)
+
+**Session-based Flow:**
+1. Checks for session cookie or `Authorization: Bearer <token>` header
+2. Queries database for valid session:
+   ```sql
+   SELECT s.*, u.username, u.role
+   FROM sessions s
+   JOIN users u ON s.user_id = u.id
+   WHERE s.id = ? AND s.expires_at > unixepoch()
+   ```
+3. Validates session hasn't expired
+4. Retrieves user information from joined users table
+5. Attaches user context to request
+
+**User Context:**
+```typescript
+{
+  id: string,           // User ID from database or cf:email format
+  username: string,     // Username or email
+  role: 'admin' | 'operator' | 'viewer',
+  source: 'cloudflare' | 'session'
+}
+```
 
 ### Authenticated Request Interface
 
-All authenticated requests extend the FastifyRequest interface with user information:
+All authenticated requests extend the FastifyRequest interface:
 
 ```typescript
 interface AuthenticatedRequest extends FastifyRequest {
   user?: {
-    id: string;           // Unique user identifier
-    username: string;     // Display username/email
-    role: 'admin' | 'operator' | 'viewer';  // User role
-    source: 'cloudflare' | 'session' | 'wrapper';  // Auth source
+    id: string;
+    username: string;
+    role: 'admin' | 'operator' | 'viewer';
+    source: 'cloudflare' | 'session' | 'wrapper';
   };
   runAuth?: {
-    runId: string;        // Authorized run identifier
-    capabilities: string[];  // Permitted actions
+    runId: string;
+    capabilityToken: string;
   };
 }
 ```
+
+### Role-Based Authorization
+
+The `requireRole()` function provides role-based access control:
+
+```typescript
+requireRole('admin', 'operator')  // Allows admin or operator
+requireRole('admin')              // Admin only
+```
+
+- Returns a middleware function that checks `request.user.role`
+- Returns 401 if user not authenticated
+- Returns 403 if user role not in allowed roles
+
+### Audit Logging
+
+The `logAudit()` function records security-relevant events:
+
+```typescript
+logAudit(
+  userId,           // User ID or undefined
+  action,           // Action performed
+  targetType,       // Type of resource affected
+  targetId,         // ID of resource affected
+  details,          // Additional context object
+  ipAddress         // Request IP address
+)
+```
+
+Events are stored in the `audit_log` table for security monitoring and compliance.
+
+### Raw Body Plugin
+
+The `rawBodyPlugin` captures request bodies for signature verification:
+
+- Registers a content type parser for `application/json`
+- Stores raw body string on request object for HMAC computation
+- Parses JSON normally for route handlers
+- Required for wrapper authentication signature verification
 
 ## Authentication Middleware Implementation
 
