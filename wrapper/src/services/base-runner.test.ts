@@ -61,7 +61,7 @@ class TestRunner extends BaseRunner {
   }
 
   // Expose protected methods for testing
-  public exposeDetectBlockingPrompt(text: string): boolean {
+  public exposeDetectBlockingPrompt(text: string): { isPrompt: boolean; type?: 'yes' | 'confirm' } {
     return (this as any).detectBlockingPrompt(text);
   }
 

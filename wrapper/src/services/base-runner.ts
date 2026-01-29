@@ -21,8 +21,9 @@ export interface RunnerOptions {
   workingDir?: string;
   autonomous?: boolean;
   resumeFrom?: string;
-  model?: string; // For workers that support model selection (Ollama, Gemini)
+  model?: string; // For workers that support model selection (Ollama, Gemini, Rev)
   integration?: string; // For ollama-launch: specifies the IDE integration (claude, codex, opencode, droid)
+  provider?: string; // For Rev: specifies the provider (ollama, claude, etc.)
 }
 
 export interface WorkerCommandResult {
@@ -52,6 +53,7 @@ export abstract class BaseRunner extends EventEmitter {
   protected resumeFrom?: string;
   protected model?: string;
   protected integration?: string; // For ollama-launch: IDE integration name
+  protected provider?: string; // For Rev: provider name (ollama, claude, etc.)
   private processedCommandIds: Set<string> = new Set(); // Track processed commands to prevent duplicates
   private processedCommandExpire: Map<string, NodeJS.Timeout> = new Map(); // Track expiration timers
   private lastOutputTime = 0; // Track when we last received output
@@ -70,6 +72,7 @@ export abstract class BaseRunner extends EventEmitter {
     this.resumeFrom = options.resumeFrom;
     this.model = options.model;
     this.integration = options.integration;
+    this.provider = options.provider;
 
     // Setup log directory
     const runDir = join(config.runsDir, options.runId);

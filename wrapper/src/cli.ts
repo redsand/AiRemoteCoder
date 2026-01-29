@@ -364,8 +364,9 @@ program
   .option('-c, --cwd <path>', 'Working directory')
   .option('-p, --prompt <prompt>', 'Initial prompt (optional)')
   .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev)', 'claude')
-  .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, etc.)')
+  .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, Rev, etc.)')
   .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
+  .option('--provider <provider>', 'Provider for Rev (ollama, claude, etc.) - for rev only')
   .option('--autonomous', 'Run in fully autonomous mode', true)
   .option('--no-autonomous', 'Run in interactive mode')
   .action(async (options) => {
@@ -422,7 +423,8 @@ program
           workingDir: options.cwd,
           autonomous: options.autonomous,
           model: options.model,
-          integration: options.integration
+          integration: options.integration,
+          provider: options.provider
         });
       }
 
@@ -459,8 +461,9 @@ program
   .option('--cmd <command>', 'Worker command/prompt')
   .option('--cwd <path>', 'Working directory (defaults to current)')
   .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev)', 'claude')
-  .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, etc.)')
+  .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, Rev, etc.)')
   .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
+  .option('--provider <provider>', 'Provider for Rev (ollama, claude, etc.) - for rev only')
   .option('--autonomous', 'Run in autonomous mode')
   .action(async (options) => {
     try {
@@ -509,7 +512,8 @@ program
         workingDir: options.cwd,
         autonomous: options.autonomous,
         model: options.model,
-        integration: options.integration
+        integration: options.integration,
+        provider: options.provider
       });
     }
 

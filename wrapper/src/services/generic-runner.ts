@@ -13,6 +13,8 @@ export interface GenericRunnerOptions extends RunnerOptions {
   buildCommandFn?: (command?: string, autonomous?: boolean, model?: string) => WorkerCommandResult;
   // Optional: integration for ollama-launch (claude, codex, opencode, droid)
   integration?: string;
+  // Optional: provider for rev (ollama, claude, etc.)
+  provider?: string;
 }
 
 /**
@@ -33,6 +35,10 @@ export class GenericRunner extends BaseRunner {
     // Set integration from options, with fallback to base runner's integration
     if (options.integration) {
       this.integration = options.integration;
+    }
+    // Set provider from options, with fallback to base runner's provider
+    if (options.provider) {
+      this.provider = options.provider;
     }
   }
 
@@ -181,13 +187,29 @@ export class GenericRunner extends BaseRunner {
 
   /**
    * Build Rev command
-   * Usage: rev <prompt>
+   * Usage: rev [--provider <provider>] [--model <model>] <prompt>
+   * Providers: ollama, claude, etc.
    */
   private buildRevCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
-    const args = command ? [command] : [];
+    const args = [];
 
-    const fullCommand = command
-      ? `${this.getCommand()} ${command}`
+    // Add provider if specified
+    if (this.provider) {
+      args.push('--provider', this.provider);
+    }
+
+    // Add model if specified
+    if (this.model) {
+      args.push('--model', this.model);
+    }
+
+    // Add command/prompt if provided
+    if (command) {
+      args.push(command);
+    }
+
+    const fullCommand = args.length > 0
+      ? `${this.getCommand()} ${args.join(' ')}`
       : this.getCommand();
 
     return { args, fullCommand };
@@ -226,10 +248,17 @@ export class GenericRunner extends BaseRunner {
 
       case 'rev':
         // Rev-specific env vars
-        return {
+        const revEnv: NodeJS.ProcessEnv = {
           ...baseEnv,
           REV_API_KEY: process.env.REV_API_KEY || ''
         };
+
+        // Add provider-specific env vars
+        if (this.provider === 'ollama') {
+          revEnv.OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
+        }
+
+        return revEnv;
 
       default:
         return baseEnv;

@@ -53,6 +53,12 @@ const ollamaIntegrations = [
   { value: 'droid', label: 'Droid' },
 ];
 
+const revProviders = [
+  { value: 'ollama', label: 'Ollama' },
+  { value: 'claude', label: 'Claude' },
+  { value: 'gemini', label: 'Gemini' },
+];
+
 const ollamaModels = [
   { value: 'claude-opus', label: 'Claude Opus' },
   { value: 'claude-sonnet', label: 'Claude Sonnet' },
@@ -87,6 +93,7 @@ export function Runs({ user }: Props) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createWorkerType, setCreateWorkerType] = useState('claude');
   const [createIntegration, setCreateIntegration] = useState('claude');
+  const [createProvider, setCreateProvider] = useState('');
   const [createModel, setCreateModel] = useState('');
   const [createCustomModel, setCreateCustomModel] = useState('');
   const [createCommand, setCreateCommand] = useState('');
@@ -225,6 +232,10 @@ export function Runs({ user }: Props) {
         requestBody.integration = createIntegration;
       }
 
+      if (createWorkerType === 'rev' && createProvider) {
+        requestBody.provider = createProvider;
+      }
+
       const res = await fetch('/api/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -241,6 +252,10 @@ export function Runs({ user }: Props) {
 
         if (createWorkerType === 'ollama-launch') {
           cmd += ` --integration ${createIntegration}`;
+        }
+
+        if (createWorkerType === 'rev' && createProvider) {
+          cmd += ` --provider ${createProvider}`;
         }
 
         if (model) {
@@ -263,6 +278,7 @@ export function Runs({ user }: Props) {
         // Reset form
         setCreateWorkerType('claude');
         setCreateIntegration('claude');
+        setCreateProvider('');
         setCreateModel('');
         setCreateCustomModel('');
         setCreateCommand('');
@@ -278,9 +294,10 @@ export function Runs({ user }: Props) {
     }
   };
 
-  const supportsModelSelection = createWorkerType === 'ollama-launch' || createWorkerType === 'gemini';
+  const supportsModelSelection = createWorkerType === 'ollama-launch' || createWorkerType === 'gemini' || createWorkerType === 'rev';
   const supportsIntegrationSelection = createWorkerType === 'ollama-launch';
-  const availableModels = createWorkerType === 'ollama-launch' || createWorkerType === 'gemini' ?
+  const supportsProviderSelection = createWorkerType === 'rev';
+  const availableModels = createWorkerType === 'ollama-launch' || createWorkerType === 'gemini' || createWorkerType === 'rev' ?
                          (createWorkerType === 'gemini' ? geminiModels : ollamaModels) : [];
 
   // Toggle run selection
@@ -526,6 +543,7 @@ export function Runs({ user }: Props) {
                 onChange={(e) => {
                   setCreateWorkerType(e.target.value);
                   setCreateIntegration('claude');
+                  setCreateProvider('');
                   setCreateModel('');
                   setCreateCustomModel('');
                 }}
@@ -559,7 +577,27 @@ export function Runs({ user }: Props) {
               </div>
             )}
 
-            {/* Model Selection (for Ollama Launch/Gemini) */}
+            {/* Provider Selection (for Rev) */}
+            {supportsProviderSelection && (
+              <div>
+                <label className="form-label">Provider</label>
+                <select
+                  value={createProvider}
+                  onChange={(e) => setCreateProvider(e.target.value)}
+                  className="form-input"
+                  style={{ cursor: 'pointer' }}
+                >
+                  <option value="">Select Provider</option>
+                  {revProviders.map((provider) => (
+                    <option key={provider.value} value={provider.value}>
+                      {provider.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Model Selection (for Ollama Launch/Gemini/Rev) */}
             {supportsModelSelection && (
               <div>
                 <label className="form-label">Model</label>

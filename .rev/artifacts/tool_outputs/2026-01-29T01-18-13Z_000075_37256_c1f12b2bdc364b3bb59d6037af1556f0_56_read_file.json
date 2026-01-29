@@ -1,0 +1,22 @@
+{
+  "schema_version": "tool_output@1",
+  "created_at": "2026-01-29T01:18:13Z",
+  "tool": "read_file",
+  "agent_name": "ResearchAgent",
+  "session_id": "c1f12b2bdc364b3bb59d6037af1556f0",
+  "task_id": "56",
+  "step_id": 56,
+  "tool_args": {
+    "path": "gateway/src/utils/crypto.ts"
+  },
+  "tool_args_digest": "9c4185aeeea3a87eb5dfedec969f422d6feea3cb90d3da2777751c4d70290f93",
+  "content_type": "text/plain",
+  "output": "import { createHmac, createHash, randomBytes, timingSafeEqual } from 'crypto';\nimport { config } from '../config.js';\n\nexport interface SignatureComponents {\n  method: string;\n  path: string;\n  bodyHash: string;\n  timestamp: number;\n  nonce: string;\n  runId?: string;\n  capabilityToken?: string;\n}\n\n/**\n * Create HMAC signature for wrapper authentication\n */\nexport function createSignature(components: SignatureComponents, secret: string = config.hmacSecret): string {\n  const message = [\n    components.method.toUpperCase(),\n    components.path,\n    components.bodyHash,\n    components.timestamp.toString(),\n    components.nonce,\n    components.runId || '',\n    components.capabilityToken || ''\n  ].join('\\n');\n\n  return createHmac('sha256', secret).update(message).digest('hex');\n}\n\n/**\n * Verify HMAC signature\n */\nexport function verifySignature(\n  signature: string,\n  components: SignatureComponents,\n  secret: string = config.hmacSecret\n): boolean {\n  const expected = createSignature(components, secret);\n\n  // Use timing-safe comparison\n  try {\n    return timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'));\n  } catch {\n    return false;\n  }\n}\n\n/**\n * Hash body content\n */\nexport function hashBody(body: string | Buffer): string {\n  return createHash('sha256').update(body).digest('hex');\n}\n\n/**\n * Generate random nonce\n */\nexport function generateNonce(): string {\n  return randomBytes(16).toString('hex');\n}\n\n/**\n * Generate capability token for a run\n */\nexport function generateCapabilityToken(): string {\n  return randomBytes(32).toString('hex');\n}\n\n/**\n * Generate session token\n */\nexport function generateSessionToken(): string {\n  return randomBytes(48).toString('hex');\n}\n\n/**\n * Check if timestamp is within allowed clock skew\n */\nexport function isTimestampValid(timestamp: number): boolean {\n  const now = Math.floor(Date.now() / 1000);\n  const diff = Math.abs(now - timestamp);\n  return diff <= config.clockSkewSeconds;\n}\n\n/**\n * Redact secrets from text\n */\nexport function redactSecrets(text: string): string {\n  let result = text;\n  for (const pattern of config.secretPatterns) {\n    result = result.replace(pattern, '[REDACTED]');\n  }\n  return result;\n}\n",
+  "redacted": false,
+  "redaction_rules_version": 1,
+  "output_digest_raw": "f9f2163c8c664feec9a6945569b7c1cfaf535e20e0afff89a6f2aa49f931358b",
+  "output_digest_redacted": "60810389bdfc064808a48d56e17623fedb1c0401703c9a366ba2bc4902c956c0",
+  "truncated": false,
+  "byte_len": 2210,
+  "line_count": 95
+}

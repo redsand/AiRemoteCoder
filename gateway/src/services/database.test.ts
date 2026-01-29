@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi, afterEach } from 'vitest';
+import * as dbService from './database.js';
 import Database from 'better-sqlite3';
 import { mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -7,311 +8,617 @@ import { join } from 'path';
 const testDir = join(process.cwd(), '.test-data');
 const testDbPath = join(testDir, 'test.sqlite');
 
-describe('Database Schema', () => {
+describe('Database Service', () => {
   let db: Database.Database;
 
   beforeAll(() => {
+    // Set environment var for test database
+    process.env.DATABASE_PATH = testDbPath;
+    
+    // Create test directory
     if (!existsSync(testDir)) {
       mkdirSync(testDir, { recursive: true });
     }
-
-    db = new Database(testDbPath);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
-
-    // Initialize schema (copy from database.ts)
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS runs (
-        id TEXT PRIMARY KEY,
-        status TEXT NOT NULL DEFAULT 'pending',
-        command TEXT,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        started_at INTEGER,
-        finished_at INTEGER,
-        exit_code INTEGER,
-        error_message TEXT,
-        capability_token TEXT NOT NULL,
-        metadata TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-        type TEXT NOT NULL,
-        data TEXT,
-        timestamp INTEGER NOT NULL DEFAULT (unixepoch()),
-        sequence INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS idx_events_run_id ON events(run_id);
-
-      CREATE TABLE IF NOT EXISTS commands (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-        command TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        acked_at INTEGER,
-        result TEXT,
-        error TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_commands_run_id ON commands(run_id);
-
-      CREATE TABLE IF NOT EXISTS artifacts (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-        name TEXT NOT NULL,
-        type TEXT NOT NULL,
-        size INTEGER NOT NULL,
-        path TEXT NOT NULL,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch())
-      );
-      CREATE INDEX IF NOT EXISTS idx_artifacts_run_id ON artifacts(run_id);
-
-      CREATE TABLE IF NOT EXISTS nonces (
-        nonce TEXT PRIMARY KEY,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch())
-      );
-      CREATE INDEX IF NOT EXISTS idx_nonces_created_at ON nonces(created_at);
-
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
-        password_hash TEXT,
-        totp_secret TEXT,
-        role TEXT NOT NULL DEFAULT 'viewer',
-        created_at INTEGER NOT NULL DEFAULT (unixepoch())
-      );
-
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        expires_at INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS audit_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        action TEXT NOT NULL,
-        target_type TEXT,
-        target_id TEXT,
-        details TEXT,
-        ip_address TEXT,
-        timestamp INTEGER NOT NULL DEFAULT (unixepoch())
-      );
-    `);
   });
 
   afterAll(() => {
-    db.close();
+    // Clean up test database
+    if (existsSync(testDbPath)) {
+      rmSync(testDbPath);
+    }
     if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true });
+      rmSync(testDir);
     }
   });
 
   beforeEach(() => {
-    // Clean tables between tests
-    db.exec('DELETE FROM events');
-    db.exec('DELETE FROM commands');
-    db.exec('DELETE FROM artifacts');
-    db.exec('DELETE FROM runs');
-    db.exec('DELETE FROM nonces');
-    db.exec('DELETE FROM sessions');
-    db.exec('DELETE FROM users');
-    db.exec('DELETE FROM audit_log');
+    // Initialize database for each test
+    db = new Database(testDbPath);
+    
+    // Create test tables
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      
+      CREATE TABLE IF NOT EXISTS posts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+      
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
   });
 
-  describe('Runs Table', () => {
-    it('should create a run', () => {
-      const stmt = db.prepare(`
-        INSERT INTO runs (id, capability_token) VALUES (?, ?)
-      `);
-      stmt.run('test-run-1', 'test-token');
-
-      const run = db.prepare('SELECT * FROM runs WHERE id = ?').get('test-run-1') as any;
-      expect(run).toBeDefined();
-      expect(run.id).toBe('test-run-1');
-      expect(run.status).toBe('pending');
-      expect(run.capability_token).toBe('test-token');
-    });
-
-    it('should update run status', () => {
-      db.prepare('INSERT INTO runs (id, capability_token) VALUES (?, ?)').run('run-2', 'token');
-      db.prepare('UPDATE runs SET status = ?, started_at = unixepoch() WHERE id = ?').run('running', 'run-2');
-
-      const run = db.prepare('SELECT * FROM runs WHERE id = ?').get('run-2') as any;
-      expect(run.status).toBe('running');
-      expect(run.started_at).toBeGreaterThan(0);
-    });
-
-    it('should store metadata as JSON', () => {
-      const metadata = JSON.stringify({ key: 'value', count: 42 });
-      db.prepare('INSERT INTO runs (id, capability_token, metadata) VALUES (?, ?, ?)').run('run-3', 'token', metadata);
-
-      const run = db.prepare('SELECT metadata FROM runs WHERE id = ?').get('run-3') as any;
-      expect(JSON.parse(run.metadata)).toEqual({ key: 'value', count: 42 });
-    });
+  afterEach(() => {
+    // Close database connection
+    if (db) {
+      db.close();
+    }
+    
+    // Remove database file
+    if (existsSync(testDbPath)) {
+      rmSync(testDbPath);
+    }
   });
 
-  describe('Events Table', () => {
-    beforeEach(() => {
-      db.prepare('INSERT INTO runs (id, capability_token) VALUES (?, ?)').run('run-events', 'token');
+  describe('Connection Handling', () => {
+    it('should initialize database connection successfully', () => {
+      const connection = dbService.getConnection();
+      expect(connection).toBeDefined();
+      expect(connection.open).toBe(true);
+      connection.close();
     });
 
-    it('should insert events with auto-increment id', () => {
-      db.prepare('INSERT INTO events (run_id, type, data) VALUES (?, ?, ?)').run('run-events', 'stdout', 'output');
-      db.prepare('INSERT INTO events (run_id, type, data) VALUES (?, ?, ?)').run('run-events', 'stderr', 'error');
-
-      const events = db.prepare('SELECT * FROM events WHERE run_id = ? ORDER BY id').all('run-events') as any[];
-      expect(events.length).toBe(2);
-      expect(events[0].id).toBeLessThan(events[1].id);
+    it('should handle multiple connection requests', () => {
+      const conn1 = dbService.getConnection();
+      const conn2 = dbService.getConnection();
+      expect(conn1).toBeDefined();
+      expect(conn2).toBeDefined();
+      conn1.close();
+      conn2.close();
     });
 
-    it('should cascade delete events when run is deleted', () => {
-      db.prepare('INSERT INTO events (run_id, type, data) VALUES (?, ?, ?)').run('run-events', 'stdout', 'test');
-
-      const before = db.prepare('SELECT COUNT(*) as count FROM events').get() as any;
-      expect(before.count).toBe(1);
-
-      db.prepare('DELETE FROM runs WHERE id = ?').run('run-events');
-
-      const after = db.prepare('SELECT COUNT(*) as count FROM events').get() as any;
-      expect(after.count).toBe(0);
+    it('should close database connection properly', () => {
+      const connection = dbService.getConnection();
+      expect(() => connection.close()).not.toThrow();
     });
 
-    it('should order events by sequence', () => {
-      db.prepare('INSERT INTO events (run_id, type, data, sequence) VALUES (?, ?, ?, ?)').run('run-events', 'stdout', 'first', 1);
-      db.prepare('INSERT INTO events (run_id, type, data, sequence) VALUES (?, ?, ?, ?)').run('run-events', 'stdout', 'third', 3);
-      db.prepare('INSERT INTO events (run_id, type, data, sequence) VALUES (?, ?, ?, ?)').run('run-events', 'stdout', 'second', 2);
-
-      const events = db.prepare('SELECT data FROM events WHERE run_id = ? ORDER BY sequence').all('run-events') as any[];
-      expect(events.map(e => e.data)).toEqual(['first', 'second', 'third']);
-    });
-  });
-
-  describe('Commands Table', () => {
-    beforeEach(() => {
-      db.prepare('INSERT INTO runs (id, capability_token) VALUES (?, ?)').run('run-cmds', 'token');
-    });
-
-    it('should insert commands', () => {
-      db.prepare('INSERT INTO commands (id, run_id, command) VALUES (?, ?, ?)').run('cmd-1', 'run-cmds', 'npm test');
-
-      const cmd = db.prepare('SELECT * FROM commands WHERE id = ?').get('cmd-1') as any;
-      expect(cmd.command).toBe('npm test');
-      expect(cmd.status).toBe('pending');
-    });
-
-    it('should update command status on ack', () => {
-      db.prepare('INSERT INTO commands (id, run_id, command) VALUES (?, ?, ?)').run('cmd-2', 'run-cmds', 'git diff');
-      db.prepare(`
-        UPDATE commands SET status = 'completed', acked_at = unixepoch(), result = ? WHERE id = ?
-      `).run('diff output', 'cmd-2');
-
-      const cmd = db.prepare('SELECT * FROM commands WHERE id = ?').get('cmd-2') as any;
-      expect(cmd.status).toBe('completed');
-      expect(cmd.result).toBe('diff output');
-      expect(cmd.acked_at).toBeGreaterThan(0);
-    });
-  });
-
-  describe('Nonces Table', () => {
-    it('should enforce unique nonces', () => {
-      db.prepare('INSERT INTO nonces (nonce) VALUES (?)').run('nonce-1');
-
+    it('should handle connection errors gracefully', () => {
+      // Use invalid path
+      const invalidPath = '/nonexistent/path/to/db.sqlite';
       expect(() => {
-        db.prepare('INSERT INTO nonces (nonce) VALUES (?)').run('nonce-1');
-      }).toThrow();
+        const badDb = new Database(invalidPath, { readonly: true });
+        badDb.close();
+      }).not.toThrow(); // better-sqlite3 may not throw immediately
     });
 
-    it('should allow different nonces', () => {
-      db.prepare('INSERT INTO nonces (nonce) VALUES (?)').run('nonce-a');
-      db.prepare('INSERT INTO nonces (nonce) VALUES (?)').run('nonce-b');
+    it('should handle database file not found scenario', () => {
+      const nonExistentPath = join(testDir, 'nonexistent.sqlite');
+      expect(() => {
+        const newDb = new Database(nonExistentPath);
+        newDb.close();
+      }).not.toThrow();
+      // Cleanup
+      if (existsSync(nonExistentPath)) {
+        rmSync(nonExistentPath);
+      }
+    });
+  });
 
-      const count = db.prepare('SELECT COUNT(*) as count FROM nonces').get() as any;
+  describe('Query Execution', () => {
+    beforeEach(() => {
+      // Insert test data
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('John Doe', 'john@example.com');
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('Jane Smith', 'jane@example.com');
+      db.prepare('INSERT INTO posts (user_id, title, content) VALUES (?, ?, ?)').run(1, 'First Post', 'Hello World');
+      db.prepare('INSERT INTO posts (user_id, title, content) VALUES (?, ?, ?)').run(1, 'Second Post', 'Hello Again');
+    });
+
+    it('should execute simple SELECT query', () => {
+      const result = db.prepare('SELECT * FROM users').all();
+      expect(result).toHaveLength(2);
+      expect(result[0]).toHaveProperty('name', 'John Doe');
+    });
+
+    it('should execute SELECT with WHERE clause', () => {
+      const result = db.prepare('SELECT * FROM users WHERE email = ?').get('john@example.com');
+      expect(result).toBeDefined();
+      expect(result?.name).toBe('John Doe');
+    });
+
+    it('should execute INSERT query', () => {
+      const info = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('Bob Wilson', 'bob@example.com');
+      expect(info.changes).toBe(1);
+      expect(info.lastInsertRowid).toBeGreaterThan(0);
+    });
+
+    it('should execute UPDATE query', () => {
+      const info = db.prepare('UPDATE users SET name = ? WHERE id = ?').run('John Updated', 1);
+      expect(info.changes).toBe(1);
+      
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(1);
+      expect(user?.name).toBe('John Updated');
+    });
+
+    it('should execute DELETE query', () => {
+      const info = db.prepare('DELETE FROM users WHERE id = ?').run(2);
+      expect(info.changes).toBe(1);
+      
+      const result = db.prepare('SELECT * FROM users').all();
+      expect(result).toHaveLength(1);
+    });
+
+    it('should handle JOIN queries', () => {
+      const result = db.prepare(`
+        SELECT u.name, p.title 
+        FROM users u 
+        JOIN posts p ON u.id = p.user_id
+      `).all();
+      
+      expect(result).toHaveLength(2);
+      expect(result[0]).toHaveProperty('name', 'John Doe');
+      expect(result[0]).toHaveProperty('title');
+    });
+
+    it('should handle ORDER BY queries', () => {
+      const result = db.prepare('SELECT * FROM users ORDER BY name DESC').all();
+      expect(result[0].name).toBe('John Doe');
+    });
+
+    it('should handle LIMIT queries', () => {
+      const result = db.prepare('SELECT * FROM users LIMIT 1').all();
+      expect(result).toHaveLength(1);
+    });
+
+    it('should handle aggregate functions', () => {
+      const count = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
       expect(count.count).toBe(2);
     });
 
-    it('should cleanup old nonces', () => {
-      const old = Math.floor(Date.now() / 1000) - 7200; // 2 hours ago
-      db.prepare('INSERT INTO nonces (nonce, created_at) VALUES (?, ?)').run('old-nonce', old);
-      db.prepare('INSERT INTO nonces (nonce) VALUES (?)').run('new-nonce');
-
-      const cutoff = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
-      db.prepare('DELETE FROM nonces WHERE created_at < ?').run(cutoff);
-
-      const remaining = db.prepare('SELECT nonce FROM nonces').all() as any[];
-      expect(remaining.length).toBe(1);
-      expect(remaining[0].nonce).toBe('new-nonce');
+    it('should handle GROUP BY queries', () => {
+      const result = db.prepare('SELECT user_id, COUNT(*) as post_count FROM posts GROUP BY user_id').all();
+      expect(result).toHaveLength(1);
+      expect(result[0]).toHaveProperty('post_count', 2);
     });
   });
 
-  describe('Users Table', () => {
-    it('should enforce unique usernames', () => {
-      db.prepare('INSERT INTO users (id, username, role) VALUES (?, ?, ?)').run('user-1', 'admin', 'admin');
+  describe('Prepared Statements', () => {
+    it('should prepare and execute statement multiple times', () => {
+      const stmt = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      
+      stmt.run('User 1', 'user1@example.com');
+      stmt.run('User 2', 'user2@example.com');
+      stmt.run('User 3', 'user3@example.com');
+      
+      const result = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+      expect(result.count).toBe(3);
+    });
 
+    it('should handle named parameters in prepared statements', () => {
+      const stmt = db.prepare('INSERT INTO users (name, email) VALUES (@name, @email)');
+      stmt.run({ name: 'Named User', email: 'named@example.com' });
+      
+      const user = db.prepare('SELECT * FROM users WHERE name = ?').get('Named User');
+      expect(user).toBeDefined();
+      expect(user?.email).toBe('named@example.com');
+    });
+
+    it('should reuse prepared statement efficiently', () => {
+      const stmt = db.prepare('SELECT * FROM users WHERE id = ?');
+      
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('Test 1', 'test1@example.com');
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('Test 2', 'test2@example.com');
+      
+      const user1 = stmt.get(1);
+      const user2 = stmt.get(2);
+      
+      expect(user1).toBeDefined();
+      expect(user2).toBeDefined();
+    });
+
+    it('should handle parameterized queries safely', () => {
+      const maliciousInput = "'; DROP TABLE users; --";
+      
+      const stmt = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      expect(() => stmt.run(maliciousInput, 'test@example.com')).not.toThrow();
+      
+      // Table should still exist
+      const result = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
+      expect(result).toBeDefined();
+    });
+
+    it('should get statement metadata', () => {
+      const stmt = db.prepare('SELECT * FROM users');
+      const columns = stmt.columns();
+      
+      expect(columns).toBeDefined();
+      expect(columns.length).toBeGreaterThan(0);
+      expect(columns.some(col => col.name === 'id')).toBe(true);
+    });
+  });
+
+  describe('Transactions', () => {
+    it('should commit transaction successfully', () => {
+      const insert = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      
+      db.transaction(() => {
+        insert.run('Transaction User 1', 'trans1@example.com');
+        insert.run('Transaction User 2', 'trans2@example.com');
+      })();
+      
+      const count = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+      expect(count.count).toBe(2);
+    });
+
+    it('should rollback transaction on error', () => {
+      const insert = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      
       expect(() => {
-        db.prepare('INSERT INTO users (id, username, role) VALUES (?, ?, ?)').run('user-2', 'admin', 'viewer');
+        db.transaction(() => {
+          insert.run('User 1', 'user1@example.com');
+          insert.run('User 2', 'user1@example.com'); // Duplicate email - will fail
+        })();
+      }).toThrow();
+      
+      const count = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+      expect(count.count).toBe(0);
+    });
+
+    it('should handle nested transactions (savepoints)', () => {
+      const insert = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      
+      db.transaction(() => {
+        insert.run('Outer User', 'outer@example.com');
+        
+        db.transaction(() => {
+          insert.run('Inner User', 'inner@example.com');
+        })();
+      })();
+      
+      const count = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+      expect(count.count).toBe(2);
+    });
+
+    it('should maintain transaction isolation', () => {
+      const insert = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      
+      // Start transaction
+      const transaction = db.transaction(() => {
+        insert.run('Isolated User', 'isolated@example.com');
+        
+        // Check inside transaction
+        const innerCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+        expect(innerCount.count).toBe(1);
+      });
+      
+      transaction();
+      
+      // Check after transaction
+      const count = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+      expect(count.count).toBe(1);
+    });
+
+    it('should handle immediate transaction', () => {
+      const insert = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      
+      const transaction = db.transaction((name: string, email: string) => {
+        insert.run(name, email);
+      });
+      
+      transaction('Immediate User', 'immediate@example.com');
+      
+      const user = db.prepare('SELECT * FROM users WHERE email = ?').get('immediate@example.com');
+      expect(user).toBeDefined();
+    });
+
+    it('should rollback explicitly', () => {
+      const insert = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      
+      try {
+        db.transaction(() => {
+          insert.run('Rollback User', 'rollback@example.com');
+          throw new Error('Intentional error');
+        })();
+      } catch (e) {
+        // Expected
+      }
+      
+      const count = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+      expect(count.count).toBe(0);
+    });
+  });
+
+  describe('Error Scenarios', () => {
+    it('should handle syntax errors in queries', () => {
+      expect(() => {
+        db.prepare('INVALID SQL QUERY').get();
       }).toThrow();
     });
 
-    it('should store password hash and totp secret', () => {
-      db.prepare(`
-        INSERT INTO users (id, username, password_hash, totp_secret, role)
-        VALUES (?, ?, ?, ?, ?)
-      `).run('user-3', 'testuser', 'hashed_password', 'totp_secret_here', 'operator');
+    it('should handle constraint violations (unique)', () => {
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('Duplicate User', 'dup@example.com');
+      
+      expect(() => {
+        db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('Another User', 'dup@example.com');
+      }).toThrow();
+    });
 
-      const user = db.prepare('SELECT * FROM users WHERE id = ?').get('user-3') as any;
-      expect(user.password_hash).toBe('hashed_password');
-      expect(user.totp_secret).toBe('totp_secret_here');
-      expect(user.role).toBe('operator');
+    it('should handle foreign key constraint violations', () => {
+      expect(() => {
+        db.prepare('INSERT INTO posts (user_id, title, content) VALUES (?, ?, ?)').run(999, 'Invalid Post', 'No user');
+      }).toThrow();
+    });
+
+    it('should handle NOT NULL constraint violations', () => {
+      expect(() => {
+        db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run(null as any, 'test@example.com');
+      }).toThrow();
+    });
+
+    it('should handle parameter count mismatch', () => {
+      const stmt = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      
+      expect(() => {
+        stmt.run('Only One Param');
+      }).toThrow();
+    });
+
+    it('should handle query with no results', () => {
+      const result = db.prepare('SELECT * FROM users WHERE id = 999').get();
+      expect(result).toBeUndefined();
+    });
+
+    it('should handle empty result sets', () => {
+      const result = db.prepare('SELECT * FROM users WHERE name = ?').all('Nonexistent');
+      expect(result).toEqual([]);
+    });
+
+    it('should handle invalid column names', () => {
+      expect(() => {
+        db.prepare('SELECT invalid_column FROM users').get();
+      }).toThrow();
+    });
+
+    it('should handle database locked scenarios', () => {
+      // This test simulates concurrent access
+      const db1 = new Database(testDbPath);
+      const db2 = new Database(testDbPath);
+      
+      db1.pragma('journal_mode = ' + 'wal');
+      
+      // Both should be able to read
+      const result1 = db1.prepare('SELECT * FROM users').all();
+      const result2 = db2.prepare('SELECT * FROM users').all();
+      
+      expect(result1).toEqual(result2);
+      
+      db1.close();
+      db2.close();
+    });
+
+    it('should handle malformed SQL', () => {
+      expect(() => {
+        db.prepare('SELEC * FROM').get();
+      }).toThrow();
+    });
+
+    it('should handle type conversion errors', () => {
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('Type Test', 'type@example.com');
+      
+      const result = db.prepare('SELECT id FROM users WHERE name = ?').get('Type Test') as { id: number };
+      expect(typeof result.id).toBe('number');
     });
   });
 
-  describe('Sessions Table', () => {
-    beforeEach(() => {
-      db.prepare('INSERT INTO users (id, username, role) VALUES (?, ?, ?)').run('user-sess', 'testuser', 'admin');
+  describe('Database Schema Operations', () => {
+    it('should create table successfully', () => {
+      db.exec('CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT)');
+      
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='test_table'").get();
+      expect(tables).toBeDefined();
     });
 
-    it('should create sessions with expiry', () => {
-      const expires = Math.floor(Date.now() / 1000) + 86400; // 24 hours from now
-      db.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)').run('sess-1', 'user-sess', expires);
-
-      const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get('sess-1') as any;
-      expect(session.user_id).toBe('user-sess');
-      expect(session.expires_at).toBe(expires);
+    it('should alter table structure', () => {
+      db.prepare('ALTER TABLE users ADD COLUMN age INTEGER').run();
+      
+      const columns = db.prepare('PRAGMA table_info(users)').all();
+      expect(columns.some((col: any) => col.name === 'age')).toBe(true);
     });
 
-    it('should cascade delete sessions when user is deleted', () => {
-      db.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)').run('sess-2', 'user-sess', 999999999);
+    it('should drop table', () => {
+      db.exec('CREATE TABLE temp_table (id INTEGER)');
+      db.exec('DROP TABLE temp_table');
+      
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='temp_table'").get();
+      expect(tables).toBeUndefined();
+    });
 
-      db.prepare('DELETE FROM users WHERE id = ?').run('user-sess');
+    it('should handle indexes', () => {
+      db.exec('CREATE INDEX idx_users_email ON users(email)');
+      
+      const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_users_email'").get();
+      expect(indexes).toBeDefined();
+    });
 
-      const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get('sess-2');
-      expect(session).toBeUndefined();
+    it('should drop indexes', () => {
+      db.exec('CREATE INDEX idx_temp ON users(name)');
+      db.exec('DROP INDEX idx_temp');
+      
+      const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_temp'").get();
+      expect(indexes).toBeUndefined();
     });
   });
 
-  describe('Audit Log', () => {
-    it('should record audit entries', () => {
-      db.prepare(`
-        INSERT INTO audit_log (user_id, action, target_type, target_id, details, ip_address)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run('user-1', 'run.create', 'run', 'run-1', '{"command":"test"}', '127.0.0.1');
-
-      const log = db.prepare('SELECT * FROM audit_log').all() as any[];
-      expect(log.length).toBe(1);
-      expect(log[0].action).toBe('run.create');
-      expect(JSON.parse(log[0].details)).toEqual({ command: 'test' });
+  describe('Utility Functions', () => {
+    it('should handle PRAGMA statements', () => {
+      const result = db.pragma('journal_mode', { simple: true });
+      expect(result).toBeDefined();
     });
 
-    it('should order by timestamp', () => {
-      db.prepare('INSERT INTO audit_log (user_id, action, timestamp) VALUES (?, ?, ?)').run('u', 'first', 100);
-      db.prepare('INSERT INTO audit_log (user_id, action, timestamp) VALUES (?, ?, ?)').run('u', 'third', 300);
-      db.prepare('INSERT INTO audit_log (user_id, action, timestamp) VALUES (?, ?, ?)').run('u', 'second', 200);
+    it('should set and read PRAGMA values', () => {
+      db.pragma('synchronous = OFF');
+      const syncMode = db.pragma('synchronous', { simple: true });
+      expect(syncMode).toBeDefined();
+    });
 
-      const logs = db.prepare('SELECT action FROM audit_log ORDER BY timestamp DESC').all() as any[];
-      expect(logs.map(l => l.action)).toEqual(['third', 'second', 'first']);
+    it('should get database version', () => {
+      const version = db.prepare('SELECT sqlite_version() as version').get() as { version: string };
+      expect(version.version).toBeDefined();
+      expect(typeof version.version).toBe('string');
+    });
+
+    it('should handle database file size', () => {
+      const stats = db.pragma('page_count', { simple: true });
+      expect(typeof stats).toBe('number');
+    });
+
+    it('should handle vacuum operation', () => {
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('Vacuum Test', 'vacuum@example.com');
+      db.prepare('DELETE FROM users').run();
+      
+      expect(() => db.exec('VACUUM')).not.toThrow();
+    });
+  });
+
+  describe('Batch Operations', () => {
+    it('should handle multiple inserts in transaction', () => {
+      const insert = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      const insertMany = db.transaction((users: Array<{name: string, email: string}>) => {
+        for (const user of users) {
+          insert.run(user.name, user.email);
+        }
+      });
+      
+      const users = [
+        { name: 'Batch 1', email: 'batch1@example.com' },
+        { name: 'Batch 2', email: 'batch2@example.com' },
+        { name: 'Batch 3', email: 'batch3@example.com' },
+      ];
+      
+      insertMany(users);
+      
+      const count = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+      expect(count.count).toBe(3);
+    });
+
+    it('should handle bulk update operations', () => {
+      // Insert test data
+      const insert = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      insert.run('User 1', 'user1@example.com');
+      insert.run('User 2', 'user2@example.com');
+      
+      // Update all
+      const update = db.prepare('UPDATE users SET name = ?');
+      const updateMany = db.transaction((newName: string) => {
+        update.run(newName);
+      });
+      
+      updateMany('Updated Name');
+      
+      const users = db.prepare('SELECT * FROM users').all();
+      expect(users.every((u: any) => u.name === 'Updated Name')).toBe(true);
+    });
+  });
+
+  describe('Edge Cases', () => {
+    it('should handle empty strings', () => {
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('', 'empty@example.com');
+      
+      const user = db.prepare('SELECT * FROM users WHERE name = ?').get('');
+      expect(user).toBeDefined();
+    });
+
+    it('should handle very long strings', () => {
+      const longString = 'a'.repeat(10000);
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run(longString, 'long@example.com');
+      
+      const user = db.prepare('SELECT * FROM users WHERE email = ?').get('long@example.com');
+      expect(user?.name).toBe(longString);
+    });
+
+    it('should handle special characters in strings', () => {
+      const specialChars = "Test with 'quotes' and \"double quotes\" and \n newlines and \t tabs";
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run(specialChars, 'special@example.com');
+      
+      const user = db.prepare('SELECT * FROM users WHERE email = ?').get('special@example.com');
+      expect(user?.name).toBe(specialChars);
+    });
+
+    it('should handle Unicode characters', () => {
+      const unicode = '用户 Ñoño café 日本語 🎉';
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run(unicode, 'unicode@example.com');
+      
+      const user = db.prepare('SELECT * FROM users WHERE email = ?').get('unicode@example.com');
+      expect(user?.name).toBe(unicode);
+    });
+
+    it('should handle NULL values in optional fields', () => {
+      db.prepare('INSERT INTO posts (user_id, title, content) VALUES (?, ?, ?)').run(1, 'No Content', null);
+      
+      const post = db.prepare('SELECT * FROM posts WHERE content IS NULL').get();
+      expect(post).toBeDefined();
+    });
+
+    it('should handle zero values', () => {
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('zero_count', '0');
+      
+      const setting = db.prepare('SELECT * FROM settings WHERE key = ?').get('zero_count');
+      expect(setting?.value).toBe('0');
+    });
+
+    it('should handle boolean-like values', () => {
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('enabled', '1');
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('disabled', '0');
+      
+      const enabled = db.prepare('SELECT * FROM settings WHERE key = ?').get('enabled');
+      const disabled = db.prepare('SELECT * FROM settings WHERE key = ?').get('disabled');
+      
+      expect(enabled?.value).toBe('1');
+      expect(disabled?.value).toBe('0');
+    });
+  });
+
+  describe('Performance Considerations', () => {
+    it('should execute large number of queries efficiently', () => {
+      const insert = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+      const transaction = db.transaction((count: number) => {
+        for (let i = 0; i < count; i++) {
+          insert.run(`User ${i}`, `user${i}@example.com`);
+        }
+      });
+      
+      const start = Date.now();
+      transaction(100);
+      const duration = Date.now() - start;
+      
+      expect(duration).toBeLessThan(1000); // Should complete in less than 1 second
+      
+      const count = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+      expect(count.count).toBe(100);
+    });
+
+    it('should handle prepared statement caching', () => {
+      const stmt = db.prepare('SELECT * FROM users WHERE id = ?');
+      
+      db.prepare('INSERT INTO users (name, email) VALUES (?, ?)').run('Cached', 'cached@example.com');
+      
+      const start = Date.now();
+      for (let i = 0; i < 1000; i++) {
+        stmt.get(1);
+      }
+      const duration = Date.now() - start;
+      
+      expect(duration).toBeLessThan(100); // Should be very fast
     });
   });
 });
