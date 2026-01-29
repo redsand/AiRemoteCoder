@@ -3,7 +3,7 @@ import { config } from '../config.js';
 /**
  * Supported worker types
  */
-export type WorkerType = 'claude' | 'ollama-launch' | 'codex' | 'gemini' | 'rev';
+export type WorkerType = 'claude' | 'ollama-launch' | 'codex' | 'gemini' | 'rev' | 'vnc' | 'hands-on';
 
 /**
  * Worker configuration
@@ -68,6 +68,24 @@ export const WORKER_CONFIGS: Record<WorkerType, WorkerConfig> = {
     defaultModel: undefined,
     supportsModelSelection: false,
     description: 'Custom AI coding tool'
+  },
+  vnc: {
+    type: 'vnc',
+    command: 'x11vnc',
+    displayName: 'VNC Remote Desktop',
+    icon: '',
+    defaultModel: undefined,
+    supportsModelSelection: false,
+    description: 'Full remote desktop access via VNC - fallback when agents fail'
+  },
+  'hands-on': {
+    type: 'hands-on',
+    command: 'bash',
+    displayName: 'Hands-On Control',
+    icon: '',
+    defaultModel: undefined,
+    supportsModelSelection: false,
+    description: 'Interactive shell for manual control and debugging'
   }
 };
 
@@ -147,7 +165,9 @@ export function getWorkerIcon(workerType: string): string | undefined {
     'ollama-launch': '',
     codex: '',
     gemini: '',
-    rev: ''
+    rev: '',
+    vnc: '',
+    'hands-on': ''
   };
   return icons[workerType];
 }

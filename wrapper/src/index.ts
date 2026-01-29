@@ -6,6 +6,8 @@
  */
 
 export { ClaudeRunner, type RunnerOptions } from './services/claude-runner.js';
+export { VncRunner, type VncRunnerOptions } from './services/vnc-runner.js';
+export { HandsOnRunner, type HandsOnRunnerOptions } from './services/hands-on-runner.js';
 export {
   sendEvent,
   uploadArtifact,

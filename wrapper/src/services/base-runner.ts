@@ -852,6 +852,21 @@ export abstract class BaseRunner extends EventEmitter {
       return;
     }
 
+    if (cmd.command.startsWith('__LAUNCH_HANDS_ON__')) {
+      try {
+        const reason = cmd.command.substring('__LAUNCH_HANDS_ON__:'.length) || 'Agent failed - manual intervention required';
+        await this.sendEvent('info', `Launching hands-on mode: ${reason}`);
+        await ackCommand(this.auth, cmd.id, `Launching hands-on mode: ${reason}`);
+
+        // Emit event to signal that hands-on mode should be launched
+        this.emit('launch-hands-on', { reason, fallbackFrom: this.getWorkerType() });
+      } catch (err: any) {
+        console.error(`Failed to launch hands-on mode:`, err.message);
+        await this.sendEvent('error', `Failed to launch hands-on mode: ${err.message}`);
+      }
+      return;
+    }
+
     if (cmd.command.startsWith('__INPUT__:')) {
       const input = cmd.command.substring('__INPUT__:'.length);
 
