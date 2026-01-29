@@ -139,10 +139,10 @@ export class ClaudeRunner extends BaseRunner {
           console.log('Claude waiting for input detected');
           this.claudeReady = true;
 
-          // Auto-respond in autonomous mode if we have pending input
-          if (this.autonomous && this.inputQueue.length > 0) {
+          // Process any queued input
+          if (this.inputQueue.length > 0) {
             const { input, commandId } = this.inputQueue.shift()!;
-            console.log(`Auto-sending input in autonomous mode: ${input}`);
+            console.log(`Sending queued input: ${input.substring(0, 50)}`);
             this.sendInputToProcess(input, commandId);
           }
         }
@@ -183,11 +183,17 @@ export class ClaudeRunner extends BaseRunner {
         interactive: true
       });
 
-      // If an initial command was provided, send it after a brief delay
+      // Send initial input to activate Claude's interactive prompt
+      console.log(`Waiting for Claude to be ready to receive input...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
       if (command) {
-        console.log(`Waiting for Claude to be ready to receive initial command...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Initial command was provided, send it
         this.sendInputToProcess(command, 'initial');
+      } else {
+        // No initial command: send empty line to trigger Claude's prompt
+        // This activates the interactive session and allows Claude to display its menu
+        this.sendInputToProcess('', 'initial-activate');
       }
 
       // Start polling and heartbeat
