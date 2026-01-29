@@ -549,7 +549,7 @@ export abstract class BaseRunner extends EventEmitter {
   /**
    * Send event to gateway
    */
-  private async sendEvent(type: string, data: string): Promise<void> {
+  protected async sendEvent(type: string, data: string): Promise<void> {
     this.sequence++;
     try {
       await sendEvent(this.auth, {
@@ -586,14 +586,14 @@ export abstract class BaseRunner extends EventEmitter {
   /**
    * Send marker event
    */
-  private async sendMarker(event: string, details?: object): Promise<void> {
+  protected async sendMarker(event: string, details?: object): Promise<void> {
     await this.sendEvent('marker', JSON.stringify({ event, ...details }));
   }
 
   /**
    * Handle process exit
    */
-  private async handleExit(code: number | null, signal: string | null): Promise<void> {
+  protected async handleExit(code: number | null, signal: string | null): Promise<void> {
     this.isRunning = false;
     this.stopCommandPolling();
     this.stopHeartbeat();
@@ -808,7 +808,7 @@ export abstract class BaseRunner extends EventEmitter {
   /**
    * Execute a command from the gateway
    */
-  private async executeCommand(cmd: Command): Promise<void> {
+  protected async executeCommand(cmd: Command): Promise<void> {
     console.log(`Executing command: ${cmd.command}`);
 
     // Mark command as being processed to prevent duplicate execution
