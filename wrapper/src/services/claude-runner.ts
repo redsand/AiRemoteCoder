@@ -1,7 +1,6 @@
 import { BaseRunner, RunnerOptions, WorkerCommandResult } from './base-runner.js';
 import { config } from '../config.js';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
-import { join, resolve as pathResolve, relative as pathRelative, normalize as pathNormalize } from 'path';
+import { resolve as pathResolve, relative as pathRelative, normalize as pathNormalize } from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { ackCommand } from './gateway-client.js';
 
@@ -35,14 +34,7 @@ export class ClaudeRunner extends BaseRunner {
 
   constructor(options: ClaudeRunnerOptions) {
     super(options);
-
-    // Override log path to maintain backward compatibility
-    const runDir = join(config.runsDir, options.runId);
-    if (!existsSync(runDir)) {
-      mkdirSync(runDir, { recursive: true });
-    }
-    (this as any).logPath = join(runDir, 'claude.log');
-    (this as any).stateFile = join(runDir, 'state.json');
+    // BaseRunner handles log path setup, no need to override
   }
 
   /**
@@ -312,40 +304,6 @@ export class ClaudeRunner extends BaseRunner {
     return super.getState();
   }
 
-  /**
-   * Save state to disk
-   */
-  protected saveState(): void {
-    const state = {
-      runId: this.auth.runId,
-      sequence: this.sequence,
-      workingDir: this.workingDir,
-      autonomous: this.autonomous,
-      savedAt: Date.now()
-    };
-    try {
-      writeFileSync((this as any).stateFile, JSON.stringify(state, null, 2));
-    } catch (err) {
-      console.error('Failed to save state:', err);
-    }
-  }
-
-  /**
-   * Load state from disk
-   */
-  protected loadState(): boolean {
-    try {
-      if (existsSync((this as any).stateFile)) {
-        const data = readFileSync((this as any).stateFile, 'utf8');
-        const state = JSON.parse(data);
-        this.sequence = state.sequence || 0;
-        return true;
-      }
-    } catch (err) {
-      console.error('Failed to load state:', err);
-    }
-    return false;
-  }
 }
 
 /**
