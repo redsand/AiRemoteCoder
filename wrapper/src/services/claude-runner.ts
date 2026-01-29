@@ -96,31 +96,74 @@ export class ClaudeRunner extends BaseRunner {
   /**
    * Override start to launch Claude in print mode with a command
    * Claude processes and exits after outputting results
+   *
+   * If no initial command provided, just mark as running and wait for __INPUT__ commands
    */
   async start(command?: string): Promise<void> {
     console.log('\n>>> Starting Claude Code');
 
+    try {
+      // Mark as running
+      (this as any).isRunning = true;
+
+      // Send start marker
+      await this.sendMarker('started', {
+        event: 'started',
+        command: command || '(waiting for input)',
+        workingDir: this.workingDir,
+        workerType: 'claude'
+      });
+
+      // If an initial command was provided, spawn Claude with it
+      if (command) {
+        console.log(`Initial command provided, spawning Claude...`);
+        await this.spawnClaudeForInput(command, 'initial');
+      } else {
+        console.log(`No initial command, waiting for __INPUT__ commands from gateway...`);
+      }
+
+      // Start polling and heartbeat
+      (this as any).startCommandPolling();
+      (this as any).startHeartbeat();
+
+    } catch (err: any) {
+      console.error(`Failed to start Claude: ${err.message}`);
+      throw err;
+    }
+  }
+
+  /**
+   * Spawn a Claude process for a specific input
+   * Handles all stdout/stderr and completion
+   */
+  private async spawnClaudeForInput(input: string, commandId: string): Promise<string> {
     // Build command with the prompt as an argument
-    const { args } = this.buildCommand(command, this.autonomous);
+    const { args } = this.buildCommand(input, this.autonomous);
     const cmd = this.getCommand();
     const env = this.buildEnvironment();
     const useShell = process.platform === 'win32';
 
-    try {
-      // Spawn Claude process
-      this.claudeProcess = spawn(cmd, args, {
-        cwd: this.workingDir,
-        shell: useShell,
-        stdio: ['ignore', 'pipe', 'pipe'],  // ignore stdin, pipe stdout/stderr
-        env,
-        windowsHide: false,
-      });
+    console.log(`Spawning Claude with input: ${input.substring(0, 50)}...`);
 
-      console.log(`Process spawned with PID: ${this.claudeProcess.pid}`);
+    // Spawn Claude process
+    this.claudeProcess = spawn(cmd, args, {
+      cwd: this.workingDir,
+      shell: useShell,
+      stdio: ['ignore', 'pipe', 'pipe'],  // ignore stdin, pipe stdout/stderr
+      env,
+      windowsHide: false,
+    });
+
+    console.log(`Process spawned with PID: ${this.claudeProcess.pid}`);
+
+    return new Promise<string>((resolve, reject) => {
+      let output = '';
+      let errors = '';
 
       // Handle stdout
-      this.claudeProcess.stdout?.on('data', async (data: Buffer) => {
+      this.claudeProcess!.stdout?.on('data', async (data: Buffer) => {
         const text = data.toString();
+        output += text;
         console.log(`[Claude stdout] ${text.substring(0, 100)}`);
 
         // Forward to log and gateway
@@ -135,45 +178,37 @@ export class ClaudeRunner extends BaseRunner {
       });
 
       // Handle stderr
-      this.claudeProcess.stderr?.on('data', (data: Buffer) => {
+      this.claudeProcess!.stderr?.on('data', (data: Buffer) => {
         const text = data.toString();
+        errors += text;
         console.log(`[Claude stderr] ${text.substring(0, 100)}`);
         (this as any).logStream?.write(`[stderr] ${text}`);
       });
 
       // Handle process completion
-      this.claudeProcess.on('close', async (code, signal) => {
+      this.claudeProcess!.on('close', async (code, signal) => {
         console.log(`\nClaude process exited with code ${code}, signal ${signal}`);
         this.claudeProcess = null;
+
+        if (code === 0) {
+          resolve(output);
+        } else {
+          const errorMsg = errors || output || `Process exited with code ${code}`;
+          reject(new Error(errorMsg));
+        }
+
         await this.handleExit(code, signal);
       });
 
       // Handle process error
-      this.claudeProcess.on('error', async (err) => {
+      this.claudeProcess!.on('error', async (err) => {
         console.error(`Claude process error:`, err);
+        this.claudeProcess = null;
+        reject(err);
         await this.sendEvent('error', `Process error: ${err.message}`);
         await this.handleExit(1, null);
       });
-
-      // Mark as running
-      (this as any).isRunning = true;
-
-      // Send start marker
-      await this.sendMarker('started', {
-        event: 'started',
-        command: command || '(no command)',
-        workingDir: this.workingDir,
-        workerType: 'claude'
-      });
-
-      // Start polling and heartbeat
-      (this as any).startCommandPolling();
-      (this as any).startHeartbeat();
-
-    } catch (err: any) {
-      console.error(`Failed to start Claude: ${err.message}`);
-      throw err;
-    }
+    });
   }
 
 
@@ -186,7 +221,7 @@ export class ClaudeRunner extends BaseRunner {
     if (cmd.command.startsWith('__INPUT__:')) {
       const input = cmd.command.substring('__INPUT__:'.length);
 
-      console.log(`\n>>> Spawning Claude for input command`);
+      console.log(`\n>>> Processing Claude input command`);
       console.log(`    Command ID: ${cmd.id}`);
       console.log(`    Input: ${input.substring(0, 50)}...`);
 
@@ -197,78 +232,28 @@ export class ClaudeRunner extends BaseRunner {
         // Mark as processed to prevent re-execution
         (this as any).markCommandProcessed(cmd.id, 30 * 60 * 1000);
 
-        // Build command with the input
-        const { args } = this.buildCommand(input, this.autonomous);
-        const processCmd = this.getCommand();
-        const env = this.buildEnvironment();
-        const useShell = process.platform === 'win32';
+        // Spawn Claude for this input
+        const output = await this.spawnClaudeForInput(input, cmd.id);
+        console.log(`    ✓ Claude completed`);
 
-        // Spawn Claude for this specific input
-        const proc = spawn(processCmd, args, {
-          cwd: this.workingDir,
-          shell: useShell,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          env,
-          windowsHide: false,
-        });
-
-        console.log(`Claude spawned with PID: ${proc.pid}`);
-
-        // Collect output
-        let output = '';
-        let errors = '';
-
-        proc.stdout?.on('data', (data: Buffer) => {
-          const text = data.toString();
-          output += text;
-          (this as any).logStream?.write(`[stdout] ${text}`);
-          try {
-            this.sendEvent('stdout', text);
-          } catch (err) {
-            console.error('Failed to send stdout:', err);
-          }
-        });
-
-        proc.stderr?.on('data', (data: Buffer) => {
-          const text = data.toString();
-          errors += text;
-          (this as any).logStream?.write(`[stderr] ${text}`);
-        });
-
-        // Wait for completion
-        await new Promise<void>((resolve, reject) => {
-          proc.on('close', async (code, signal) => {
-            console.log(`Claude process exited with code ${code}`);
-
-            if (code === 0) {
-              // Success
-              try {
-                await ackCommand(this.auth, cmd.id, `Claude output: ${output.substring(0, 200)}`);
-                console.log(`    ✓ Command acknowledged`);
-              } catch (err: any) {
-                console.error(`Failed to acknowledge command:`, err.message);
-              }
-              resolve();
-            } else {
-              // Failure
-              const errorMsg = errors || output || `Process exited with code ${code}`;
-              try {
-                await ackCommand(this.auth, cmd.id, undefined, `Error: ${errorMsg.substring(0, 200)}`);
-              } catch (err: any) {
-                console.error(`Failed to acknowledge error:`, err.message);
-              }
-              reject(new Error(errorMsg));
-            }
-          });
-
-          proc.on('error', (err) => {
-            reject(err);
-          });
-        });
+        // Acknowledge success
+        try {
+          await ackCommand(this.auth, cmd.id, `Claude output: ${output.substring(0, 200)}`);
+          console.log(`    ✓ Command acknowledged`);
+        } catch (err: any) {
+          console.error(`Failed to acknowledge command:`, err.message);
+        }
 
       } catch (err: any) {
         console.error(`\n>>> Failed to process Claude command:`, err.message);
         await this.sendEvent('error', `Failed to process command: ${err.message}`);
+
+        // Acknowledge failure
+        try {
+          await ackCommand(this.auth, cmd.id, undefined, `Error: ${err.message.substring(0, 200)}`);
+        } catch (ackErr: any) {
+          console.error(`Failed to acknowledge error:`, ackErr.message);
+        }
       }
 
       return;
