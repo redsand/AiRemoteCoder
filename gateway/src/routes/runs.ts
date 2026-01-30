@@ -19,7 +19,7 @@ const createRunSchema = z.object({
   metadata: z.record(z.any()).optional(),
   workingDir: z.string().optional(),
   autonomous: z.boolean().optional(),
-  workerType: z.enum(['claude', 'ollama-launch', 'codex', 'gemini', 'rev']).optional().default('claude'),
+  workerType: z.enum(['claude', 'ollama-launch', 'codex', 'gemini', 'rev', 'vnc', 'hands-on']).optional().default('claude'),
   model: z.string().optional(),
   integration: z.enum(['claude', 'codex', 'opencode', 'droid']).optional(), // For ollama-launch
   provider: z.string().optional() // For rev

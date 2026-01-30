@@ -36,7 +36,7 @@ export interface WorkerCommandResult {
 }
 
 /**
- * Base class for all AI worker runners (Claude, Ollama, Codex, Gemini, Rev)
+ * Base class for all AI worker runners (Claude, Ollama, Codex, Gemini, Rev, VNC, Hands-On)
  * Provides common functionality for process spawning, lifecycle management,
  * event streaming, state persistence, and command execution.
  */

@@ -30,7 +30,7 @@ import {
 describe('Worker Registry', () => {
   describe('Worker Configuration', () => {
     it('should have all worker types configured', () => {
-      const workerTypes: WorkerType[] = ['claude', 'ollama-launch', 'codex', 'gemini', 'rev'];
+      const workerTypes: WorkerType[] = ['claude', 'ollama-launch', 'codex', 'gemini', 'rev', 'vnc', 'hands-on'];
 
       for (const type of workerTypes) {
         expect(WORKER_CONFIGS[type]).toBeDefined();
@@ -186,7 +186,7 @@ describe('Worker Type Validation', () => {
   });
 
   it('should accept all valid worker types', () => {
-    const validTypes: WorkerType[] = ['claude', 'ollama-launch', 'codex', 'gemini', 'rev'];
+    const validTypes: WorkerType[] = ['claude', 'ollama-launch', 'codex', 'gemini', 'rev', 'vnc', 'hands-on'];
     for (const type of validTypes) {
       expect(isValidWorkerType(type)).toBe(true);
     }

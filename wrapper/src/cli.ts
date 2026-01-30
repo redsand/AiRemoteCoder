@@ -365,7 +365,7 @@ program
   .description('Create and start a new autonomous run (no prompt needed)')
   .option('-c, --cwd <path>', 'Working directory')
   .option('-p, --prompt <prompt>', 'Initial prompt (optional)')
-  .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev)', 'claude')
+  .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev, vnc, hands-on)', 'claude')
   .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, Rev, etc.)')
   .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
   .option('--provider <provider>', 'LLM provider for Rev (ollama, claude, gemini) - for rev only')
@@ -379,7 +379,7 @@ program
       const workerType = options.workerType;
       if (!isValidWorkerType(workerType)) {
         console.error(`Invalid worker type: ${workerType}`);
-        console.error('Valid worker types: claude, ollama-launch, codex, gemini, rev');
+        console.error('Valid worker types: claude, ollama-launch, codex, gemini, rev, vnc, hands-on');
         process.exit(1);
       }
 
@@ -478,7 +478,7 @@ program
   .requiredOption('--token <token>', 'Capability token from gateway')
   .option('--cmd <command>', 'Worker command/prompt')
   .option('--cwd <path>', 'Working directory (defaults to current)')
-  .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev)', 'claude')
+  .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev, vnc, hands-on)', 'claude')
   .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, Rev, etc.)')
   .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
   .option('--provider <provider>', 'LLM provider for Rev (ollama, claude, gemini) - for rev only')
@@ -496,7 +496,7 @@ program
     const workerType = options.workerType;
     if (!isValidWorkerType(workerType)) {
       console.error(`Invalid worker type: ${workerType}`);
-      console.error('Valid worker types: claude, ollama, codex, gemini, rev');
+      console.error('Valid worker types: claude, ollama-launch, codex, gemini, rev, vnc, hands-on');
       process.exit(1);
     }
 

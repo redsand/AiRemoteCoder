@@ -44,6 +44,8 @@ const workerTypeOptions: FilterOption[] = [
   { value: 'codex', label: 'Codex' },
   { value: 'gemini', label: 'Gemini' },
   { value: 'rev', label: 'Rev' },
+  { value: 'vnc', label: 'VNC (Remote Desktop)' },
+  { value: 'hands-on', label: 'Hands-On' },
 ];
 
 const ollamaIntegrations = [
@@ -559,6 +561,8 @@ export function Runs({ user }: Props) {
                 <option value="codex">Codex CLI</option>
                 <option value="gemini">Gemini CLI</option>
                 <option value="rev">Rev</option>
+                <option value="vnc">VNC (Remote Desktop)</option>
+                <option value="hands-on">Hands-On</option>
               </select>
             </div>
 

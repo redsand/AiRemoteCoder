@@ -57,7 +57,9 @@ function getWorkerIcon(workerType: string | null): string {
     'ollama-launch': '',
     codex: '',
     gemini: '',
-    rev: ''
+    rev: '',
+    vnc: '',
+    'hands-on': ''
   };
   return icons[workerType || 'claude'] || '';
 }
@@ -69,7 +71,9 @@ function getWorkerColor(workerType: string | null): string {
     'ollama-launch': '#9333EA', // purple
     codex: '#0891B2', // cyan
     gemini: '#7C3AED', // violet
-    rev: '#DC2626' // red
+    rev: '#DC2626', // red
+    vnc: '#0891B2', // cyan (same as codex - remote desktop)
+    'hands-on': '#F59E0B' // amber (manual control)
   };
   return colors[workerType || 'claude'] || '#6B7280';
 }
