@@ -100,7 +100,7 @@ export class VncRunner extends BaseRunner {
     ];
 
     // Add insecure flag if self-signed certificates allowed
-    if (config.allowSelfSigned) {
+    if (config.allowSelfSignedCerts) {
       args.push('--insecure');
     }
 

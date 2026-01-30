@@ -44,6 +44,7 @@ export const config = {
   // Limits
   maxBodySize: 10 * 1024 * 1024, // 10MB
   maxArtifactSize: 50 * 1024 * 1024, // 50MB
+  claimLeaseSeconds: parseInt(process.env.GATEWAY_CLAIM_LEASE_SECONDS || '60', 10),
   rateLimit: {
     max: 100,
     timeWindow: '1 minute'

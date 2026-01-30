@@ -57,6 +57,11 @@ const ackSchema = z.object({
   error: z.string().optional()
 });
 
+const claimRunSchema = z.object({
+  agentId: z.string().min(1).max(100),
+  workerTypes: z.array(z.string()).optional()
+});
+
 export async function runsRoutes(fastify: FastifyInstance) {
   // Create a new run (from UI or self-registration by wrapper)
   fastify.post('/api/runs', {
@@ -134,6 +139,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
       waitingApproval,
       tags,
       workerType,
+      claim,
       limit = '50',
       offset = '0',
       cursor,
@@ -147,6 +153,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
       waitingApproval?: string;
       tags?: string;
       workerType?: string;
+      claim?: string;
       limit?: string;
       offset?: string;
       cursor?: string;
@@ -161,7 +168,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
              c.display_name as client_name, c.status as client_status,
              (SELECT COUNT(*) FROM artifacts WHERE run_id = r.id) as artifact_count,
              (SELECT data FROM events WHERE run_id = r.id AND type = 'assist' LIMIT 1) as assist_data,
-             r.worker_type
+             r.worker_type, r.claimed_by, r.claimed_at
       FROM runs r
       LEFT JOIN clients c ON r.client_id = c.id
       WHERE 1=1
@@ -181,6 +188,12 @@ export async function runsRoutes(fastify: FastifyInstance) {
     if (workerType && workerType !== 'all') {
       query += ' AND r.worker_type = ?';
       params.push(workerType);
+    }
+
+    if (claim === 'claimed') {
+      query += ' AND r.claimed_by IS NOT NULL';
+    } else if (claim === 'unclaimed') {
+      query += ' AND r.claimed_by IS NULL';
     }
 
     if (search) {
@@ -243,6 +256,11 @@ export async function runsRoutes(fastify: FastifyInstance) {
     if (waitingApproval === 'true') {
       countQuery += ' AND r.waiting_approval = 1';
     }
+    if (claim === 'claimed') {
+      countQuery += ' AND r.claimed_by IS NOT NULL';
+    } else if (claim === 'unclaimed') {
+      countQuery += ' AND r.claimed_by IS NULL';
+    }
 
     const { count } = db.prepare(countQuery).get(...countParams) as { count: number };
 
@@ -260,6 +278,75 @@ export async function runsRoutes(fastify: FastifyInstance) {
     };
   });
 
+  // Wrapper: claim next pending run for a specific client/agent
+  fastify.post('/api/runs/claim', {
+    preHandler: [wrapperAuth]
+  }, async (request: AuthenticatedRequest, reply) => {
+    const body = claimRunSchema.parse(request.body);
+
+    const client = db.prepare('SELECT id FROM clients WHERE agent_id = ?').get(body.agentId) as { id: string } | undefined;
+    if (!client) {
+      return reply.code(404).send({ error: 'Client not registered' });
+    }
+
+    const workerTypes = body.workerTypes && body.workerTypes.length > 0 ? body.workerTypes : null;
+    const leaseCutoff = Math.floor(Date.now() / 1000) - config.claimLeaseSeconds;
+
+    const claimTransaction = db.transaction(() => {
+      let query = `
+        SELECT id, command, metadata, worker_type, capability_token
+        FROM runs
+        WHERE status = 'pending'
+          AND waiting_approval = 0
+          AND (client_id = ? OR client_id IS NULL)
+          AND (claimed_by IS NULL OR claimed_by = ? OR claimed_at < ?)
+      `;
+      const params: any[] = [client.id, body.agentId, leaseCutoff];
+
+      if (workerTypes) {
+        query += ` AND worker_type IN (${workerTypes.map(() => '?').join(', ')})`;
+        params.push(...workerTypes);
+      }
+
+      query += ' ORDER BY CASE WHEN client_id = ? THEN 0 ELSE 1 END, created_at ASC LIMIT 1';
+      params.push(client.id);
+
+      const run = db.prepare(query).get(...params) as any;
+      if (!run) {
+        return null;
+      }
+
+      const update = db.prepare(`
+        UPDATE runs
+        SET claimed_by = ?, claimed_at = unixepoch(), client_id = COALESCE(client_id, ?)
+        WHERE id = ? AND status = 'pending'
+          AND (claimed_by IS NULL OR claimed_by = ? OR claimed_at < ?)
+      `).run(body.agentId, client.id, run.id, body.agentId, leaseCutoff);
+
+      if (update.changes === 0) {
+        return null;
+      }
+
+      return run;
+    });
+
+    const claimed = claimTransaction();
+
+    if (!claimed) {
+      return { run: null };
+    }
+
+    return {
+      run: {
+        id: claimed.id,
+        capabilityToken: claimed.capability_token,
+        command: claimed.command,
+        workerType: claimed.worker_type,
+        metadata: claimed.metadata ? JSON.parse(claimed.metadata) : null
+      }
+    };
+  });
+
   // Get single run with full details
   fastify.get('/api/runs/:runId', {
     preHandler: [uiAuth]
@@ -271,7 +358,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
              r.waiting_approval, r.created_at, r.started_at, r.finished_at,
              r.exit_code, r.error_message, r.metadata, r.tags, r.client_id,
              c.display_name as client_name, c.agent_id as client_agent_id, c.status as client_status,
-             r.worker_type
+             r.worker_type, r.claimed_by, r.claimed_at
       FROM runs r
       LEFT JOIN clients c ON r.client_id = c.id
       WHERE r.id = ?
@@ -646,6 +733,32 @@ export async function runsRoutes(fastify: FastifyInstance) {
       status: 'pending',
       restartedFrom: runId
     };
+  });
+
+  // Release a pending run claim (operator/admin)
+  fastify.post('/api/runs/:runId/release', {
+    preHandler: [uiAuth, requireRole('admin', 'operator')]
+  }, async (request: AuthenticatedRequest, reply) => {
+    const { runId } = request.params as { runId: string };
+
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(runId) as any;
+    if (!run) {
+      return reply.code(404).send({ error: 'Run not found' });
+    }
+
+    if (run.status !== 'pending') {
+      return reply.code(400).send({ error: 'Only pending runs can be released' });
+    }
+
+    db.prepare(`
+      UPDATE runs
+      SET claimed_by = NULL, claimed_at = NULL
+      WHERE id = ?
+    `).run(runId);
+
+    logAudit(request.user?.id, 'run.release', 'run', runId, {}, request.ip);
+
+    return { ok: true };
   });
 
   // Send stdin input to running process

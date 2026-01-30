@@ -30,6 +30,8 @@ interface Run {
   commands: Command[];
   assistUrl: string | null;
   duration: number | null;
+  claimed_by?: string | null;
+  claimed_at?: number | null;
 }
 
 interface Artifact {
@@ -119,6 +121,7 @@ export function RunDetail({ user }: Props) {
   const [showPromptModal, setShowPromptModal] = useState(false);
   const [promptInput, setPromptInput] = useState('');
   const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [showReleaseConfirm, setShowReleaseConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [commandLoading, setCommandLoading] = useState(false);
   const [promptLoading, setPromptLoading] = useState(false);
@@ -142,6 +145,7 @@ export function RunDetail({ user }: Props) {
   const canOperate = user?.role === 'admin' || user?.role === 'operator';
   const canDelete = user?.role === 'admin';
   const isActive = run?.status === 'running';
+  const isPending = run?.status === 'pending';
 
   // Fetch run details
   const fetchRun = useCallback(async () => {
@@ -349,6 +353,23 @@ export function RunDetail({ user }: Props) {
     }
   };
 
+  // Release claim
+  const releaseRun = async () => {
+    try {
+      const res = await fetch(`/api/runs/${runId}/release`, { method: 'POST' });
+      if (res.ok) {
+        addToast('success', 'Claim released');
+        setShowReleaseConfirm(false);
+        fetchRun();
+      } else {
+        const error = await res.json();
+        addToast('error', error.error || 'Failed to release claim');
+      }
+    } catch (err) {
+      addToast('error', 'Failed to release claim');
+    }
+  };
+
   // Send keyboard input
   const sendKeyboardInput = async () => {
     if (!keyboardInput.trim()) return;
@@ -457,7 +478,7 @@ export function RunDetail({ user }: Props) {
           </div>
 
           {/* Action Buttons - Top Right */}
-          {canOperate && (isActive || canDelete) && !isMobile && (
+          {canOperate && (isActive || canDelete || (isPending && run?.claimed_by)) && !isMobile && (
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               {isActive && (
                 <>
@@ -485,6 +506,16 @@ export function RunDetail({ user }: Props) {
                   </button>
                 </>
               )}
+              {isPending && run?.claimed_by && (
+                <button
+                  className="btn btn-sm"
+                  onClick={() => setShowReleaseConfirm(true)}
+                  style={{ background: 'var(--accent-yellow)', color: 'white' }}
+                  title="Release the claim so another runner can pick it up"
+                >
+                  ↩ Release Claim
+                </button>
+              )}
               {canDelete && (
                 <button
                   className="btn btn-sm"
@@ -499,7 +530,7 @@ export function RunDetail({ user }: Props) {
           )}
 
           {/* Mobile: Dropdown menu */}
-          {canOperate && (isActive || canDelete) && isMobile && (
+          {canOperate && (isActive || canDelete || (isPending && run?.claimed_by)) && isMobile && (
             <div style={{ position: 'relative' }}>
               <button
                 className="btn btn-sm btn-primary"
@@ -593,6 +624,30 @@ export function RunDetail({ user }: Props) {
                       </button>
                     </>
                   )}
+                  {isPending && run?.claimed_by && (
+                    <button
+                      onClick={() => {
+                        setShowReleaseConfirm(true);
+                        setShowActionMenu(false);
+                      }}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        padding: '10px 12px',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        color: 'var(--text-primary)',
+                        fontSize: '13px',
+                        borderBottom: canDelete ? '1px solid var(--border-color)' : 'none',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                    >
+                      ↩ Release Claim
+                    </button>
+                  )}
                   {canDelete && (
                     <button
                       onClick={() => {
@@ -652,6 +707,12 @@ export function RunDetail({ user }: Props) {
           {run.duration && (
             <span>
               <strong>Duration:</strong> {formatDuration(run.duration)}
+            </span>
+          )}
+          {run.claimed_by && (
+            <span>
+              <strong>Claimed By:</strong> {run.claimed_by}
+              {run.claimed_at && ` (${formatTime(run.claimed_at)})`}
             </span>
           )}
         </div>
@@ -926,6 +987,17 @@ export function RunDetail({ user }: Props) {
         title="Stop Run"
         message="Are you sure you want to stop this run? This will send a stop signal to the running process."
         confirmText="Stop Run"
+        danger
+      />
+
+      {/* Release Confirmation */}
+      <ConfirmModal
+        open={showReleaseConfirm}
+        onClose={() => setShowReleaseConfirm(false)}
+        onConfirm={releaseRun}
+        title="Release Claim"
+        message="Release this claim so another runner can pick it up?"
+        confirmText="Release"
         danger
       />
 

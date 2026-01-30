@@ -203,7 +203,7 @@ export const VncViewer: React.FC<VncViewerProps> = ({
   };
 
   // Map JS key to X11 keysym
-  const getKeysym = (key: string, code: string): number | null => {
+  const getKeysym = (key: string, _code: string): number | null => {
     const keyMap: { [key: string]: number } = {
       'Escape': 0xFF1B,
       'Tab': 0xFF09,

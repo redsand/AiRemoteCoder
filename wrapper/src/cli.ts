@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import os from 'os';
 import { config, validateConfig } from './config.js';
 import { ClaudeRunner } from './services/claude-runner.js';
 import { GenericRunner, createGenericRunner } from './services/generic-runner.js';
@@ -22,10 +23,14 @@ import {
   restartRun,
   sendInput,
   sendEscape,
+  registerClient,
+  sendHeartbeat,
+  claimRun,
   type UIAuth
 } from './services/gateway-client.js';
 import { type WorkerType, getWorkerDisplayName, isValidWorkerType } from './services/worker-registry.js';
 import type { BaseRunner } from './services/base-runner.js';
+import { WorkerPool } from './services/worker-pool.js';
 
 const program = new Command();
 
@@ -364,6 +369,8 @@ program
   .command('run')
   .description('Create and start a new autonomous run (no prompt needed)')
   .option('-c, --cwd <path>', 'Working directory')
+  .option('--agent-id <id>', 'Stable agent ID (defaults to hostname)')
+  .option('--agent-label <label>', 'Agent display label (defaults to ai-runner@<hostname>)')
   .option('-p, --prompt <prompt>', 'Initial prompt (optional)')
   .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev, vnc, hands-on)', 'claude')
   .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, Rev, etc.)')
@@ -416,7 +423,9 @@ program
           runId: createResult.id,
           capabilityToken: createResult.capabilityToken,
           workingDir: options.cwd,
-          autonomous: options.autonomous
+          autonomous: options.autonomous,
+          agentId: options.agentId,
+          agentLabel: options.agentLabel
         });
       } else if (workerType === 'vnc') {
         runner = new VncRunner({
@@ -424,7 +433,9 @@ program
           capabilityToken: createResult.capabilityToken,
           workingDir: options.cwd,
           autonomous: false,
-          displayMode: 'screen'
+          displayMode: 'screen',
+          agentId: options.agentId,
+          agentLabel: options.agentLabel
         });
       } else if (workerType === 'hands-on') {
         runner = new HandsOnRunner({
@@ -432,7 +443,9 @@ program
           capabilityToken: createResult.capabilityToken,
           workingDir: options.cwd,
           autonomous: false,
-          reason: 'User launched hands-on mode'
+          reason: 'User launched hands-on mode',
+          agentId: options.agentId,
+          agentLabel: options.agentLabel
         });
       } else {
         runner = createGenericRunner(workerType as WorkerType, {
@@ -442,7 +455,9 @@ program
           autonomous: options.autonomous,
           model: options.model,
           integration: options.integration,
-          provider: options.provider
+          provider: options.provider,
+          agentId: options.agentId,
+          agentLabel: options.agentLabel
         });
       }
 
@@ -478,6 +493,8 @@ program
   .requiredOption('--token <token>', 'Capability token from gateway')
   .option('--cmd <command>', 'Worker command/prompt')
   .option('--cwd <path>', 'Working directory (defaults to current)')
+  .option('--agent-id <id>', 'Stable agent ID (defaults to hostname)')
+  .option('--agent-label <label>', 'Agent display label (defaults to ai-runner@<hostname>)')
   .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev, vnc, hands-on)', 'claude')
   .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, Rev, etc.)')
   .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
@@ -521,7 +538,9 @@ program
         runId: options.runId,
         capabilityToken: options.token,
         workingDir: options.cwd,
-        autonomous: options.autonomous
+        autonomous: options.autonomous,
+        agentId: options.agentId,
+        agentLabel: options.agentLabel
       });
     } else if (workerType === 'vnc') {
       runner = new VncRunner({
@@ -529,7 +548,9 @@ program
         capabilityToken: options.token,
         workingDir: options.cwd,
         autonomous: false,
-        displayMode: 'screen'
+        displayMode: 'screen',
+        agentId: options.agentId,
+        agentLabel: options.agentLabel
       });
     } else if (workerType === 'hands-on') {
       runner = new HandsOnRunner({
@@ -537,7 +558,9 @@ program
         capabilityToken: options.token,
         workingDir: options.cwd,
         autonomous: false,
-        reason: 'User launched hands-on mode'
+        reason: 'User launched hands-on mode',
+        agentId: options.agentId,
+        agentLabel: options.agentLabel
       });
     } else {
       runner = createGenericRunner(workerType as WorkerType, {
@@ -547,7 +570,9 @@ program
         autonomous: options.autonomous,
         model: options.model,
         integration: options.integration,
-        provider: options.provider
+        provider: options.provider,
+        agentId: options.agentId,
+        agentLabel: options.agentLabel
       });
     }
 
@@ -755,6 +780,199 @@ program
       console.error('Failed to resume run:', err.message);
       process.exit(1);
     }
+  });
+
+// ============================================================================
+// Agent Listener Mode
+// ============================================================================
+
+program
+  .command('listen')
+  .description('Listen for assigned runs and start workers automatically')
+  .option('--agent-id <id>', 'Stable agent ID (defaults to hostname)')
+  .option('--agent-label <label>', 'Agent display label (defaults to ai-runner@<hostname>)')
+  .option('--max-concurrent <n>', 'Maximum concurrent runs', '1')
+  .option('--worker-types <types>', 'Comma-separated worker types to accept (default: all)')
+  .option('--poll-interval <ms>', 'Polling interval in ms', '2000')
+  .action(async (options) => {
+    try {
+      validateConfig();
+    } catch (err: any) {
+      console.error(`Configuration error: ${err.message}`);
+      console.error('Make sure HMAC_SECRET is set in .env or environment');
+      process.exit(1);
+    }
+
+    const workerTypes = options.workerTypes
+      ? options.workerTypes.split(',').map((t: string) => t.trim()).filter(Boolean)
+      : undefined;
+
+    if (workerTypes) {
+      for (const type of workerTypes) {
+        if (!isValidWorkerType(type)) {
+          console.error(`Invalid worker type: ${type}`);
+          console.error('Valid worker types: claude, ollama-launch, codex, gemini, rev, vnc, hands-on');
+          process.exit(1);
+        }
+      }
+    }
+
+    const maxConcurrent = Math.max(1, parseInt(options.maxConcurrent, 10) || 1);
+    const pollInterval = Math.max(500, parseInt(options.pollInterval, 10) || 2000);
+
+    console.log('Testing gateway connection...');
+    const connected = await testConnection();
+    if (!connected) {
+      console.error(`Cannot connect to gateway at ${config.gatewayUrl}`);
+      console.error('Make sure the gateway is running and GATEWAY_URL is correct');
+      process.exit(1);
+    }
+    console.log('Gateway connection OK');
+
+    const agentId = options.agentId;
+    const agentLabel = options.agentLabel;
+    const hostname = os.hostname();
+
+    // Register client once (or update existing)
+    try {
+      await registerClient(
+        agentLabel || `ai-runner@${hostname}`,
+        agentId || hostname,
+        getVersion(),
+        ['run_execution', 'log_streaming', 'command_polling']
+      );
+      console.log('Client registered successfully');
+    } catch (err: any) {
+      console.error('Failed to register client:', err.message);
+      process.exit(1);
+    }
+
+    const pool = new WorkerPool({ maxConcurrent });
+    let polling = false;
+
+    console.log(`Listening for runs as agent: ${agentId || hostname}`);
+    if (workerTypes) {
+      console.log(`Accepting worker types: ${workerTypes.join(', ')}`);
+    }
+    console.log(`Max concurrent runs: ${maxConcurrent}`);
+    console.log(`Poll interval: ${pollInterval}ms`);
+
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+
+      try {
+        if (!pool.checkResourceAvailability('listener')) {
+          return;
+        }
+
+        const result = await claimRun(agentId || hostname, workerTypes);
+        if (!result.run) {
+          return;
+        }
+
+        const run = result.run;
+        const metadata = run.metadata || {};
+        const workingDir = metadata.workingDir || process.cwd();
+        const autonomous = metadata.autonomous || false;
+        const model = metadata.model;
+        const integration = metadata.integration;
+        const provider = metadata.provider;
+
+        if (!isValidWorkerType(run.workerType)) {
+          console.error(`Claimed run ${run.id} has invalid worker type: ${run.workerType}`);
+          return;
+        }
+
+        console.log(`Claimed run ${run.id} (${run.workerType})`);
+
+        let runner: BaseRunner;
+        if (run.workerType === 'claude') {
+          runner = new ClaudeRunner({
+            runId: run.id,
+            capabilityToken: run.capabilityToken,
+            workingDir,
+            autonomous,
+            model,
+            integration,
+            provider,
+            agentId,
+            agentLabel
+          });
+        } else if (run.workerType === 'vnc') {
+          runner = new VncRunner({
+            runId: run.id,
+            capabilityToken: run.capabilityToken,
+            workingDir,
+            autonomous: false,
+            displayMode: 'screen',
+            agentId,
+            agentLabel
+          });
+        } else if (run.workerType === 'hands-on') {
+          runner = new HandsOnRunner({
+            runId: run.id,
+            capabilityToken: run.capabilityToken,
+            workingDir,
+            autonomous: false,
+            reason: 'Run assigned to hands-on mode',
+            agentId,
+            agentLabel
+          });
+        } else {
+          runner = createGenericRunner(run.workerType as WorkerType, {
+            runId: run.id,
+            capabilityToken: run.capabilityToken,
+            workingDir,
+            autonomous,
+            model,
+            integration,
+            provider,
+            agentId,
+            agentLabel
+          });
+        }
+
+        await pool.spawnWorker(runner, {
+          runId: run.id,
+          capabilityToken: run.capabilityToken,
+          workerType: run.workerType as WorkerType,
+          command: run.command || undefined,
+          workingDir,
+          autonomous,
+          model,
+          integration,
+          provider
+        });
+      } catch (err: any) {
+        console.error('Error while polling for runs:', err.message);
+      } finally {
+        polling = false;
+      }
+    };
+
+    const pollTimer = setInterval(poll, pollInterval);
+    const heartbeatTimer = setInterval(async () => {
+      try {
+        await sendHeartbeat(agentId || hostname);
+      } catch {
+        // Ignore heartbeat errors
+      }
+    }, config.heartbeatInterval);
+
+    // Initial poll immediately
+    poll().catch(() => {});
+
+    const shutdown = async () => {
+      clearInterval(pollTimer);
+      clearInterval(heartbeatTimer);
+      console.log('Shutting down listener...');
+      await pool.terminateAll();
+      process.exit(0);
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
   });
 
 // ============================================================================

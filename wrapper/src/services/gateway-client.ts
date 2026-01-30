@@ -27,6 +27,14 @@ export interface Command {
   created_at: number;
 }
 
+export interface ClaimedRun {
+  id: string;
+  capabilityToken: string;
+  command: string | null;
+  workerType: string;
+  metadata: Record<string, any> | null;
+}
+
 /**
  * Make authenticated request to gateway
  */
@@ -160,6 +168,19 @@ export async function registerClient(
 export async function sendHeartbeat(agentId: string): Promise<void> {
   return request('POST', '/api/clients/heartbeat', {
     agentId
+  });
+}
+
+/**
+ * Claim the next pending run assigned to an agent
+ */
+export async function claimRun(
+  agentId: string,
+  workerTypes?: string[]
+): Promise<{ run: ClaimedRun | null }> {
+  return request('POST', '/api/runs/claim', {
+    agentId,
+    workerTypes: workerTypes && workerTypes.length > 0 ? workerTypes : undefined
   });
 }
 

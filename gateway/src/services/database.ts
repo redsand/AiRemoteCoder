@@ -52,7 +52,9 @@ db.exec(`
     capability_token TEXT NOT NULL,
     metadata TEXT,
     tags TEXT,
-    worker_type TEXT NOT NULL DEFAULT 'claude'
+    worker_type TEXT NOT NULL DEFAULT 'claude',
+    claimed_by TEXT,
+    claimed_at INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_runs_client_id ON runs(client_id);
   CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
@@ -192,6 +194,22 @@ db.exec(`
   );
 `);
 
+function ensureColumn(table: string, column: string, type: string): void {
+  const existing = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  const hasColumn = existing.some((col) => col.name === column);
+  if (!hasColumn) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+
+ensureColumn('runs', 'claimed_by', 'TEXT');
+ensureColumn('runs', 'claimed_at', 'INTEGER');
+
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_runs_claimed_by ON runs(claimed_by);
+  CREATE INDEX IF NOT EXISTS idx_runs_claimed_at ON runs(claimed_at);
+`);
+
 // Helper functions
 export function cleanupExpiredNonces(): number {
   const cutoff = Math.floor(Date.now() / 1000) - config.nonceExpirySeconds;
@@ -225,6 +243,16 @@ export function updateClientStatus(): number {
   db.prepare(
     "UPDATE clients SET status = 'online' WHERE last_seen_at >= ? AND status != 'online'"
   ).run(degradedThreshold);
+
+  // Release expired run claims
+  const claimCutoff = now - config.claimLeaseSeconds;
+  db.prepare(`
+    UPDATE runs
+    SET claimed_by = NULL, claimed_at = NULL
+    WHERE status = 'pending'
+      AND claimed_at IS NOT NULL
+      AND claimed_at < ?
+  `).run(claimCutoff);
 
   return offlineResult.changes;
 }

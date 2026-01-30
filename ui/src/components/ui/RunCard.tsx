@@ -19,6 +19,8 @@ export interface Run {
   hasAssist?: boolean;
   duration?: number | null;
   worker_type?: string | null;
+  claimed_by?: string | null;
+  claimed_at?: number | null;
   metadata?: {
     model?: string;
     workerType?: string;
@@ -92,6 +94,9 @@ export function RunCard({ run, compact = false, showClient = true, onClick }: Ru
     .split('-')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
+  const claimText = run.claimed_by
+    ? `Claimed by ${run.claimed_by}${run.claimed_at ? ` (${formatRelativeTime(run.claimed_at)})` : ''}`
+    : null;
 
   return (
     <div
@@ -169,6 +174,20 @@ export function RunCard({ run, compact = false, showClient = true, onClick }: Ru
               }}
             >
               NEEDS APPROVAL
+            </span>
+          )}
+          {claimText && (
+            <span
+              style={{
+                padding: '2px 6px',
+                fontSize: '10px',
+                fontWeight: 600,
+                background: 'rgba(210, 153, 34, 0.15)',
+                color: 'var(--accent-yellow)',
+                borderRadius: '4px',
+              }}
+            >
+              {claimText}
             </span>
           )}
         </div>

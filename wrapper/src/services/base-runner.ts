@@ -16,7 +16,6 @@ import {
   type RunAuth,
   type Command
 } from './gateway-client.js';
-import { nanoid } from 'nanoid';
 
 export interface RunnerOptions {
   runId: string;
@@ -28,6 +27,8 @@ export interface RunnerOptions {
   model?: string; // For workers that support model selection (Ollama, Gemini, Rev)
   integration?: string; // For ollama-launch: specifies the IDE integration (claude, codex, opencode, droid)
   provider?: string; // For Rev: specifies the provider (ollama, claude, etc.)
+  agentId?: string; // Stable agent ID for client registration
+  agentLabel?: string; // Display name for client registration
 }
 
 export interface WorkerCommandResult {
@@ -43,6 +44,7 @@ export interface WorkerCommandResult {
 export abstract class BaseRunner extends EventEmitter {
   protected auth: RunAuth;
   protected agentId: string; // Unique identifier for this client/agent
+  protected agentLabel: string;
   protected process: ChildProcess | null = null;
   protected logPath: string;
   protected logStream: ReturnType<typeof createWriteStream> | null = null;
@@ -72,10 +74,9 @@ export abstract class BaseRunner extends EventEmitter {
       runId: options.runId,
       capabilityToken: options.capabilityToken
     };
-    // Generate a unique agent ID based on hostname and a random component
-    // This allows the same machine to register once and then update on subsequent runs
     const hostname = os.hostname();
-    this.agentId = `${hostname}-${nanoid(8)}`;
+    this.agentId = options.agentId || hostname;
+    this.agentLabel = options.agentLabel || `ai-runner@${hostname}`;
 
     this.workingDir = options.workingDir || process.cwd();
     // Store the sandbox root - cannot go above this directory
@@ -132,11 +133,12 @@ export abstract class BaseRunner extends EventEmitter {
     console.log(`Starting ${this.getWorkerType()}`);
     console.log(`Working directory: ${this.workingDir}`);
     console.log(`Agent ID: ${this.agentId}`);
+    console.log(`Agent Label: ${this.agentLabel}`);
 
     // Register client with gateway
     try {
       await registerClient(
-        `ai-runner@${os.hostname()}`,
+        this.agentLabel,
         this.agentId,
         undefined,
         ['run_execution', 'log_streaming', 'command_polling']
@@ -346,8 +348,9 @@ export abstract class BaseRunner extends EventEmitter {
 
   /**
    * Start heartbeat to update state periodically
+   * Protected to allow subclasses to call it
    */
-  private startHeartbeat(): void {
+  protected startHeartbeat(): void {
     this.heartbeatTimer = setInterval(async () => {
       if (!this.isRunning) return;
 
@@ -423,8 +426,9 @@ export abstract class BaseRunner extends EventEmitter {
 
   /**
    * Handle output from worker process
+   * Protected to allow subclasses to call it
    */
-  private async handleOutput(type: 'stdout' | 'stderr', data: Buffer): Promise<void> {
+  protected async handleOutput(type: 'stdout' | 'stderr', data: Buffer): Promise<void> {
     const text = data.toString();
     const preview = text.substring(0, 300);
     const truncated = text.length > 300 ? '...' : '';
@@ -715,8 +719,9 @@ export abstract class BaseRunner extends EventEmitter {
 
   /**
    * Start polling for commands
+   * Protected to allow subclasses to call it
    */
-  private startCommandPolling(): void {
+  protected startCommandPolling(): void {
     let pollCount = 0;
     let consecutiveEmptyPolls = 0;
     this.commandPollTimer = setInterval(async () => {

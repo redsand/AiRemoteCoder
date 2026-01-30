@@ -23,6 +23,7 @@ interface RunsResponse {
 interface Client {
   id: string;
   display_name: string;
+  agent_id: string;
 }
 
 interface Props {
@@ -35,6 +36,12 @@ const statusOptions: FilterOption[] = [
   { value: 'pending', label: 'Pending' },
   { value: 'done', label: 'Done' },
   { value: 'failed', label: 'Failed' },
+];
+
+const claimOptions: FilterOption[] = [
+  { value: 'all', label: 'All Claims' },
+  { value: 'claimed', label: 'Claimed' },
+  { value: 'unclaimed', label: 'Unclaimed' },
 ];
 
 const workerTypeOptions: FilterOption[] = [
@@ -100,6 +107,7 @@ export function Runs({ user }: Props) {
   const [createCustomModel, setCreateCustomModel] = useState('');
   const [createCommand, setCreateCommand] = useState('');
   const [createAutonomous, setCreateAutonomous] = useState(true);
+  const [createClientId, setCreateClientId] = useState('');
   const [createLoading, setCreateLoading] = useState(false);
 
   // Credentials display state
@@ -112,6 +120,7 @@ export function Runs({ user }: Props) {
   const search = searchParams.get('search') || '';
   const waitingApproval = searchParams.get('waitingApproval') === 'true';
   const workerType = searchParams.get('workerType') || 'all';
+  const claim = searchParams.get('claim') || 'all';
 
   // Bulk actions
   const [selectedRuns, setSelectedRuns] = useState<Set<string>>(new Set());
@@ -142,6 +151,7 @@ export function Runs({ user }: Props) {
     if (search) params.set('search', search);
     if (waitingApproval) params.set('waitingApproval', 'true');
     if (workerType !== 'all') params.set('workerType', workerType);
+    if (claim !== 'all') params.set('claim', claim);
     params.set('limit', '20');
     params.set('offset', String(offset));
 
@@ -164,7 +174,7 @@ export function Runs({ user }: Props) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [status, clientId, search, waitingApproval, runs.length, addToast]);
+  }, [status, clientId, search, waitingApproval, workerType, claim, runs.length, addToast]);
 
   // Fetch clients for filter dropdown
   const fetchClients = useCallback(async () => {
@@ -183,7 +193,7 @@ export function Runs({ user }: Props) {
   useEffect(() => {
     fetchRuns();
     fetchClients();
-  }, [status, clientId, search, waitingApproval, workerType]);
+  }, [status, clientId, search, waitingApproval, workerType, claim]);
 
   // Auto-refresh
   useEffect(() => {
@@ -200,7 +210,7 @@ export function Runs({ user }: Props) {
   };
 
   // Check if any filters are active
-  const hasActiveFilters = status !== 'all' || !!clientId || !!search || waitingApproval || workerType !== 'all';
+  const hasActiveFilters = status !== 'all' || !!clientId || !!search || waitingApproval || workerType !== 'all' || claim !== 'all';
 
   // Client filter options
   const clientOptions: FilterOption[] = [
@@ -221,6 +231,9 @@ export function Runs({ user }: Props) {
         workerType: createWorkerType,
         autonomous: createAutonomous,
       };
+      if (createClientId) {
+        requestBody.clientId = createClientId;
+      }
 
       if (createCommand.trim()) {
         requestBody.command = createCommand.trim();
@@ -289,6 +302,7 @@ export function Runs({ user }: Props) {
         setCreateCustomModel('');
         setCreateCommand('');
         setCreateAutonomous(true);
+        setCreateClientId('');
       } else {
         const error = await res.json();
         addToast('error', error.error || 'Failed to create run');
@@ -397,6 +411,12 @@ export function Runs({ user }: Props) {
           value={workerType}
           options={workerTypeOptions}
           onChange={(val) => updateFilter('workerType', val)}
+        />
+        <FilterSelect
+          label="Claim"
+          value={claim}
+          options={claimOptions}
+          onChange={(val) => updateFilter('claim', val)}
         />
         <FilterSelect
           label="Client"
@@ -563,6 +583,24 @@ export function Runs({ user }: Props) {
                 <option value="rev">Rev</option>
                 <option value="vnc">VNC (Remote Desktop)</option>
                 <option value="hands-on">Hands-On</option>
+              </select>
+            </div>
+
+            {/* Target AI Runner */}
+            <div>
+              <label className="form-label">Target AI Runner</label>
+              <select
+                value={createClientId}
+                onChange={(e) => setCreateClientId(e.target.value)}
+                className="form-input"
+                style={{ cursor: 'pointer' }}
+              >
+                <option value="">Any runner (first available)</option>
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.display_name} ({client.agent_id})
+                  </option>
+                ))}
               </select>
             </div>
 

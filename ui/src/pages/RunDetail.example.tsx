@@ -6,7 +6,7 @@
  * Apply these changes to the actual RunDetail.tsx file.
  */
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { VncViewer } from '../components/VncViewer';
 import { useVncConnection } from '../hooks/useVncConnection';
@@ -30,13 +30,11 @@ interface Run {
 
 export function RunDetailExample() {
   const { runId } = useParams<{ runId: string }>();
-  const [run, setRun] = useState<Run | null>(null);
+  const [run] = useState<Run | null>(null);
   const [activeTab, setActiveTab] = useState<'output' | 'files' | 'vnc'>('output');
-  const [showVnc, setShowVnc] = useState(false);
 
   // VNC connection hook
   const {
-    vncAvailable,
     vncInfo,
     vncReady,
     vncError,
