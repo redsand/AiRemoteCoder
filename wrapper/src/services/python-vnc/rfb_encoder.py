@@ -115,7 +115,7 @@ class RFBEncoder:
         # CARD16 height
         # INT32 encoding type
 
-        buf.write(struct.pack('>HHHHH', x, y, width, height))
+        buf.write(struct.pack('>HHHH', x, y, width, height))
         buf.write(struct.pack('>i', encoding))
 
         # Add frame data
@@ -151,7 +151,7 @@ class RFBEncoder:
 
         for rect in rectangles:
             x, y, width, height, data, encoding = rect
-            buf.write(struct.pack('>HHHHH', x, y, width, height))
+            buf.write(struct.pack('>HHHH', x, y, width, height))
             buf.write(struct.pack('>i', encoding))
             buf.write(data)
 
@@ -184,7 +184,11 @@ class RFBEncoder:
     @staticmethod
     def parse_set_pixel_format(data: bytes) -> Optional[dict]:
         """Parse SetPixelFormat message."""
-        if len(data) < 20:
+        if len(data) == 16:
+            pixel = data
+        elif len(data) >= 20:
+            pixel = data[4:20]
+        else:
             return None
 
         # SetPixelFormat:
@@ -192,9 +196,9 @@ class RFBEncoder:
         # CARD8 padding (3 bytes)
         # PIXEL_FORMAT pixel format (16 bytes)
 
-        bpp, color_depth, big_endian, true_color = struct.unpack('>BBBB', data[:4])
-        red_max, green_max, blue_max = struct.unpack('>HHH', data[4:10])
-        red_shift, green_shift, blue_shift = struct.unpack('>BBB', data[10:13])
+        bpp, color_depth, big_endian, true_color = struct.unpack('>BBBB', pixel[:4])
+        red_max, green_max, blue_max = struct.unpack('>HHH', pixel[4:10])
+        red_shift, green_shift, blue_shift = struct.unpack('>BBB', pixel[10:13])
 
         return {
             'bpp': bpp,
@@ -212,7 +216,7 @@ class RFBEncoder:
     @staticmethod
     def parse_key_event(data: bytes) -> Optional[dict]:
         """Parse KeyEvent message."""
-        if len(data) < 8:
+        if len(data) < 7:
             return None
 
         # KeyEvent:
@@ -221,8 +225,9 @@ class RFBEncoder:
         # CARD16 padding
         # CARD32 key
 
-        down_flag = data[0]
-        key = struct.unpack('>I', data[4:8])[0]
+        offset = 1 if len(data) >= 8 and data[0] == 4 else 0
+        down_flag = data[offset]
+        key = struct.unpack('>I', data[offset + 3:offset + 7])[0]
 
         return {
             'type': 'key',
@@ -233,7 +238,7 @@ class RFBEncoder:
     @staticmethod
     def parse_pointer_event(data: bytes) -> Optional[dict]:
         """Parse PointerEvent message."""
-        if len(data) < 6:
+        if len(data) < 5:
             return None
 
         # PointerEvent:
@@ -242,8 +247,9 @@ class RFBEncoder:
         # CARD16 x
         # CARD16 y
 
-        button_mask = data[0]
-        x, y = struct.unpack('>HH', data[1:5])
+        offset = 1 if len(data) >= 6 and data[0] == 5 else 0
+        button_mask = data[offset]
+        x, y = struct.unpack('>HH', data[offset + 1:offset + 5])
 
         buttons = {
             'left': bool(button_mask & 1),

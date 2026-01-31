@@ -7,6 +7,7 @@ import {
   FilterSelect,
   SearchInput,
   type FilterOption,
+  Modal,
   useToast,
 } from '../components/ui';
 
@@ -45,13 +46,13 @@ const deploymentInstructions: Record<OSType, DeploymentInstructions> = {
       'Open PowerShell and navigate to the project directory',
       'Run the setup script to start the gateway',
       'The UI will be available at https://localhost:3100',
-      'Create a run from the UI to get the run-id and token',
-      'Connect a client using the provided run-id and token',
+      'Create a new AI Runner in the Clients page to get a client token',
+      'Start the listener on the target machine with the token',
     ],
     commands: [
       'cd C:\\path\\to\\ai-remote-coder',
       '.\\run.ps1',
-      '.\\wrapper\\ai-runner start --run-id <id> --token <token>',
+      '.\\wrapper\\ai-runner listen --agent-id <agent-id> --client-token <token> --agent-label "<name>"',
     ],
   },
   macos: {
@@ -63,8 +64,8 @@ const deploymentInstructions: Record<OSType, DeploymentInstructions> = {
       'Make the run script executable: chmod +x ./run.sh',
       'Run the setup script: ./run.sh',
       'Access the UI at https://localhost:3100',
-      'Create a run from the UI to get credentials',
-      'Connect a client with the run-id and token',
+      'Create a new AI Runner in the Clients page to get a client token',
+      'Start the listener on the target machine with the token',
     ],
     commands: [
       'brew install node',
@@ -72,7 +73,7 @@ const deploymentInstructions: Record<OSType, DeploymentInstructions> = {
       'cd ai-remote-coder',
       'chmod +x ./run.sh',
       './run.sh',
-      './wrapper/ai-runner start --run-id <id> --token <token>',
+      './wrapper/ai-runner listen --agent-id <agent-id> --client-token <token> --agent-label "<name>"',
     ],
   },
   linux: {
@@ -84,8 +85,8 @@ const deploymentInstructions: Record<OSType, DeploymentInstructions> = {
       'Build the project: npm run build',
       'Start the gateway with npm',
       'The UI will be available at https://localhost:3100',
-      'Create a run from the UI to get credentials',
-      'Connect clients using the provided credentials',
+      'Create a new AI Runner in the Clients page to get a client token',
+      'Start the listener on the target machine with the token',
     ],
     commands: [
       '# Ubuntu/Debian:',
@@ -95,12 +96,12 @@ const deploymentInstructions: Record<OSType, DeploymentInstructions> = {
       'npm install',
       'npm run build',
       'npm run start -w gateway',
-      './wrapper/ai-runner start --run-id <id> --token <token>',
+      './wrapper/ai-runner listen --agent-id <agent-id> --client-token <token> --agent-label "<name>"',
     ],
   },
 };
 
-export function Clients({ user: _user }: Props) {
+export function Clients({ user }: Props) {
   const { addToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -111,6 +112,12 @@ export function Clients({ user: _user }: Props) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [selectedOS, setSelectedOS] = useState<OSType>('windows');
   const [showDeploymentGuide, setShowDeploymentGuide] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createDisplayName, setCreateDisplayName] = useState('');
+  const [createAgentId, setCreateAgentId] = useState('');
+  const [createLoading, setCreateLoading] = useState(false);
+  const [showCredentialsModal, setShowCredentialsModal] = useState(false);
+  const [credentials, setCredentials] = useState<{ id: string; token: string; command: string; agentId: string; displayName: string } | null>(null);
 
   // Filters from URL
   const status = searchParams.get('status') || 'all';
@@ -187,6 +194,50 @@ export function Clients({ user: _user }: Props) {
   // Stats
   const onlineCount = clients.filter(c => c.status === 'online').length;
   const offlineCount = clients.filter(c => c.status === 'offline').length;
+  const canOperate = user?.role === 'admin' || user?.role === 'operator';
+
+  const handleCreateClient = async () => {
+    if (!createDisplayName.trim() || !createAgentId.trim()) {
+      addToast('error', 'Display name and Agent ID are required');
+      return;
+    }
+
+    setCreateLoading(true);
+    try {
+      const res = await fetch('/api/clients/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          displayName: createDisplayName.trim(),
+          agentId: createAgentId.trim(),
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const cmd = `ai-runner listen --agent-id ${createAgentId.trim()} --client-token ${data.token} --agent-label "${createDisplayName.trim()}"`;
+        setCredentials({
+          id: data.id,
+          token: data.token,
+          command: cmd,
+          agentId: createAgentId.trim(),
+          displayName: createDisplayName.trim(),
+        });
+        setShowCredentialsModal(true);
+        setShowCreateModal(false);
+        setCreateDisplayName('');
+        setCreateAgentId('');
+        fetchClients();
+      } else {
+        const error = await res.json();
+        addToast('error', error.error || 'Failed to create AI Runner');
+      }
+    } catch (err) {
+      addToast('error', 'Failed to create AI Runner');
+    } finally {
+      setCreateLoading(false);
+    }
+  };
 
   return (
     <div className="clients-page">
@@ -211,13 +262,29 @@ export function Clients({ user: _user }: Props) {
               </span>
             </div>
           </div>
-          <button
-            className={`btn ${showDeploymentGuide ? 'btn-primary' : ''}`}
-            onClick={() => setShowDeploymentGuide(!showDeploymentGuide)}
-            style={{ whiteSpace: 'nowrap' }}
-          >
-            {showDeploymentGuide ? '✓ Deployment Guide' : 'Deployment Guide'}
-          </button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                if (canOperate) {
+                  setShowCreateModal(true);
+                } else {
+                  addToast('error', 'Requires admin or operator role');
+                }
+              }}
+              disabled={!canOperate}
+              title={canOperate ? 'Create a new AI Runner' : 'Requires admin or operator role'}
+            >
+              New Runner
+            </button>
+            <button
+              className={`btn ${showDeploymentGuide ? 'btn-primary' : ''}`}
+              onClick={() => setShowDeploymentGuide(!showDeploymentGuide)}
+              style={{ whiteSpace: 'nowrap' }}
+            >
+              {showDeploymentGuide ? '✓ Deployment Guide' : 'Deployment Guide'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -332,7 +399,7 @@ export function Clients({ user: _user }: Props) {
                 borderLeft: '3px solid var(--accent-blue)',
               }}
             >
-              <strong>💡 Tip:</strong> Once the gateway is running, create a run from the UI, then use the provided run-id and token to connect clients.
+              <strong>💡 Tip:</strong> Create an AI Runner in the Clients page to get a client token, then start the listener on that machine.
             </div>
           </div>
         </div>
@@ -408,14 +475,14 @@ export function Clients({ user: _user }: Props) {
                 </button>
                 {' '}for your operating system
               </li>
-              <li style={{ marginBottom: '6px' }}>Create a run from the Runs page to get a run-id and token</li>
-              <li>Connect a client using the command below</li>
+              <li style={{ marginBottom: '6px' }}>Create a new AI Runner to get a client token</li>
+              <li>Start a listener using the command below</li>
             </ol>
             <p style={{ marginBottom: '8px', marginTop: '12px' }}>
               <strong>Connect a client:</strong>
             </p>
             <code style={{ display: 'block', padding: '8px', background: 'var(--bg-tertiary)', borderRadius: '4px' }}>
-              ai-runner start --run-id [id] --token [token]
+              ai-runner listen --agent-id [agent-id] --client-token [token] --agent-label "[name]"
             </code>
           </div>
         </div>
@@ -440,6 +507,188 @@ export function Clients({ user: _user }: Props) {
             </div>
           )}
         </>
+      )}
+
+      {/* Create Runner Modal */}
+      {canOperate && (
+        <Modal
+          open={showCreateModal}
+          onClose={() => setShowCreateModal(false)}
+          title="Create AI Runner"
+          footer={
+            <>
+              <button className="btn" onClick={() => setShowCreateModal(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleCreateClient}
+                disabled={createLoading}
+              >
+                {createLoading ? 'Creating...' : 'Create Runner'}
+              </button>
+            </>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <label className="form-label">Display Name</label>
+              <input
+                type="text"
+                value={createDisplayName}
+                onChange={(e) => setCreateDisplayName(e.target.value)}
+                placeholder="e.g. CI Runner 01"
+                className="form-input"
+              />
+            </div>
+            <div>
+              <label className="form-label">Agent ID</label>
+              <input
+                type="text"
+                value={createAgentId}
+                onChange={(e) => setCreateAgentId(e.target.value)}
+                placeholder="e.g. runner-01"
+                className="form-input"
+              />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Credentials Modal */}
+      {showCredentialsModal && credentials && (
+        <Modal
+          open={showCredentialsModal}
+          onClose={() => setShowCredentialsModal(false)}
+          title="AI Runner Created"
+          footer={
+            <button
+              className="btn btn-primary"
+              onClick={() => setShowCredentialsModal(false)}
+            >
+              Done
+            </button>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <p style={{ color: 'var(--text-secondary)', margin: 0 }}>
+              Use these credentials to start the ai-runner listener on the target machine:
+            </p>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: 'var(--text-secondary)' }}>
+                Agent ID:
+              </label>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  background: 'var(--bg-tertiary)',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  fontFamily: 'monospace',
+                  fontSize: '14px',
+                }}
+              >
+                <code style={{ flex: 1, color: 'var(--accent-blue)', wordBreak: 'break-all' }}>
+                  {credentials.agentId}
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(credentials.agentId);
+                    addToast('success', 'Agent ID copied to clipboard');
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent-blue)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    padding: '0 8px',
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: 'var(--text-secondary)' }}>
+                Client Token:
+              </label>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  background: 'var(--bg-tertiary)',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  fontFamily: 'monospace',
+                  fontSize: '14px',
+                }}
+              >
+                <code style={{ flex: 1, color: 'var(--accent-green)', wordBreak: 'break-all' }}>
+                  {credentials.token}
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(credentials.token);
+                    addToast('success', 'Token copied to clipboard');
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent-blue)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    padding: '0 8px',
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: 'var(--text-secondary)' }}>
+                Start Command:
+              </label>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  background: 'var(--bg-tertiary)',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  overflow: 'auto',
+                }}
+              >
+                <code style={{ flex: 1, color: 'var(--text-primary)', wordBreak: 'break-all' }}>
+                  {credentials.command}
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(credentials.command);
+                    addToast('success', 'Command copied to clipboard');
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent-blue)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    padding: '0 8px',
+                    flexShrink: 0,
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );

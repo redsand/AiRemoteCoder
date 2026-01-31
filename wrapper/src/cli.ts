@@ -17,7 +17,6 @@ import {
   listRuns,
   getRun,
   getRunState,
-  createRun,
   stopRun,
   haltRun,
   restartRun,
@@ -28,7 +27,7 @@ import {
   claimRun,
   type UIAuth
 } from './services/gateway-client.js';
-import { type WorkerType, getWorkerDisplayName, isValidWorkerType } from './services/worker-registry.js';
+import { type WorkerType, isValidWorkerType } from './services/worker-registry.js';
 import type { BaseRunner } from './services/base-runner.js';
 import { WorkerPool } from './services/worker-pool.js';
 
@@ -367,239 +366,18 @@ program
 
 program
   .command('run')
-  .description('Create and start a new autonomous run (no prompt needed)')
-  .option('-c, --cwd <path>', 'Working directory')
-  .option('--agent-id <id>', 'Stable agent ID (defaults to hostname)')
-  .option('--agent-label <label>', 'Agent display label (defaults to ai-runner@<hostname>)')
-  .option('-p, --prompt <prompt>', 'Initial prompt (optional)')
-  .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev, vnc, hands-on)', 'claude')
-  .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, Rev, etc.)')
-  .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
-  .option('--provider <provider>', 'LLM provider for Rev (ollama, claude, gemini) - for rev only')
-  .option('--autonomous', 'Run in fully autonomous mode', true)
-  .option('--no-autonomous', 'Run in interactive mode')
-  .action(async (options) => {
-    try {
-      validateConfig();
-
-      // Validate worker type
-      const workerType = options.workerType;
-      if (!isValidWorkerType(workerType)) {
-        console.error(`Invalid worker type: ${workerType}`);
-        console.error('Valid worker types: claude, ollama-launch, codex, gemini, rev, vnc, hands-on');
-        process.exit(1);
-      }
-
-      const auth = await getUIAuth();
-
-      // Create a new run on the gateway with worker type
-      const createResult = await createRun(auth, {
-        command: options.prompt,
-        workingDir: options.cwd || process.cwd(),
-        autonomous: options.autonomous,
-        workerType,
-        model: options.model
-      });
-
-      console.log(`Created run: ${createResult.id}`);
-      console.log(`Worker: ${getWorkerDisplayName(workerType)}`);
-      if (options.model) {
-        console.log(`Model: ${options.model}`);
-      }
-      console.log(`Mode: ${createResult.autonomous ? 'Autonomous' : 'Interactive'}`);
-
-      // Test gateway connection
-      const connected = await testConnection();
-      if (!connected) {
-        console.error(`Cannot connect to gateway at ${config.gatewayUrl}`);
-        process.exit(1);
-      }
-
-      // Create the appropriate runner based on worker type
-      let runner: BaseRunner;
-
-      if (workerType === 'claude') {
-        runner = new ClaudeRunner({
-          runId: createResult.id,
-          capabilityToken: createResult.capabilityToken,
-          workingDir: options.cwd,
-          autonomous: options.autonomous,
-          agentId: options.agentId,
-          agentLabel: options.agentLabel
-        });
-      } else if (workerType === 'vnc') {
-        runner = new VncRunner({
-          runId: createResult.id,
-          capabilityToken: createResult.capabilityToken,
-          workingDir: options.cwd,
-          autonomous: false,
-          displayMode: 'screen',
-          agentId: options.agentId,
-          agentLabel: options.agentLabel
-        });
-      } else if (workerType === 'hands-on') {
-        runner = new HandsOnRunner({
-          runId: createResult.id,
-          capabilityToken: createResult.capabilityToken,
-          workingDir: options.cwd,
-          autonomous: false,
-          reason: 'User launched hands-on mode',
-          agentId: options.agentId,
-          agentLabel: options.agentLabel
-        });
-      } else {
-        runner = createGenericRunner(workerType as WorkerType, {
-          runId: createResult.id,
-          capabilityToken: createResult.capabilityToken,
-          workingDir: options.cwd,
-          autonomous: options.autonomous,
-          model: options.model,
-          integration: options.integration,
-          provider: options.provider,
-          agentId: options.agentId,
-          agentLabel: options.agentLabel
-        });
-      }
-
-      runner.on('stdout', (data) => process.stdout.write(data));
-      runner.on('stderr', (data) => process.stderr.write(data));
-      runner.on('exit', (code) => {
-        console.log(`\nRun finished with exit code ${code}`);
-        process.exit(code);
-      });
-
-      // Handle graceful shutdown
-      process.on('SIGINT', async () => {
-        console.log('\nReceived SIGINT, stopping...');
-        await runner.stop();
-      });
-
-      process.on('SIGTERM', async () => {
-        console.log('\nReceived SIGTERM, stopping...');
-        await runner.stop();
-      });
-
-      await runner.start(options.prompt);
-    } catch (err: any) {
-      console.error(`Failed to start: ${err.message}`);
-      process.exit(1);
-    }
+  .description('Deprecated: use "listen" (runs are started from the gateway)')
+  .action(() => {
+    console.error('The "run" command is deprecated. Use "ai-runner listen" instead.');
+    process.exit(1);
   });
 
 program
   .command('start')
-  .description('Start a worker run with a specific run ID and token')
-  .requiredOption('--run-id <id>', 'Run ID from gateway')
-  .requiredOption('--token <token>', 'Capability token from gateway')
-  .option('--cmd <command>', 'Worker command/prompt')
-  .option('--cwd <path>', 'Working directory (defaults to current)')
-  .option('--agent-id <id>', 'Stable agent ID (defaults to hostname)')
-  .option('--agent-label <label>', 'Agent display label (defaults to ai-runner@<hostname>)')
-  .option('-w, --worker-type <type>', 'Worker type (claude, ollama-launch, codex, gemini, rev, vnc, hands-on)', 'claude')
-  .option('-m, --model <model>', 'Model to use (for Ollama, Gemini, Rev, etc.)')
-  .option('-i, --integration <integration>', 'Ollama integration (claude, codex, opencode, droid) - for ollama-launch only')
-  .option('--provider <provider>', 'LLM provider for Rev (ollama, claude, gemini) - for rev only')
-  .option('--autonomous', 'Run in autonomous mode')
-  .action(async (options) => {
-    try {
-      validateConfig();
-    } catch (err: any) {
-      console.error(`Configuration error: ${err.message}`);
-      console.error('Make sure HMAC_SECRET is set in .env or environment');
-      process.exit(1);
-    }
-
-    // Validate worker type
-    const workerType = options.workerType;
-    if (!isValidWorkerType(workerType)) {
-      console.error(`Invalid worker type: ${workerType}`);
-      console.error('Valid worker types: claude, ollama-launch, codex, gemini, rev, vnc, hands-on');
-      process.exit(1);
-    }
-
-    console.log('Testing gateway connection...');
-    const connected = await testConnection();
-    if (!connected) {
-      console.error(`Cannot connect to gateway at ${config.gatewayUrl}`);
-      console.error('Make sure the gateway is running and GATEWAY_URL is correct');
-      process.exit(1);
-    }
-    console.log('Gateway connection OK');
-    console.log(`Worker: ${getWorkerDisplayName(workerType)}`);
-    if (options.model) {
-      console.log(`Model: ${options.model}`);
-    }
-
-    // Create the appropriate runner based on worker type
-    let runner: BaseRunner;
-
-    if (workerType === 'claude') {
-      runner = new ClaudeRunner({
-        runId: options.runId,
-        capabilityToken: options.token,
-        workingDir: options.cwd,
-        autonomous: options.autonomous,
-        agentId: options.agentId,
-        agentLabel: options.agentLabel
-      });
-    } else if (workerType === 'vnc') {
-      runner = new VncRunner({
-        runId: options.runId,
-        capabilityToken: options.token,
-        workingDir: options.cwd,
-        autonomous: false,
-        displayMode: 'screen',
-        agentId: options.agentId,
-        agentLabel: options.agentLabel
-      });
-    } else if (workerType === 'hands-on') {
-      runner = new HandsOnRunner({
-        runId: options.runId,
-        capabilityToken: options.token,
-        workingDir: options.cwd,
-        autonomous: false,
-        reason: 'User launched hands-on mode',
-        agentId: options.agentId,
-        agentLabel: options.agentLabel
-      });
-    } else {
-      runner = createGenericRunner(workerType as WorkerType, {
-        runId: options.runId,
-        capabilityToken: options.token,
-        workingDir: options.cwd,
-        autonomous: options.autonomous,
-        model: options.model,
-        integration: options.integration,
-        provider: options.provider,
-        agentId: options.agentId,
-        agentLabel: options.agentLabel
-      });
-    }
-
-    runner.on('stdout', (data) => process.stdout.write(data));
-    runner.on('stderr', (data) => process.stderr.write(data));
-    runner.on('exit', (code) => {
-      console.log(`\n${getWorkerDisplayName(workerType)} finished with exit code ${code}`);
-      process.exit(code);
-    });
-
-    // Handle graceful shutdown
-    process.on('SIGINT', async () => {
-      console.log('\nReceived SIGINT, stopping...');
-      await runner.stop();
-    });
-
-    process.on('SIGTERM', async () => {
-      console.log('\nReceived SIGTERM, stopping...');
-      await runner.stop();
-    });
-
-    try {
-      await runner.start(options.cmd);
-    } catch (err: any) {
-      console.error(`Failed to start: ${err.message}`);
-      process.exit(1);
-    }
+  .description('Deprecated: use "listen" (runs are started from the gateway)')
+  .action(() => {
+    console.error('The "start" command is deprecated. Use "ai-runner listen" instead.');
+    process.exit(1);
   });
 
 program
@@ -792,8 +570,8 @@ program
   .option('--agent-id <id>', 'Stable agent ID (defaults to hostname)')
   .option('--agent-label <label>', 'Agent display label (defaults to ai-runner@<hostname>)')
   .option('--max-concurrent <n>', 'Maximum concurrent runs', '1')
-  .option('--worker-types <types>', 'Comma-separated worker types to accept (default: all)')
   .option('--poll-interval <ms>', 'Polling interval in ms', '2000')
+  .option('--client-token <token>', 'Client token for gateway authentication')
   .action(async (options) => {
     try {
       validateConfig();
@@ -803,18 +581,8 @@ program
       process.exit(1);
     }
 
-    const workerTypes = options.workerTypes
-      ? options.workerTypes.split(',').map((t: string) => t.trim()).filter(Boolean)
-      : undefined;
-
-    if (workerTypes) {
-      for (const type of workerTypes) {
-        if (!isValidWorkerType(type)) {
-          console.error(`Invalid worker type: ${type}`);
-          console.error('Valid worker types: claude, ollama-launch, codex, gemini, rev, vnc, hands-on');
-          process.exit(1);
-        }
-      }
+    if (options.clientToken) {
+      config.clientToken = options.clientToken;
     }
 
     const maxConcurrent = Math.max(1, parseInt(options.maxConcurrent, 10) || 1);
@@ -851,9 +619,6 @@ program
     let polling = false;
 
     console.log(`Listening for runs as agent: ${agentId || hostname}`);
-    if (workerTypes) {
-      console.log(`Accepting worker types: ${workerTypes.join(', ')}`);
-    }
     console.log(`Max concurrent runs: ${maxConcurrent}`);
     console.log(`Poll interval: ${pollInterval}ms`);
 
@@ -866,7 +631,7 @@ program
           return;
         }
 
-        const result = await claimRun(agentId || hostname, workerTypes);
+        const result = await claimRun(agentId || hostname);
         if (!result.run) {
           return;
         }

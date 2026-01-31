@@ -61,6 +61,8 @@ export abstract class BaseRunner extends EventEmitter {
   protected model?: string;
   protected integration?: string; // For ollama-launch: IDE integration name
   protected provider?: string; // For Rev: provider name (ollama, claude, etc.)
+  protected suppressGatewayEvents = false;
+  private gatewayInvalidated = false;
   private processedCommandIds: Set<string> = new Set(); // Track processed commands to prevent duplicates
   private processedCommandExpire: Map<string, NodeJS.Timeout> = new Map(); // Track expiration timers
   private lastOutputTime = 0; // Track when we last received output
@@ -554,6 +556,9 @@ export abstract class BaseRunner extends EventEmitter {
    * Send event to gateway
    */
   protected async sendEvent(type: string, data: string): Promise<void> {
+    if (this.suppressGatewayEvents) {
+      return;
+    }
     this.sequence++;
     try {
       await sendEvent(this.auth, {
@@ -568,18 +573,18 @@ export abstract class BaseRunner extends EventEmitter {
       // Check if this is a fatal error (run deleted, rate limited, etc.)
       if (err.message) {
         const errorMessage = err.message.toLowerCase();
-        // Exit on 404 (run not found), 429 (rate limited), or other gateway errors
+        // Stop on invalid/expired run or auth failures; keep listener alive
         if (errorMessage.includes('not found') ||
-            errorMessage.includes('429') ||
-            errorMessage.includes('rate limit') ||
             errorMessage.includes('unauthorized') ||
-            errorMessage.includes('forbidden')) {
+            errorMessage.includes('forbidden') ||
+            errorMessage.includes('invalid capability token')) {
           console.error('\n========================================');
           console.error('Fatal error communicating with gateway.');
           console.error('The run may have been deleted or rate limit exceeded.');
           console.error('Exiting gracefully...');
           console.error('========================================\n');
-          process.exit(1);
+          await this.handleGatewayInvalidation(errorMessage);
+          return;
         }
       }
 
@@ -607,25 +612,29 @@ export abstract class BaseRunner extends EventEmitter {
     // Save final state
     this.saveState();
 
-    // Send finish marker
-    await this.sendMarker('finished', {
-      exitCode,
-      signal,
-      stopRequested: this.stopRequested,
-      haltRequested: this.haltRequested,
-      workerType: this.getWorkerType()
-    });
+    if (!this.suppressGatewayEvents) {
+      // Send finish marker
+      await this.sendMarker('finished', {
+        exitCode,
+        signal,
+        stopRequested: this.stopRequested,
+        haltRequested: this.haltRequested,
+        workerType: this.getWorkerType()
+      });
+    }
 
     // Close log stream
     this.logStream?.end();
 
-    // Upload log file as artifact
-    try {
-      const logFileName = `${this.getWorkerType()}.log`;
-      await uploadArtifact(this.auth, this.logPath, logFileName);
-      console.log('Log file uploaded');
-    } catch (err) {
-      console.error('Failed to upload log:', err);
+    if (!this.suppressGatewayEvents) {
+      // Upload log file as artifact
+      try {
+        const logFileName = `${this.getWorkerType()}.log`;
+        await uploadArtifact(this.auth, this.logPath, logFileName);
+        console.log('Log file uploaded');
+      } catch (err) {
+        console.error('Failed to upload log:', err);
+      }
     }
 
     this.emit('exit', exitCode);
@@ -768,6 +777,27 @@ export abstract class BaseRunner extends EventEmitter {
         // Ignore polling errors
       }
     }, config.commandPollInterval);
+  }
+
+  private async handleGatewayInvalidation(reason: string): Promise<void> {
+    if (this.gatewayInvalidated) {
+      return;
+    }
+    this.gatewayInvalidated = true;
+    this.suppressGatewayEvents = true;
+
+    this.stopCommandPolling();
+    this.stopHeartbeat();
+
+    try {
+      await this.stop();
+    } catch (err) {
+      console.error('Failed to stop after gateway invalidation:', err);
+    }
+
+    if (!this.process) {
+      await this.handleExit(1, null);
+    }
   }
 
   /**

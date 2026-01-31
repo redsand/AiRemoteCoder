@@ -18,8 +18,17 @@ export default defineConfig({
       }
     }
   },
+  optimizeDeps: {
+    esbuildOptions: {
+      target: 'esnext'
+    }
+  },
+  esbuild: {
+    target: 'esnext'
+  },
   build: {
     outDir: 'dist',
-    sourcemap: true
+    sourcemap: true,
+    target: 'esnext'
   }
 });

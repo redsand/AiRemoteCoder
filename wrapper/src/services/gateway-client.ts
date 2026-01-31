@@ -42,7 +42,8 @@ async function request(
   method: string,
   path: string,
   body?: object | FormData,
-  auth?: RunAuth
+  auth?: RunAuth,
+  clientToken?: string
 ): Promise<any> {
   const url = `${config.gatewayUrl}${path}`;
   const timestamp = Math.floor(Date.now() / 1000);
@@ -58,12 +59,15 @@ async function request(
     headers['X-Run-Id'] = auth.runId;
     headers['X-Capability-Token'] = auth.capabilityToken;
   }
+  if (clientToken) {
+    headers['X-Client-Token'] = clientToken;
+  }
 
   let fetchBody: string | FormData | undefined;
 
   if (body instanceof FormData) {
-    // For file uploads, hash the form boundary
-    bodyStr = 'multipart';
+    // For file uploads, do not include body hash (gateway doesn't capture raw multipart body)
+    bodyStr = '';
     fetchBody = body;
     // FormData sets its own content-type with boundary
   } else if (body) {
@@ -152,23 +156,24 @@ export async function registerClient(
   displayName: string,
   agentId: string,
   version?: string,
-  capabilities?: string[]
+  capabilities?: string[],
+  clientToken?: string
 ): Promise<{ id: string; updated: boolean }> {
   return request('POST', '/api/clients/register', {
     displayName,
     agentId,
     version,
     capabilities
-  });
+  }, undefined, clientToken || config.clientToken);
 }
 
 /**
  * Send heartbeat to keep client alive
  */
-export async function sendHeartbeat(agentId: string): Promise<void> {
+export async function sendHeartbeat(agentId: string, clientToken?: string): Promise<void> {
   return request('POST', '/api/clients/heartbeat', {
     agentId
-  });
+  }, undefined, clientToken || config.clientToken);
 }
 
 /**
@@ -176,12 +181,11 @@ export async function sendHeartbeat(agentId: string): Promise<void> {
  */
 export async function claimRun(
   agentId: string,
-  workerTypes?: string[]
+  clientToken?: string
 ): Promise<{ run: ClaimedRun | null }> {
   return request('POST', '/api/runs/claim', {
-    agentId,
-    workerTypes: workerTypes && workerTypes.length > 0 ? workerTypes : undefined
-  });
+    agentId
+  }, undefined, clientToken || config.clientToken);
 }
 
 /**

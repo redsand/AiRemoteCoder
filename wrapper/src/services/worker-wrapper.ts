@@ -104,6 +104,8 @@ export class WorkerWrapper extends EventEmitter {
     } else {
       this.emit('failed', new Error(`Worker exited with code ${code}`));
     }
+
+    this.emit('terminated');
   }
 
   /**

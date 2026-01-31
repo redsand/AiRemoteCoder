@@ -51,7 +51,9 @@ export async function wrapperAuth(
 
   // Calculate body hash
   const rawBody = (request as any).rawBody || '';
-  const bodyHash = hashBody(rawBody);
+  const contentType = request.headers['content-type'] as string | undefined;
+  const isMultipart = contentType?.startsWith('multipart/form-data');
+  const bodyHash = isMultipart ? hashBody('') : hashBody(rawBody);
 
   // Verify signature
   const isValid = verifySignature(signature, {

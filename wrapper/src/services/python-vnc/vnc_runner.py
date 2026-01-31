@@ -13,11 +13,19 @@ import os
 import signal
 import socket
 import sys
+import json
+import ssl
+import struct
 from datetime import datetime
 from typing import Optional
 
 import websockets
 import websockets.exceptions
+import inspect
+
+deps_dir = os.path.join(os.path.dirname(__file__), '.deps')
+if os.path.isdir(deps_dir):
+    sys.path.insert(0, deps_dir)
 
 from gateway_client import GatewayClient
 from vnc_server import VNCServer
@@ -51,9 +59,12 @@ class PythonVNCRunner:
             framerate=int(args.framerate),
         )
 
-        # Generate unique agent ID
-        hostname = socket.gethostname()
-        self.agent_id = f'{hostname}-{os.urandom(4).hex()}'
+        # Use provided agent ID if set, otherwise generate one
+        if args.agent_id:
+            self.agent_id = args.agent_id
+        else:
+            hostname = socket.gethostname()
+            self.agent_id = f'{hostname}-{os.urandom(4).hex()}'
 
         self.is_running = False
         self.streaming = False
@@ -126,7 +137,7 @@ class PythonVNCRunner:
 
         try:
             await self.gateway.register_client(
-                display_name=f'Python VNC - {self.agent_id}',
+                display_name=self.args.agent_label or f'Python VNC - {self.agent_id}',
                 agent_id=self.agent_id,
                 capabilities=capabilities,
             )
@@ -137,11 +148,18 @@ class PythonVNCRunner:
 
     async def _send_started_marker(self):
         """Send started marker indicating VNC is ready."""
-        marker = f'vnc_started:width={self.args.width},height={self.args.height},'
-        marker += f'framerate={self.args.framerate},agent={self.agent_id}'
+        marker = {
+            'event': 'started',
+            'command': 'vnc',
+            'workerType': 'vnc',
+            'displayMode': self.args.display_mode,
+            'resolution': f'{self.args.width}x{self.args.height}',
+            'capabilities': ['vnc_access', 'remote_desktop', 'mouse_control', 'keyboard_control'],
+            'agentId': self.agent_id,
+        }
 
         try:
-            await self.gateway.send_event('marker', marker)
+            await self.gateway.send_event('marker', json.dumps(marker))
             logger.info('Sent started marker')
         except Exception as e:
             logger.error(f'Failed to send started marker: {e}')
@@ -157,9 +175,14 @@ class PythonVNCRunner:
                     await self._handle_command(cmd)
 
             except Exception as e:
-                logger.error(f'Error polling commands: {e}')
+                msg = str(e)
+                if '429' in msg:
+                    logger.warning('Rate limited while polling commands; backing off')
+                    await asyncio.sleep(10)
+                else:
+                    logger.error(f'Error polling commands: {e}')
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(int(os.getenv('VNC_COMMAND_POLL_INTERVAL', '5')))
 
     async def _heartbeat_loop(self):
         """Send heartbeat every 30 seconds."""
@@ -173,28 +196,44 @@ class PythonVNCRunner:
 
     async def _handle_command(self, cmd):
         """Handle command from gateway."""
-        logger.info(f'Received command: {cmd.command}')
+        command_id = getattr(cmd, 'command_id', None)
+        if command_id is None:
+            command_id = getattr(cmd, 'id', None)
+        if command_id is None and isinstance(cmd, dict):
+            command_id = cmd.get('id')
+        command = getattr(cmd, 'command', None)
+        if command is None and isinstance(cmd, dict):
+            command = cmd.get('command')
+
+        if not command_id:
+            logger.error('Received command without command_id; skipping ack')
+            return
+        if not command:
+            logger.error('Received command without command; skipping')
+            return
+
+        logger.info(f'Received command: {command}')
 
         try:
-            if cmd.command == '__START_VNC_STREAM__':
+            if command == '__START_VNC_STREAM__':
                 await self._start_vnc_streaming()
-                await self.gateway.ack_command(cmd.command_id, result='VNC streaming started')
+                await self.gateway.ack_command(command_id, result='VNC streaming started')
 
-            elif cmd.command == '__STOP__':
+            elif command == '__STOP__':
                 logger.info('Stop command received')
                 self.shutdown_event.set()
-                await self.gateway.ack_command(cmd.command_id, result='Stopping')
+                await self.gateway.ack_command(command_id, result='Stopping')
 
             else:
                 # VNC doesn't execute arbitrary commands
                 await self.gateway.ack_command(
-                    cmd.command_id,
+                    command_id,
                     error='VNC runner does not execute commands',
                 )
 
         except Exception as e:
             logger.error(f'Error handling command: {e}')
-            await self.gateway.ack_command(cmd.command_id, error=str(e))
+            await self.gateway.ack_command(command_id, error=str(e))
 
     async def _start_vnc_streaming(self):
         """Start VNC streaming over WebSocket with reconnection logic."""
@@ -214,19 +253,37 @@ class PythonVNCRunner:
 
                 # Add custom header to identify as Python VNC client
                 extra_headers = {'X-VNC-Client': 'true'}
+                connect_kwargs = {
+                    'ping_interval': 30,
+                    'ping_timeout': 10,
+                }
+                if self.args.insecure:
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                    connect_kwargs['ssl'] = ctx
+                signature = inspect.signature(websockets.connect)
+                params = signature.parameters
+                if 'additional_headers' in params:
+                    connect_kwargs['additional_headers'] = extra_headers
+                elif 'extra_headers' in params:
+                    connect_kwargs['extra_headers'] = extra_headers
+                if 'user_agent_header' in params:
+                    connect_kwargs['user_agent_header'] = 'python-vnc-runner'
 
                 self.ws_connection = await websockets.connect(
                     ws_url,
-                    ping_interval=30,
-                    ping_timeout=10,
-                    extra_headers=extra_headers,
+                    **connect_kwargs,
                 )
 
                 self.streaming = True
                 logger.info('WebSocket connected successfully')
 
-                # Start streaming loop
-                await self._stream_frames()
+                # Perform RFB handshake
+                await self._perform_rfb_handshake()
+
+                # Start message loop
+                await self._message_loop()
                 return
 
             except Exception as e:
@@ -248,29 +305,119 @@ class PythonVNCRunner:
             await self.ws_connection.close()
             self.ws_connection = None
 
-    async def _stream_frames(self):
-        """Stream VNC frames over WebSocket."""
-        frame_interval = 1.0 / self.vnc.framerate
+    async def _perform_rfb_handshake(self):
+        """Perform RFB protocol handshake with client."""
+        if not self.ws_connection:
+            raise RuntimeError('WebSocket not connected')
+
+        await self.ws_connection.send(self.vnc.get_rfb_handshake())
+        client_version = await self.ws_connection.recv()
+        if isinstance(client_version, str):
+            client_version = client_version.encode('utf-8')
+        if not client_version or not client_version.startswith(b'RFB'):
+            raise RuntimeError('Invalid client handshake')
+
+        await self.ws_connection.send(self.vnc.get_security_types())
+        _ = await self.ws_connection.recv()  # selected security type
+
+        await self.ws_connection.send(self.vnc.get_security_result(True))
+        client_init = await self.ws_connection.recv()
+        if isinstance(client_init, str):
+            client_init = client_init.encode('utf-8')
+        self.vnc.rfb_encoder.parse_client_init(client_init)
+
+        await self.ws_connection.send(self.vnc.get_server_init())
+
+    async def _message_loop(self):
+        """Handle incoming RFB messages and send frame updates."""
+        if not self.ws_connection:
+            return
+
+        buffer = bytearray()
 
         try:
             while self.streaming and self.is_running:
                 try:
-                    # Capture and encode frame
-                    frame_data = await self.vnc.capture_frame()
-
-                    # Send over WebSocket (binary frame)
-                    await self.ws_connection.send(frame_data)
-
-                    # Control framerate
-                    await asyncio.sleep(frame_interval)
-
+                    data = await self.ws_connection.recv()
                 except websockets.exceptions.ConnectionClosed:
                     logger.info('WebSocket connection closed')
                     self.streaming = False
                     break
 
+                if isinstance(data, str):
+                    continue
+
+                buffer.extend(data)
+
+                while True:
+                    if len(buffer) < 1:
+                        break
+
+                    msg_type = buffer[0]
+
+                    if msg_type == 0:
+                        if len(buffer) < 20:
+                            break
+                        payload = bytes(buffer[:20])
+                        del buffer[:20]
+                        self.vnc.rfb_encoder.parse_set_pixel_format(payload)
+                        continue
+
+                    if msg_type == 2:
+                        if len(buffer) < 4:
+                            break
+                        enc_count = struct.unpack('>H', buffer[2:4])[0]
+                        total = 4 + enc_count * 4
+                        if len(buffer) < total:
+                            break
+                        payload = bytes(buffer[:total])
+                        del buffer[:total]
+                        # encodings = [struct.unpack('>i', payload[4+i*4:8+i*4])[0] for i in range(enc_count)]
+                        continue
+
+                    if msg_type == 3:
+                        if len(buffer) < 10:
+                            break
+                        incremental = buffer[1] == 1
+                        x, y, w, h = struct.unpack('>HHHH', buffer[2:10])
+                        del buffer[:10]
+                        frame_data = await self.vnc.handle_framebuffer_update_request(incremental, x, y, w, h)
+                        await self.ws_connection.send(frame_data)
+                        continue
+
+                    if msg_type == 4:
+                        if len(buffer) < 8:
+                            break
+                        payload = bytes(buffer[:8])
+                        del buffer[:8]
+                        await self.vnc.handle_input_event(payload)
+                        continue
+
+                    if msg_type == 5:
+                        if len(buffer) < 6:
+                            break
+                        payload = bytes(buffer[:6])
+                        del buffer[:6]
+                        await self.vnc.handle_input_event(payload)
+                        continue
+
+                    if msg_type == 6:
+                        if len(buffer) < 8:
+                            break
+                        length = struct.unpack('>I', buffer[4:8])[0]
+                        total = 8 + length
+                        if len(buffer) < total:
+                            break
+                        payload = bytes(buffer[:total])
+                        del buffer[:total]
+                        await self.vnc.handle_input_event(payload)
+                        continue
+
+                    # Unknown message type; drop one byte to resync
+                    buffer.pop(0)
+
         except Exception as e:
-            logger.error(f'Error streaming frames: {e}')
+            logger.error(f'Error in message loop: {e}')
             self.streaming = False
             raise
         finally:
@@ -286,7 +433,10 @@ class PythonVNCRunner:
             self.shutdown_event.set()
 
         for sig in [signal.SIGINT, signal.SIGTERM]:
-            loop.add_signal_handler(sig, _signal_handler, sig)
+            try:
+                loop.add_signal_handler(sig, _signal_handler, sig)
+            except NotImplementedError:
+                signal.signal(sig, lambda s, f: _signal_handler(s))
 
         try:
             await self.start()
@@ -309,6 +459,8 @@ async def main():
     parser.add_argument('--framerate', default='30', help='Target framerate')
     parser.add_argument('--display-mode', default='screen', help='Display mode (screen or window)')
     parser.add_argument('--insecure', action='store_true', help='Skip SSL verification (dev only)')
+    parser.add_argument('--agent-id', default='', help='Agent ID for client registration')
+    parser.add_argument('--agent-label', default='', help='Agent display label for client registration')
 
     args = parser.parse_args()
 

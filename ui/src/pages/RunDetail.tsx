@@ -9,6 +9,8 @@ import {
   useToast,
   type LogEvent,
 } from '../components/ui';
+import { VncViewer } from '../components/VncViewer';
+import { useVncConnection } from '../hooks/useVncConnection';
 
 interface Run {
   id: string;
@@ -32,6 +34,7 @@ interface Run {
   duration: number | null;
   claimed_by?: string | null;
   claimed_at?: number | null;
+  worker_type?: string | null;
 }
 
 interface Artifact {
@@ -74,7 +77,7 @@ const ALLOWED_COMMANDS = [
   'pwd',
 ];
 
-type Tab = 'log' | 'timeline' | 'artifacts' | 'commands';
+type Tab = 'log' | 'timeline' | 'artifacts' | 'commands' | 'vnc';
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -145,6 +148,21 @@ export function RunDetail({ user }: Props) {
   const canOperate = user?.role === 'admin' || user?.role === 'operator';
   const canDelete = user?.role === 'admin';
   const isActive = run?.status === 'running';
+  const isVncRun = run?.worker_type === 'vnc';
+
+  const {
+    vncInfo,
+    vncAvailable,
+    vncReady,
+    vncError,
+    isLoading: vncLoading,
+    startVnc,
+    stopVnc,
+  } = useVncConnection({
+    runId: runId || '',
+    pollInterval: 2000,
+    autoStart: false
+  });
   const isPending = run?.status === 'pending';
 
   // Fetch run details
@@ -874,6 +892,17 @@ export function RunDetail({ user }: Props) {
             <span className="tab-badge">{run.commands.length}</span>
           )}
         </button>
+        {isVncRun && (
+          <button
+            className={`tab ${activeTab === 'vnc' ? 'tab-active' : ''}`}
+            onClick={() => setActiveTab('vnc')}
+          >
+            VNC
+            {vncReady && (
+              <span className="tab-badge" title="VNC Ready">●</span>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Tab content */}
@@ -892,6 +921,67 @@ export function RunDetail({ user }: Props) {
 
         {activeTab === 'commands' && (
           <CommandsList commands={run.commands} />
+        )}
+
+        {activeTab === 'vnc' && isVncRun && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div
+              style={{
+                padding: '12px',
+                background: 'var(--bg-tertiary)',
+                borderRadius: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                {vncReady ? '● VNC Connected' : '○ VNC Not Connected'}
+                {vncInfo?.stats?.clientConnectedAt && (
+                  <span style={{ marginLeft: '8px' }}>
+                    Client: {new Date(vncInfo.stats.clientConnectedAt).toLocaleString()}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {!vncReady ? (
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => startVnc()}
+                    disabled={vncLoading}
+                  >
+                    {vncLoading ? 'Starting VNC...' : 'Start VNC Streaming'}
+                  </button>
+                ) : (
+                  <button className="btn" onClick={() => stopVnc()}>
+                    Stop VNC Streaming
+                  </button>
+                )}
+              </div>
+            </div>
+            {vncError && (
+              <div
+                style={{
+                  padding: '10px 12px',
+                  background: 'rgba(248, 81, 73, 0.12)',
+                  border: '1px solid var(--accent-red)',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  color: 'var(--accent-red)',
+                }}
+              >
+                {vncError}
+              </div>
+            )}
+            <VncViewer
+              runId={run.id}
+              autoConnect={activeTab === 'vnc' && (vncAvailable || vncInfo?.status === 'pending')}
+              onConnect={() => console.log('VNC connected')}
+              onDisconnect={() => console.log('VNC disconnected')}
+            />
+          </div>
         )}
       </div>
 

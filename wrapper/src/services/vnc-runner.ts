@@ -2,7 +2,9 @@ import { BaseRunner, RunnerOptions, WorkerCommandResult } from './base-runner.js
 import { spawn, execSync, ChildProcess } from 'child_process';
 import { ackCommand } from './gateway-client.js';
 import { config } from '../config.js';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { createWriteStream } from 'fs';
 
 /**
  * VNC Runner Options
@@ -84,19 +86,31 @@ export class VncRunner extends BaseRunner {
    * Build Python VNC server command arguments
    */
   buildCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
     const scriptPath = join(__dirname, 'python-vnc', 'vnc_runner.py');
+
+    const runId = (this as any).auth.runId;
+    const capabilityToken = (this as any).auth.capabilityToken;
+    if (!runId) {
+      throw new Error('Missing runId for VNC runner');
+    }
+    if (!capabilityToken) {
+      throw new Error('Missing capability token for VNC runner');
+    }
 
     const [width, height] = this.resolution.split('x');
 
     const args: string[] = [
       scriptPath,
-      '--run-id', (this as any).auth.runId,
-      '--capability-token', (this as any).auth.capabilityToken,
+      '--run-id', runId,
+      '--capability-token', capabilityToken,
       '--gateway-url', config.gatewayUrl,
       '--width', width || '1920',
       '--height', height || '1080',
       '--framerate', '30',
       '--display-mode', this.displayMode,
+      '--agent-id', (this as any).agentId,
+      '--agent-label', (this as any).agentLabel,
     ];
 
     // Add insecure flag if self-signed certificates allowed
@@ -110,6 +124,17 @@ export class VncRunner extends BaseRunner {
     return {
       args,
       fullCommand
+    };
+  }
+
+  /**
+   * Build environment variables for the VNC runner
+   */
+  protected buildEnvironment(): NodeJS.ProcessEnv {
+    const baseEnv = super.buildEnvironment();
+    return {
+      ...baseEnv,
+      ...(config.clientToken ? { AI_RUNNER_TOKEN: config.clientToken } : {})
     };
   }
 
@@ -129,6 +154,9 @@ export class VncRunner extends BaseRunner {
     });
 
     (this as any).isRunning = true;
+    if (!(this as any).logStream) {
+      (this as any).logStream = createWriteStream((this as any).logPath, { flags: 'a' });
+    }
 
     console.log(`Starting VNC server`);
     console.log(`Display mode: ${this.displayMode}`);
@@ -161,6 +189,7 @@ export class VncRunner extends BaseRunner {
         env,
         detached: false
       });
+      (this as any).process = this.vncProcess;
 
       if (!this.vncProcess) {
         throw new Error('Failed to spawn VNC process');

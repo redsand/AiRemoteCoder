@@ -33,6 +33,12 @@ class RunAuth:
         import os
         return os.getenv('HMAC_SECRET', 'test-secret-key-min-32-chars-00000000')
 
+    @staticmethod
+    def _get_client_token() -> str:
+        """Get client token from environment."""
+        import os
+        return os.getenv('AI_RUNNER_TOKEN', os.getenv('CLIENT_TOKEN', ''))
+
     def create_signature(
         self,
         method: str,
@@ -102,11 +108,9 @@ class GatewayClient:
         timestamp = int(time.time())
         nonce = uuid.uuid4().hex[:16]
         body = json.dumps({
-            'runId': self.auth.run_id,
-            'sequence': self.sequence,
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
             'type': event_type,
             'data': data,
+            'sequence': self.sequence,
         })
 
         signature = self.auth.create_signature('POST', '/api/ingest/event', body, timestamp, nonce)
@@ -158,9 +162,10 @@ class GatewayClient:
             )
             response.raise_for_status()
             data = response.json()
+            command_list = data if isinstance(data, list) else data.get('commands', [])
             commands = [
                 Command(cmd['id'], cmd['command'], cmd.get('arguments'))
-                for cmd in data.get('commands', [])
+                for cmd in command_list
             ]
             logger.debug(f'Polled {len(commands)} commands')
             return commands
@@ -236,6 +241,7 @@ class GatewayClient:
             'X-Nonce': nonce,
             'X-Run-Id': self.auth.run_id,
             'X-Capability-Token': self.auth.capability_token,
+            'X-Client-Token': self.auth._get_client_token(),
             'Content-Type': 'application/json',
         }
 
@@ -266,6 +272,7 @@ class GatewayClient:
             'X-Nonce': nonce,
             'X-Run-Id': self.auth.run_id,
             'X-Capability-Token': self.auth.capability_token,
+            'X-Client-Token': self.auth._get_client_token(),
             'Content-Type': 'application/json',
         }
 

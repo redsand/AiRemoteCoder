@@ -7,7 +7,7 @@ vi.mock('../config.js', () => ({
     claudeCommand: 'claude',
     ollamaCommand: 'ollama',
     ollamaModel: 'codellama:7b',
-    codexCommand: 'codex-cli',
+    codexCommand: 'codex',
     geminiCommand: 'gemini-cli',
     geminiModel: 'gemini-pro',
     revCommand: 'rev'
@@ -61,7 +61,7 @@ describe('Worker Registry', () => {
     it('should have correct worker type for Codex', () => {
       const codex = WORKER_CONFIGS.codex;
       expect(codex.type).toBe('codex');
-      expect(codex.command).toBe('codex-cli');
+      expect(codex.command).toBe('codex');
       expect(codex.displayName).toBe('Codex CLI');
       expect(codex.supportsModelSelection).toBe(false);
       expect(codex.description).toContain('OpenAI');
@@ -102,7 +102,7 @@ describe('Worker Registry', () => {
     it('getWorkerCommand should return command for worker type', () => {
       expect(getWorkerCommand('claude')).toBe('claude');
       expect(getWorkerCommand('ollama-launch')).toBe('ollama');
-      expect(getWorkerCommand('codex')).toBe('codex-cli');
+      expect(getWorkerCommand('codex')).toBe('codex');
       expect(getWorkerCommand('gemini')).toBe('gemini-cli');
       expect(getWorkerCommand('rev')).toBe('rev');
       // Fallback for unknown worker

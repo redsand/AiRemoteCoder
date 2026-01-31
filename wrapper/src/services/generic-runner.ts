@@ -152,18 +152,26 @@ export class GenericRunner extends BaseRunner {
 
   /**
    * Build Codex CLI command
-   * Usage: codex-cli <prompt>
+   * Usage: codex <prompt> (or configure CODEX_PROMPT_FLAG for named prompt)
    */
   private buildCodexCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
-    const args = command ? [command] : [];
+    const args = [...config.codexArgs];
+
+    if (command) {
+      if (config.codexPromptFlag) {
+        args.push(config.codexPromptFlag, command);
+      } else {
+        args.push(command);
+      }
+    }
 
     if (!command && autonomous) {
       // For autonomous mode, Codex CLI may need specific flags
       // This depends on the actual Codex CLI implementation
     }
 
-    const fullCommand = command
-      ? `${this.getCommand()} ${command}`
+    const fullCommand = args.length > 0
+      ? `${this.getCommand()} ${args.join(' ')}`
       : this.getCommand();
 
     return { args, fullCommand };
@@ -182,10 +190,12 @@ export class GenericRunner extends BaseRunner {
    * Example: gemini --output-format text --model gemini-1.5-pro --prompt "Create a test" --approval-mode yolo
    */
   private buildGeminiCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
-    const args: string[] = [];
+    const args: string[] = [...config.geminiArgs];
 
     // Use text output format for consistency
-    args.push('--output-format', 'text');
+    if (config.geminiOutputFormat) {
+      args.push('--output-format', config.geminiOutputFormat);
+    }
 
     // Add model
     const model = this.model || config.geminiModel;
@@ -193,12 +203,16 @@ export class GenericRunner extends BaseRunner {
 
     // Add prompt as named flag (different from Claude/Rev which use positional)
     if (command) {
-      args.push('--prompt', command);
+      if (config.geminiPromptFlag) {
+        args.push(config.geminiPromptFlag, command);
+      } else {
+        args.push(command);
+      }
     }
 
-    // In autonomous mode, auto-approve changes
-    if (autonomous) {
-      args.push('--approval-mode', 'yolo');
+    // Always include approval mode when configured
+    if (config.geminiApprovalMode) {
+      args.push('--approval-mode', config.geminiApprovalMode);
     }
 
     const fullCommand = `${this.getCommand()} ${args.join(' ')}`;

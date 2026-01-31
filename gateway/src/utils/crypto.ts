@@ -75,6 +75,13 @@ export function generateSessionToken(): string {
 }
 
 /**
+ * Hash a client token for storage
+ */
+export function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+/**
  * Check if timestamp is within allowed clock skew
  */
 export function isTimestampValid(timestamp: number): boolean {

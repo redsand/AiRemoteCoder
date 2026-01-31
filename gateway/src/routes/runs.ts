@@ -4,8 +4,9 @@ import { nanoid } from 'nanoid';
 import { db } from '../services/database.js';
 import { config } from '../config.js';
 import { wrapperAuth, uiAuth, requireRole, logAudit, type AuthenticatedRequest } from '../middleware/auth.js';
-import { generateCapabilityToken, redactSecrets } from '../utils/crypto.js';
+import { generateCapabilityToken, redactSecrets, hashToken } from '../utils/crypto.js';
 import { broadcastToRun } from '../services/websocket.js';
+import { timingSafeEqual } from 'crypto';
 
 // Validation schemas
 const createRunSchema = z.object({
@@ -53,13 +54,12 @@ const commandSchema = z.object({
 });
 
 const ackSchema = z.object({
-  result: z.string().optional(),
-  error: z.string().optional()
+  result: z.string().nullable().optional(),
+  error: z.string().nullable().optional()
 });
 
 const claimRunSchema = z.object({
-  agentId: z.string().min(1).max(100),
-  workerTypes: z.array(z.string()).optional()
+  agentId: z.string().min(1).max(100)
 });
 
 export async function runsRoutes(fastify: FastifyInstance) {
@@ -283,13 +283,22 @@ export async function runsRoutes(fastify: FastifyInstance) {
     preHandler: [wrapperAuth]
   }, async (request: AuthenticatedRequest, reply) => {
     const body = claimRunSchema.parse(request.body);
+    const token = request.headers['x-client-token'] as string | undefined;
 
-    const client = db.prepare('SELECT id FROM clients WHERE agent_id = ?').get(body.agentId) as { id: string } | undefined;
-    if (!client) {
-      return reply.code(404).send({ error: 'Client not registered' });
+    const client = db.prepare('SELECT id, token_hash FROM clients WHERE agent_id = ?').get(body.agentId) as { id: string; token_hash: string | null } | undefined;
+    if (!client || !client.token_hash || !token) {
+      return reply.code(403).send({ error: 'Invalid client token' });
     }
 
-    const workerTypes = body.workerTypes && body.workerTypes.length > 0 ? body.workerTypes : null;
+    const providedHash = hashToken(token);
+    try {
+      if (!timingSafeEqual(Buffer.from(client.token_hash, 'hex'), Buffer.from(providedHash, 'hex'))) {
+        return reply.code(403).send({ error: 'Invalid client token' });
+      }
+    } catch {
+      return reply.code(403).send({ error: 'Invalid client token' });
+    }
+
     const leaseCutoff = Math.floor(Date.now() / 1000) - config.claimLeaseSeconds;
 
     const claimTransaction = db.transaction(() => {
@@ -302,11 +311,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
           AND (claimed_by IS NULL OR claimed_by = ? OR claimed_at < ?)
       `;
       const params: any[] = [client.id, body.agentId, leaseCutoff];
-
-      if (workerTypes) {
-        query += ` AND worker_type IN (${workerTypes.map(() => '?').join(', ')})`;
-        params.push(...workerTypes);
-      }
 
       query += ' ORDER BY CASE WHEN client_id = ? THEN 0 ELSE 1 END, created_at ASC LIMIT 1';
       params.push(client.id);

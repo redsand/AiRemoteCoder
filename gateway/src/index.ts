@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyCors from '@fastify/cors';
 import fastifyHelmet from '@fastify/helmet';
@@ -85,6 +85,12 @@ await fastify.register(fastifyHelmet, {
 await fastify.register(fastifyRateLimit, {
   max: config.rateLimit.max,
   timeWindow: config.rateLimit.timeWindow,
+  allowList: (request: FastifyRequest) => {
+    const url = request.raw.url || '';
+    if (url.startsWith('/ws/vnc/')) return true;
+    if (/^\/api\/runs\/[^/]+\/vnc/.test(url)) return true;
+    return false;
+  },
   keyGenerator: (request) => {
     // Use CF header if behind Cloudflare
     return request.headers['cf-connecting-ip'] as string ||
@@ -124,7 +130,7 @@ if (existsSync(uiDistPath)) {
 // WebSocket support
 await fastify.register(fastifyWebsocket, {
   options: {
-    maxPayload: 1024 * 1024, // 1MB
+    maxPayload: 50 * 1024 * 1024, // 50MB for VNC frame payloads
     clientTracking: true
   }
 });

@@ -22,6 +22,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
     agent_id TEXT UNIQUE NOT NULL,
+    token_hash TEXT,
     last_seen_at INTEGER NOT NULL DEFAULT (unixepoch()),
     version TEXT,
     capabilities TEXT,
@@ -85,6 +86,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     command TEXT NOT NULL,
+    arguments TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     acked_at INTEGER,
@@ -204,6 +206,8 @@ function ensureColumn(table: string, column: string, type: string): void {
 
 ensureColumn('runs', 'claimed_by', 'TEXT');
 ensureColumn('runs', 'claimed_at', 'INTEGER');
+ensureColumn('clients', 'token_hash', 'TEXT');
+ensureColumn('commands', 'arguments', 'TEXT');
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_runs_claimed_by ON runs(claimed_by);

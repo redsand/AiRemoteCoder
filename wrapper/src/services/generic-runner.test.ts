@@ -8,9 +8,15 @@ vi.mock('../config.js', () => ({
     claudeCommand: 'claude',
     ollamaCommand: 'ollama',
     ollamaModel: 'codellama:7b',
-    codexCommand: 'codex-cli',
+    codexCommand: 'codex',
+    codexPromptFlag: '',
+    codexArgs: [],
     geminiCommand: 'gemini-cli',
     geminiModel: 'gemini-pro',
+    geminiOutputFormat: 'text',
+    geminiPromptFlag: '--prompt',
+    geminiApprovalMode: 'yolo',
+    geminiArgs: [],
     revCommand: 'rev',
     commandPollInterval: 2000,
     heartbeatInterval: 30000,
@@ -21,7 +27,7 @@ vi.mock('../config.js', () => ({
         claude: 'claude',
         ollama: 'ollama',
         'ollama-launch': 'ollama',
-        codex: 'codex-cli',
+        codex: 'codex',
         gemini: 'gemini-cli',
         rev: 'rev'
       };
@@ -211,7 +217,7 @@ describe('GenericRunner', () => {
 
       const result = runner.buildCommand('write tests', false);
       expect(result.args).toEqual(['write tests']);
-      expect(result.fullCommand).toBe('codex-cli write tests');
+      expect(result.fullCommand).toBe('codex write tests');
     });
 
     it('should build Codex command without prompt', () => {
@@ -225,7 +231,7 @@ describe('GenericRunner', () => {
 
       const result = runner.buildCommand(undefined, false);
       expect(result.args).toEqual([]);
-      expect(result.fullCommand).toBe('codex-cli');
+      expect(result.fullCommand).toBe('codex');
     });
 
     it('should build Gemini command with model', () => {
@@ -239,8 +245,13 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand('refactor', false);
-      expect(result.args).toEqual(['--output-format', 'text', '--model', 'gemini-1.5-pro', '--prompt', 'refactor']);
-      expect(result.fullCommand).toBe('gemini-cli --output-format text --model gemini-1.5-pro --prompt refactor');
+      expect(result.args).toEqual([
+        '--output-format', 'text',
+        '--model', 'gemini-1.5-pro',
+        '--prompt', 'refactor',
+        '--approval-mode', 'yolo'
+      ]);
+      expect(result.fullCommand).toBe('gemini-cli --output-format text --model gemini-1.5-pro --prompt refactor --approval-mode yolo');
     });
 
     it('should build Rev command with prompt', () => {
@@ -334,7 +345,7 @@ describe('GenericRunner', () => {
         capabilityToken: 'token',
         workerType: 'codex'
       });
-      expect(codexRunner.getCommand()).toBe('codex-cli');
+      expect(codexRunner.getCommand()).toBe('codex');
 
       const geminiRunner = new GenericRunner({
         runId: 'test',

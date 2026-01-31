@@ -12,13 +12,20 @@ from pynput.keyboard import Controller as KeyController, Key, KeyCode
 
 logger = logging.getLogger(__name__)
 
+def _key_attr(name: str, fallback: Optional[str] = None):
+    if hasattr(Key, name):
+        return getattr(Key, name)
+    if fallback and hasattr(Key, fallback):
+        return getattr(Key, fallback)
+    return None
+
 
 class InputHandler:
     """Simulates mouse and keyboard input."""
 
     # Mapping of VNC key codes to pynput.keyboard.Key
     KEY_MAP = {
-        65307: Key.escape,
+        65307: _key_attr('esc', 'escape'),
         65289: Key.tab,
         65299: Key.print_screen,
         65300: Key.scroll_lock,

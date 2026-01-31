@@ -26,9 +26,15 @@ export const config = {
   claudeCommand: process.env.CLAUDE_COMMAND || 'claude',
   ollamaCommand: process.env.OLLAMA_COMMAND || 'ollama',
   ollamaModel: process.env.OLLAMA_MODEL || 'codellama:7b',
-  codexCommand: process.env.CODEX_COMMAND || 'codex-cli',
+  codexCommand: process.env.CODEX_COMMAND || 'codex',
+  codexPromptFlag: process.env.CODEX_PROMPT_FLAG || '',
+  codexArgs: parseCommandArgs(process.env.CODEX_ARGS || ''),
   geminiCommand: process.env.GEMINI_COMMAND || 'gemini-cli',
   geminiModel: process.env.GEMINI_MODEL || 'gemini-pro',
+  geminiOutputFormat: process.env.GEMINI_OUTPUT_FORMAT || 'text',
+  geminiPromptFlag: process.env.GEMINI_PROMPT_FLAG || '--prompt',
+  geminiApprovalMode: process.env.GEMINI_APPROVAL_MODE || 'yolo',
+  geminiArgs: parseCommandArgs(process.env.GEMINI_ARGS || ''),
   revCommand: process.env.REV_COMMAND || 'rev',
 
   // Get worker command by type
@@ -61,6 +67,7 @@ export const config = {
 
   // Security
   allowSelfSignedCerts: process.env.ALLOW_SELF_SIGNED === 'true',
+  clientToken: process.env.AI_RUNNER_TOKEN || process.env.CLIENT_TOKEN || '',
 
   // Allowlisted commands (must match gateway config)
   allowlistedCommands: [
@@ -105,6 +112,39 @@ export const config = {
     /-----BEGIN[\s\S]*?-----END[^-]*-----/g
   ]
 };
+
+function parseCommandArgs(raw: string): string[] {
+  const args: string[] = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inSingle && !inDouble && /\s/.test(ch)) {
+      if (current) {
+        args.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += ch;
+  }
+
+  if (current) {
+    args.push(current);
+  }
+
+  return args;
+}
 
 export function validateConfig(): void {
   if (!config.hmacSecret || config.hmacSecret.length < 32) {

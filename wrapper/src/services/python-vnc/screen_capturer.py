@@ -6,7 +6,13 @@ import logging
 from typing import Tuple, Optional
 import io
 
-import mss
+try:
+    import mss
+except Exception as e:
+    raise RuntimeError(
+        "Missing Python dependency 'mss'. Rebuild the wrapper with "
+        "'npm run build -w wrapper' or install with 'pip install mss'."
+    ) from e
 from PIL import Image
 
 

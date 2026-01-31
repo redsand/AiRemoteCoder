@@ -9,6 +9,7 @@
  */
 
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { nanoid } from 'nanoid';
 import { db } from '../services/database.js';
 import { vncTunnelManager } from '../services/vnc-tunnel.js';
 
@@ -85,11 +86,21 @@ export async function vncRoutes(fastify: FastifyInstance) {
         }
 
         // Send __START_VNC_STREAM__ command to the VNC runner
-        const commandId = db.prepare(
-          `INSERT INTO commands (run_id, command, arguments, created_at)
-           VALUES (?, ?, ?, datetime('now'))
-           RETURNING id`
-        ).get(runId, '__START_VNC_STREAM__', JSON.stringify({})) as any;
+        const commandColumns = db.prepare("PRAGMA table_info(commands)").all() as Array<{ name: string }>;
+        const hasArguments = commandColumns.some((col) => col.name === 'arguments');
+
+        const id = nanoid(12);
+        const commandId = hasArguments
+          ? db.prepare(
+              `INSERT INTO commands (id, run_id, command, arguments, created_at)
+               VALUES (?, ?, ?, ?, datetime('now'))
+               RETURNING id`
+            ).get(id, runId, '__START_VNC_STREAM__', JSON.stringify({})) as any
+          : db.prepare(
+              `INSERT INTO commands (id, run_id, command, created_at)
+               VALUES (?, ?, ?, datetime('now'))
+               RETURNING id`
+            ).get(id, runId, '__START_VNC_STREAM__') as any;
 
         return reply.code(200).send({
           runId,

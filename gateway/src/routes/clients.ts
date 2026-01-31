@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import { db } from '../services/database.js';
 import { uiAuth, wrapperAuth, requireRole, logAudit, type AuthenticatedRequest } from '../middleware/auth.js';
+import { generateCapabilityToken, hashToken } from '../utils/crypto.js';
+import { timingSafeEqual } from 'crypto';
 import { broadcastAll } from '../services/websocket.js';
 
 // Validation schemas
@@ -11,6 +13,11 @@ const registerClientSchema = z.object({
   agentId: z.string().min(1).max(100),
   version: z.string().optional(),
   capabilities: z.array(z.string()).optional()
+});
+
+const createClientSchema = z.object({
+  displayName: z.string().min(1).max(100),
+  agentId: z.string().min(1).max(100)
 });
 
 const updateClientSchema = z.object({
@@ -36,62 +43,80 @@ export interface Client {
 }
 
 export async function clientsRoutes(fastify: FastifyInstance) {
+  function verifyToken(agentId: string, token?: string): { id: string } | null {
+    if (!token) return null;
+    const client = db.prepare('SELECT id, token_hash FROM clients WHERE agent_id = ?').get(agentId) as { id: string; token_hash: string | null } | undefined;
+    if (!client || !client.token_hash) return null;
+    const providedHash = hashToken(token);
+    try {
+      if (!timingSafeEqual(Buffer.from(client.token_hash, 'hex'), Buffer.from(providedHash, 'hex'))) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    return { id: client.id };
+  }
+
+  // Create a new client (admin/operator) and return a token
+  fastify.post('/api/clients/create', {
+    preHandler: [uiAuth, requireRole('admin', 'operator')]
+  }, async (request: AuthenticatedRequest, reply) => {
+    const body = createClientSchema.parse(request.body);
+
+    const existing = db.prepare('SELECT id FROM clients WHERE agent_id = ?').get(body.agentId);
+    if (existing) {
+      return reply.code(400).send({ error: 'Agent ID already exists' });
+    }
+
+    const id = nanoid(12);
+    const token = generateCapabilityToken();
+    const tokenHash = hashToken(token);
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(`
+      INSERT INTO clients (id, display_name, agent_id, token_hash, last_seen_at, status)
+      VALUES (?, ?, ?, ?, ?, 'offline')
+    `).run(id, body.displayName, body.agentId, tokenHash, now);
+
+    logAudit(request.user?.id, 'client.create', 'client', id, { agentId: body.agentId }, request.ip);
+
+    return { id, token };
+  });
+
   // Register or update a client (from wrapper)
   fastify.post('/api/clients/register', {
     preHandler: [wrapperAuth]
   }, async (request: AuthenticatedRequest, reply) => {
     const body = registerClientSchema.parse(request.body);
+    const token = request.headers['x-client-token'] as string | undefined;
+
+    const verified = verifyToken(body.agentId, token);
+    if (!verified) {
+      return reply.code(403).send({ error: 'Invalid client token' });
+    }
     const now = Math.floor(Date.now() / 1000);
 
-    // Check if client already exists by agentId
-    const existing = db.prepare(
-      'SELECT id FROM clients WHERE agent_id = ?'
-    ).get(body.agentId) as { id: string } | undefined;
-
-    if (existing) {
-      // Update existing client
-      db.prepare(`
-        UPDATE clients
-        SET display_name = ?, last_seen_at = ?, version = ?, capabilities = ?, status = 'online'
-        WHERE agent_id = ?
-      `).run(
-        body.displayName,
-        now,
-        body.version || null,
-        body.capabilities ? JSON.stringify(body.capabilities) : null,
-        body.agentId
-      );
-
-      broadcastAll({
-        type: 'client_updated',
-        clientId: existing.id,
-        status: 'online'
-      });
-
-      return { id: existing.id, updated: true };
-    }
-
-    // Create new client
-    const id = nanoid(12);
+    // Update existing client
     db.prepare(`
-      INSERT INTO clients (id, display_name, agent_id, last_seen_at, version, capabilities, status)
-      VALUES (?, ?, ?, ?, ?, ?, 'online')
+      UPDATE clients
+      SET display_name = ?, last_seen_at = ?, version = ?, capabilities = ?, status = 'online'
+      WHERE agent_id = ?
     `).run(
-      id,
       body.displayName,
-      body.agentId,
       now,
       body.version || null,
-      body.capabilities ? JSON.stringify(body.capabilities) : null
+      body.capabilities ? JSON.stringify(body.capabilities) : null,
+      body.agentId
     );
 
     broadcastAll({
-      type: 'client_registered',
-      clientId: id,
-      displayName: body.displayName
+      type: 'client_updated',
+      clientId: verified.id,
+      status: 'online'
     });
 
-    return { id, created: true };
+    return { id: verified.id, updated: true };
   });
 
   // Heartbeat from wrapper
@@ -99,6 +124,12 @@ export async function clientsRoutes(fastify: FastifyInstance) {
     preHandler: [wrapperAuth]
   }, async (request: AuthenticatedRequest, reply) => {
     const body = heartbeatSchema.parse(request.body);
+    const token = request.headers['x-client-token'] as string | undefined;
+
+    const verified = verifyToken(body.agentId, token);
+    if (!verified) {
+      return reply.code(403).send({ error: 'Invalid client token' });
+    }
     const now = Math.floor(Date.now() / 1000);
 
     const result = db.prepare(`
@@ -153,8 +184,10 @@ export async function clientsRoutes(fastify: FastifyInstance) {
         FROM runs WHERE client_id = ?
       `).get(client.id) as { total: number; running: number; failed: number };
 
+      const { token_hash: _tokenHash, ...safeClient } = client as any;
+
       return {
-        ...client,
+        ...safeClient,
         capabilities: client.capabilities ? JSON.parse(client.capabilities) : null,
         metadata: client.metadata ? JSON.parse(client.metadata) : null,
         runCounts
@@ -212,8 +245,10 @@ export async function clientsRoutes(fastify: FastifyInstance) {
       LIMIT 50
     `).all(clientId);
 
+    const { token_hash: _tokenHash, ...safeClient } = client as any;
+
     return {
-      ...client,
+      ...safeClient,
       capabilities: client.capabilities ? JSON.parse(client.capabilities) : null,
       metadata: client.metadata ? JSON.parse(client.metadata) : null,
       runs,
@@ -253,6 +288,27 @@ export async function clientsRoutes(fastify: FastifyInstance) {
     }
 
     return { ok: true };
+  });
+
+  // Rotate client token (operator/admin)
+  fastify.post('/api/clients/:clientId/token', {
+    preHandler: [uiAuth, requireRole('admin', 'operator')]
+  }, async (request: AuthenticatedRequest, reply) => {
+    const { clientId } = request.params as { clientId: string };
+
+    const client = db.prepare('SELECT id, agent_id, display_name FROM clients WHERE id = ?').get(clientId) as { id: string; agent_id: string; display_name: string } | undefined;
+    if (!client) {
+      return reply.code(404).send({ error: 'Client not found' });
+    }
+
+    const token = generateCapabilityToken();
+    const tokenHash = hashToken(token);
+
+    db.prepare('UPDATE clients SET token_hash = ? WHERE id = ?').run(tokenHash, clientId);
+
+    logAudit(request.user?.id, 'client.token.rotate', 'client', clientId, { agentId: client.agent_id }, request.ip);
+
+    return { id: client.id, token };
   });
 
   // Delete client (admin only)

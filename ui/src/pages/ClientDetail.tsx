@@ -5,6 +5,7 @@ import {
   RunCard,
   type Run,
   type Client,
+  Modal,
   ConfirmModal,
   useToast,
 } from '../components/ui';
@@ -48,7 +49,11 @@ export function ClientDetailPage({ user }: Props) {
   const [loading, setLoading] = useState(true);
   const [showDisableConfirm, setShowDisableConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showRotateConfirm, setShowRotateConfirm] = useState(false);
+  const [showTokenModal, setShowTokenModal] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [rotateLoading, setRotateLoading] = useState(false);
+  const [rotatedToken, setRotatedToken] = useState<string | null>(null);
 
   const canOperate = user?.role === 'admin' || user?.role === 'operator';
   const isAdmin = user?.role === 'admin';
@@ -122,6 +127,29 @@ export function ClientDetailPage({ user }: Props) {
     } finally {
       setActionLoading(false);
       setShowDeleteConfirm(false);
+    }
+  };
+
+  const rotateToken = async () => {
+    if (!client) return;
+
+    setRotateLoading(true);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/token`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setRotatedToken(data.token);
+        setShowTokenModal(true);
+        setShowRotateConfirm(false);
+        addToast('success', 'Client token rotated');
+      } else {
+        const error = await res.json();
+        addToast('error', error.error || 'Failed to rotate token');
+      }
+    } catch (err) {
+      addToast('error', 'Failed to rotate token');
+    } finally {
+      setRotateLoading(false);
     }
   };
 
@@ -227,6 +255,12 @@ export function ClientDetailPage({ user }: Props) {
             onClick={() => setShowDisableConfirm(true)}
           >
             {client.operator_enabled ? 'Disable Operator Actions' : 'Enable Operator Actions'}
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowRotateConfirm(true)}
+          >
+            Rotate Token
           </button>
           {isAdmin && (
             <button
@@ -397,6 +431,114 @@ export function ClientDetailPage({ user }: Props) {
         danger
         loading={actionLoading}
       />
+
+      {/* Rotate Token Confirmation */}
+      <ConfirmModal
+        open={showRotateConfirm}
+        onClose={() => setShowRotateConfirm(false)}
+        onConfirm={rotateToken}
+        title="Rotate Client Token"
+        message="This will invalidate the existing token. The runner must be restarted with the new token. Continue?"
+        confirmText={rotateLoading ? 'Rotating...' : 'Rotate Token'}
+        danger
+        loading={rotateLoading}
+      />
+
+      {/* Token Modal */}
+      {showTokenModal && rotatedToken && client && (
+        <Modal
+          open={showTokenModal}
+          onClose={() => setShowTokenModal(false)}
+          title="New Client Token"
+          footer={
+            <button className="btn btn-primary" onClick={() => setShowTokenModal(false)}>
+              Done
+            </button>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <p style={{ color: 'var(--text-secondary)', margin: 0 }}>
+              Copy the new token and restart the runner:
+            </p>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: 'var(--text-secondary)' }}>
+                Client Token:
+              </label>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  background: 'var(--bg-tertiary)',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  fontFamily: 'monospace',
+                  fontSize: '14px',
+                }}
+              >
+                <code style={{ flex: 1, color: 'var(--accent-green)', wordBreak: 'break-all' }}>
+                  {rotatedToken}
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(rotatedToken);
+                    addToast('success', 'Token copied to clipboard');
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent-blue)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    padding: '0 8px',
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: 'var(--text-secondary)' }}>
+                Start Command:
+              </label>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  background: 'var(--bg-tertiary)',
+                  padding: '12px',
+                  borderRadius: '6px',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  overflow: 'auto',
+                }}
+              >
+                <code style={{ flex: 1, color: 'var(--text-primary)', wordBreak: 'break-all' }}>
+                  ai-runner listen --agent-id {client.agent_id} --client-token {rotatedToken} --agent-label "{client.display_name}"
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(`ai-runner listen --agent-id ${client.agent_id} --client-token ${rotatedToken} --agent-label "${client.display_name}"`);
+                    addToast('success', 'Command copied to clipboard');
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent-blue)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    padding: '0 8px',
+                    flexShrink: 0,
+                  }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

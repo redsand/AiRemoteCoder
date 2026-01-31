@@ -51,18 +51,23 @@ export function useVncConnection({
         setVncAvailable(data.available);
         setVncReady(data.status === 'active' && data.clientConnected && data.viewerConnected);
         setVncError(null);
+        return data;
       } else if (response.status === 404) {
         setVncAvailable(false);
         setVncError('Run not found or does not support VNC');
+        return null;
       } else if (response.status === 400) {
         setVncAvailable(false);
         setVncError('This run type does not support VNC access');
+        return null;
       } else {
         setVncError('Failed to check VNC status');
+        return null;
       }
     } catch (err) {
       setVncAvailable(false);
       setVncError(err instanceof Error ? err.message : 'Unknown error');
+      return null;
     }
   }, [runId]);
 
@@ -92,11 +97,11 @@ export function useVncConnection({
       const waitForReady = async () => {
         while (attempts < maxAttempts) {
           await new Promise(resolve => setTimeout(resolve, 1000));
-          await checkVncStatus();
+          const status = await checkVncStatus();
 
           attempts++;
 
-          if (vncReady) {
+          if (status && status.status === 'active' && status.clientConnected && status.viewerConnected) {
             setIsLoading(false);
             return;
           }

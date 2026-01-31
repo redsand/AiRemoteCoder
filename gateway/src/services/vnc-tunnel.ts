@@ -16,6 +16,8 @@ export interface VncTunnel {
   runId: string;
   clientWs: WebSocket | null;
   viewerWs: WebSocket | null;
+  clientBuffer: Buffer[];
+  viewerBuffer: Buffer[];
   createdAt: Date;
   clientConnectedAt?: Date;
   viewerConnectedAt?: Date;
@@ -37,6 +39,8 @@ export class VncTunnelManager {
       runId,
       clientWs: null,
       viewerWs: null,
+      clientBuffer: [],
+      viewerBuffer: [],
       createdAt: new Date(),
       bytesFromClient: 0,
       bytesToClient: 0,
@@ -73,6 +77,7 @@ export class VncTunnelManager {
     // If both connections are ready, activate the tunnel
     if (tunnel.clientWs && tunnel.viewerWs) {
       this._activateTunnel(runId);
+      this._flushViewerBuffer(runId);
     }
 
     logger.info(`Client connected to tunnel ${runId}`);
@@ -99,6 +104,7 @@ export class VncTunnelManager {
     // If both connections are ready, activate the tunnel
     if (tunnel.clientWs && tunnel.viewerWs) {
       this._activateTunnel(runId);
+      this._flushClientBuffer(runId);
     }
 
     logger.info(`Viewer connected to tunnel ${runId}`);
@@ -131,15 +137,17 @@ export class VncTunnelManager {
   private _setupClientHandlers(runId: string, ws: WebSocket): void {
     ws.on('message', (data: Buffer) => {
       const tunnel = this.getTunnel(runId);
-      if (!tunnel || !tunnel.viewerWs) return;
+      if (!tunnel) return;
 
       try {
         tunnel.bytesFromClient += data.length;
-        // Forward RFB frames from client to viewer
-        if (tunnel.viewerWs.readyState === ws.OPEN) {
-          tunnel.viewerWs.send(data);
-          tunnel.bytesToViewer += data.length;
+        if (!tunnel.viewerWs || tunnel.viewerWs.readyState !== ws.OPEN) {
+          tunnel.clientBuffer.push(data);
+          return;
         }
+        // Forward RFB frames from client to viewer
+        tunnel.viewerWs.send(data);
+        tunnel.bytesToViewer += data.length;
       } catch (err) {
         logger.error(`Error forwarding client message: ${err}`);
       }
@@ -170,15 +178,17 @@ export class VncTunnelManager {
   private _setupViewerHandlers(runId: string, ws: WebSocket): void {
     ws.on('message', (data: Buffer) => {
       const tunnel = this.getTunnel(runId);
-      if (!tunnel || !tunnel.clientWs) return;
+      if (!tunnel) return;
 
       try {
         tunnel.bytesFromViewer += data.length;
-        // Forward input events from viewer to client
-        if (tunnel.clientWs.readyState === ws.OPEN) {
-          tunnel.clientWs.send(data);
-          tunnel.bytesToClient += data.length;
+        if (!tunnel.clientWs || tunnel.clientWs.readyState !== ws.OPEN) {
+          tunnel.viewerBuffer.push(data);
+          return;
         }
+        // Forward input events from viewer to client
+        tunnel.clientWs.send(data);
+        tunnel.bytesToClient += data.length;
       } catch (err) {
         logger.error(`Error forwarding viewer message: ${err}`);
       }
@@ -241,6 +251,40 @@ export class VncTunnelManager {
     this.pendingTunnels.delete(runId);
 
     logger.info(`Tunnel closed for run ${runId}`);
+  }
+
+  private _flushClientBuffer(runId: string): void {
+    const tunnel = this.getTunnel(runId);
+    if (!tunnel || !tunnel.viewerWs || tunnel.viewerWs.readyState !== WebSocket.OPEN) return;
+
+    while (tunnel.clientBuffer.length > 0) {
+      const chunk = tunnel.clientBuffer.shift();
+      if (!chunk) break;
+      try {
+        tunnel.viewerWs.send(chunk);
+        tunnel.bytesToViewer += chunk.length;
+      } catch (err) {
+        logger.error(`Error flushing client buffer: ${err}`);
+        break;
+      }
+    }
+  }
+
+  private _flushViewerBuffer(runId: string): void {
+    const tunnel = this.getTunnel(runId);
+    if (!tunnel || !tunnel.clientWs || tunnel.clientWs.readyState !== WebSocket.OPEN) return;
+
+    while (tunnel.viewerBuffer.length > 0) {
+      const chunk = tunnel.viewerBuffer.shift();
+      if (!chunk) break;
+      try {
+        tunnel.clientWs.send(chunk);
+        tunnel.bytesToClient += chunk.length;
+      } catch (err) {
+        logger.error(`Error flushing viewer buffer: ${err}`);
+        break;
+      }
+    }
   }
 
   /**

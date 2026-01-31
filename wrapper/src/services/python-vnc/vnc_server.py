@@ -98,12 +98,12 @@ class VNCServer:
 
         try:
             if event_type == 4:  # KeyEvent
-                event = self.rfb_encoder.parse_key_event(rfb_event[1:])
+                event = self.rfb_encoder.parse_key_event(rfb_event)
                 if event:
                     self.input_handler.handle_key_event(event)
 
             elif event_type == 5:  # PointerEvent
-                event = self.rfb_encoder.parse_pointer_event(rfb_event[1:])
+                event = self.rfb_encoder.parse_pointer_event(rfb_event)
                 if event:
                     self.input_handler.handle_pointer_event(event)
 
