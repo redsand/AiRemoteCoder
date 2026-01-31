@@ -156,9 +156,21 @@ export class GenericRunner extends BaseRunner {
    */
   private buildCodexCommand(command?: string, autonomous?: boolean): WorkerCommandResult {
     const args = [...config.codexArgs];
+    const shouldResume = !!this.resumeFrom || config.codexResumeOnStart;
+    const subcommand = shouldResume ? 'resume' : config.codexSubcommand;
+
+    if (subcommand) {
+      args.push(subcommand);
+    }
+
+    if (subcommand === 'resume' && config.codexResumeLast) {
+      args.push('--last');
+    }
 
     if (command) {
-      if (config.codexPromptFlag) {
+      if (subcommand === 'resume') {
+        args.push(command);
+      } else if (config.codexPromptFlag) {
         args.push(config.codexPromptFlag, command);
       } else {
         args.push(command);

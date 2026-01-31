@@ -8,6 +8,10 @@ vi.mock('../config.js', () => ({
     ollamaCommand: 'ollama',
     ollamaModel: 'codellama:7b',
     codexCommand: 'codex',
+    codexSubcommand: 'exec',
+    codexPromptFlag: '',
+    codexResumeOnStart: true,
+    codexResumeLast: true,
     geminiCommand: 'gemini-cli',
     geminiModel: 'gemini-pro',
     revCommand: 'rev'

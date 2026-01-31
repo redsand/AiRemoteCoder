@@ -9,7 +9,10 @@ vi.mock('../config.js', () => ({
     ollamaCommand: 'ollama',
     ollamaModel: 'codellama:7b',
     codexCommand: 'codex',
+    codexSubcommand: 'exec',
     codexPromptFlag: '',
+    codexResumeOnStart: true,
+    codexResumeLast: true,
     codexArgs: [],
     geminiCommand: 'gemini-cli',
     geminiModel: 'gemini-pro',
@@ -216,8 +219,23 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand('write tests', false);
-      expect(result.args).toEqual(['write tests']);
-      expect(result.fullCommand).toBe('codex write tests');
+      expect(result.args).toEqual(['resume', '--last', 'write tests']);
+      expect(result.fullCommand).toBe('codex resume --last write tests');
+    });
+
+    it('should build Codex resume command when resume is enabled', () => {
+      const runner = new GenericRunner({
+        runId: 'test-run',
+        capabilityToken: 'token',
+        workingDir: '/test/project',
+        autonomous: false,
+        workerType: 'codex',
+        resumeFrom: 'previous-run'
+      });
+
+      const result = runner.buildCommand('continue', false);
+      expect(result.args).toEqual(['resume', '--last', 'continue']);
+      expect(result.fullCommand).toBe('codex resume --last continue');
     });
 
     it('should build Codex command without prompt', () => {
@@ -230,8 +248,8 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand(undefined, false);
-      expect(result.args).toEqual([]);
-      expect(result.fullCommand).toBe('codex');
+      expect(result.args).toEqual(['resume', '--last']);
+      expect(result.fullCommand).toBe('codex resume --last');
     });
 
     it('should build Gemini command with model', () => {
