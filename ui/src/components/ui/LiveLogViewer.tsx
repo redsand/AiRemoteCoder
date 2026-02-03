@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 
 export interface LogEvent {
   id: number;
-  type: 'stdout' | 'stderr' | 'marker' | 'info' | 'error' | 'assist' | 'prompt_waiting' | 'prompt_resolved';
+  type: 'stdout' | 'stderr' | 'marker' | 'info' | 'error' | 'assist' | 'prompt_waiting' | 'prompt_resolved' | 'tool_use';
   data: string;
   timestamp: number;
   step_id?: string;
@@ -26,6 +26,7 @@ const typeColors: Record<string, string> = {
   assist: 'var(--accent-green)',
   prompt_waiting: 'var(--accent-purple)',
   prompt_resolved: 'var(--accent-green)',
+  tool_use: 'var(--accent-blue)',
 };
 
 export function LiveLogViewer({
@@ -248,7 +249,18 @@ interface LogLineProps {
 }
 
 function LogLine({ event, searchTerm }: LogLineProps) {
-  const color = typeColors[event.type] || 'var(--text-primary)';
+  const isToolUse = event.type === 'tool_use';
+  let toolColor = typeColors[event.type] || 'var(--text-primary)';
+
+  // tool_use: post-phase uses green to distinguish from pre-phase blue
+  if (isToolUse) {
+    try {
+      const d = JSON.parse(event.data);
+      if (d.phase === 'post') toolColor = 'var(--accent-green)';
+    } catch { /* keep default */ }
+  }
+
+  const color = isToolUse ? toolColor : (typeColors[event.type] || 'var(--text-primary)');
   const isMarker = event.type === 'marker';
   const isAssist = event.type === 'assist';
   const isError = event.type === 'stderr' || event.type === 'error' || /error|failed/i.test(event.data);
@@ -269,6 +281,17 @@ function LogLine({ event, searchTerm }: LogLineProps) {
     } catch {
       content = `🔗 ${event.data}`;
     }
+  } else if (isToolUse) {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.phase === 'pre') {
+        content = `⚙ [${data.tool}] ← ${data.input || ''}`;
+      } else {
+        content = `✓ [${data.tool}] → ${data.output || data.input || ''}`;
+      }
+    } catch {
+      content = event.data;
+    }
   }
 
   // Highlight search term
@@ -281,7 +304,7 @@ function LogLine({ event, searchTerm }: LogLineProps) {
         style={{
           padding: '4px 8px',
           color,
-          fontWeight: isMarker || isAssist ? 600 : 400,
+          fontWeight: isMarker || isAssist || isToolUse ? 600 : 400,
           background: isError ? 'rgba(248, 81, 73, 0.05)' : undefined,
           marginBottom: '2px',
         }}

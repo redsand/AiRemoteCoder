@@ -55,6 +55,21 @@ export class ClaudeRunner extends BaseRunner {
   }
 
   /**
+   * Extend environment with gateway auth so .claude/hooks/ scripts
+   * can POST tool-use and lifecycle events directly to the gateway.
+   */
+  protected buildEnvironment(): NodeJS.ProcessEnv {
+    return {
+      ...super.buildEnvironment(),
+      AI_GATEWAY_URL: config.gatewayUrl,
+      AI_HMAC_SECRET: config.hmacSecret,
+      AI_RUN_ID: this.auth.runId,
+      AI_CAPABILITY_TOKEN: this.auth.capabilityToken,
+      AI_ALLOW_SELF_SIGNED: config.allowSelfSignedCerts ? 'true' : 'false',
+    };
+  }
+
+  /**
    * Get the CLI command for Claude
    */
   getCommand(): string {
