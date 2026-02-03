@@ -3,7 +3,8 @@ import { config } from '../config.js';
 import { spawn, ChildProcess } from 'child_process';
 import { ackCommand } from './gateway-client.js';
 import { randomUUID } from 'crypto';
-import { resolve as pathResolve, relative as pathRelative, normalize as pathNormalize } from 'path';
+import { resolve as pathResolve, relative as pathRelative, normalize as pathNormalize, join as pathJoin } from 'path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, copyFileSync } from 'fs';
 
 // Re-export RunnerOptions for convenience
 export type { RunnerOptions };
@@ -109,6 +110,73 @@ export class ClaudeRunner extends BaseRunner {
   }
 
   /**
+   * Provision .claude/hooks/ and settings.json into workingDir so Claude
+   * picks up the hook scripts regardless of which directory it runs in.
+   *
+   * - If workingDir IS the AiRemoteCoder project root, the files are already
+   *   committed to the repo and nothing needs to happen.
+   * - Otherwise we copy the hook scripts and merge our hooks entry into the
+   *   target's settings.json, preserving any hooks the target already defines.
+   */
+  private ensureHooksDirectory(): void {
+    const sourceClaudeDir = pathJoin(config.projectRoot, '.claude');
+    const targetClaudeDir = pathJoin(this.workingDir, '.claude');
+
+    // Same directory – files are already in place.
+    if (pathResolve(sourceClaudeDir) === pathResolve(targetClaudeDir)) {
+      return;
+    }
+
+    const sourceHooksDir = pathJoin(sourceClaudeDir, 'hooks');
+    const sourceSettingsPath = pathJoin(sourceClaudeDir, 'settings.json');
+
+    // Nothing to provision if the source doesn't have our hooks.
+    if (!existsSync(sourceHooksDir) || !existsSync(sourceSettingsPath)) {
+      return;
+    }
+
+    // Ensure target .claude/hooks/ exists.
+    const targetHooksDir = pathJoin(targetClaudeDir, 'hooks');
+    mkdirSync(targetHooksDir, { recursive: true });
+
+    // Copy every hook script, overwriting so they stay current with the
+    // bundled version from the wrapper package.
+    for (const file of readdirSync(sourceHooksDir)) {
+      if (file.endsWith('.py')) {
+        copyFileSync(pathJoin(sourceHooksDir, file), pathJoin(targetHooksDir, file));
+      }
+    }
+
+    // Merge hooks into target settings.json.  Read both sides, add only the
+    // hook keys that the target does not already define, then write back.
+    const sourceSettings: Record<string, any> = JSON.parse(readFileSync(sourceSettingsPath, 'utf8'));
+    const targetSettingsPath = pathJoin(targetClaudeDir, 'settings.json');
+
+    let targetSettings: Record<string, any> = {};
+    if (existsSync(targetSettingsPath)) {
+      try {
+        targetSettings = JSON.parse(readFileSync(targetSettingsPath, 'utf8'));
+      } catch {
+        // malformed – start fresh
+      }
+    }
+
+    if (sourceSettings.hooks) {
+      if (!targetSettings.hooks) {
+        targetSettings.hooks = {};
+      }
+      for (const [name, value] of Object.entries(sourceSettings.hooks)) {
+        if (!targetSettings.hooks[name]) {
+          targetSettings.hooks[name] = value;
+        }
+      }
+      writeFileSync(targetSettingsPath, JSON.stringify(targetSettings, null, 2));
+    }
+
+    console.log('Provisioned .claude/hooks into', targetClaudeDir);
+  }
+
+  /**
    * Start Claude with a session ID
    * If initial command provided, execute it immediately
    */
@@ -116,6 +184,9 @@ export class ClaudeRunner extends BaseRunner {
     console.log('\n>>> Starting Claude Code with session-based context');
 
     try {
+      // Provision hook scripts into workingDir before Claude starts
+      this.ensureHooksDirectory();
+
       // Mark as running
       (this as any).isRunning = true;
 
