@@ -16,7 +16,7 @@ export interface RunAuth {
 }
 
 export interface GatewayEvent {
-  type: 'stdout' | 'stderr' | 'marker' | 'info' | 'error' | 'assist' | 'prompt_waiting' | 'prompt_resolved';
+  type: 'stdout' | 'stderr' | 'marker' | 'info' | 'error' | 'assist' | 'prompt_waiting' | 'prompt_resolved' | 'tool_use';
   data: string;
   sequence?: number;
 }
