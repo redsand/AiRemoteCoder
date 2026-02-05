@@ -175,6 +175,30 @@ function RunDetail({ user }: Props) {
     }
   }
 
+  async function handleRestart(runId: string, currentCommand: string | null) {
+    if (!confirm('Restart this run? This will create a new run with the same configuration.')) return;
+
+    try {
+      const res = await fetch(`/api/runs/${runId}/restart`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          command: currentCommand || undefined
+        })
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        alert(`Failed to restart run: ${error.error}`);
+      } else {
+        const data = await res.json();
+        window.location.href = `/runs/${data.id}`;
+      }
+    } catch (err) {
+      alert('Failed to restart run');
+    }
+  }
+
   async function requestStop() {
     if (!confirm('Stop this run?')) return;
     try {
@@ -275,6 +299,15 @@ function RunDetail({ user }: Props) {
             <span className="card-title">Actions</span>
           </div>
           <div className="btn-group" style={{ flexWrap: 'wrap' }}>
+            {/* Resume button for completed/failed runs */}
+            {(run.status === 'done' || run.status === 'failed') && (
+              <button
+                className="btn btn-primary"
+                onClick={() => handleRestart(run.id, run.command)}
+              >
+                Resume
+              </button>
+            )}
             {isActive && (
               <button className="btn btn-danger" onClick={requestStop}>
                 Stop

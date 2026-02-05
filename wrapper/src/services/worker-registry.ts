@@ -17,6 +17,7 @@ export interface WorkerConfig {
   supportsModelSelection: boolean;
   description: string;
   subcommand?: string; // For workers that use a subcommand (e.g., "launch", "run")
+  supportsInteractive?: boolean; // For workers that support interactive REPL mode
 }
 
 /**
@@ -67,7 +68,8 @@ export const WORKER_CONFIGS: Record<WorkerType, WorkerConfig> = {
     icon: '',
     defaultModel: undefined,
     supportsModelSelection: true,
-    description: 'Custom AI coding tool'
+    supportsInteractive: true,
+    description: 'Custom AI coding tool with interactive REPL mode (--repl)'
   },
   vnc: {
     type: 'vnc',

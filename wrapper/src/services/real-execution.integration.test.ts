@@ -46,14 +46,36 @@ describe('Real Tool Execution Tests', () => {
 
       console.log(`Testing codex spawn: ${cmd} ${args.join(' ')}`);
 
-      return new Promise<void>((resolve, reject) => {
-        const proc = spawn(cmd, args, {
+      // On Windows, construct the command string with proper quoting for shell mode
+      const useShell = process.platform === 'win32';
+      let proc: any;
+
+      if (useShell) {
+        // Quote arguments containing spaces for shell mode
+        const quotedArgs = args.map(arg => {
+          if (arg.includes(' ')) {
+            return `"${arg.replace(/"/g, '""')}"`;
+          }
+          return arg;
+        });
+        const commandString = `"${cmd}" ${quotedArgs.join(' ')}`;
+        console.log(`Full command string: ${commandString}`);
+        proc = spawn(commandString, {
           cwd: testDir,
-          shell: false,  // Use false for .cmd files on Windows
+          shell: true,
           stdio: ['pipe', 'pipe', 'pipe'],
           timeout: 5000
         });
+      } else {
+        proc = spawn(cmd, args, {
+          cwd: testDir,
+          shell: false,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 5000
+        });
+      }
 
+      return new Promise<void>((resolve, reject) => {
         let stdout = '';
         let stderr = '';
 
@@ -70,7 +92,7 @@ describe('Real Tool Execution Tests', () => {
           reject(new Error('Codex command timed out'));
         }, 5000);
 
-        proc.on('close', (code) => {
+        proc.on('close', (code: number | null) => {
           clearTimeout(timeout);
           console.log(`Codex process closed with code: ${code}`);
           console.log(`Stdout: ${stdout.substring(0, 200)}`);
@@ -85,7 +107,7 @@ describe('Real Tool Execution Tests', () => {
           }
         });
 
-        proc.on('error', (err) => {
+        proc.on('error', (err: Error) => {
           clearTimeout(timeout);
           console.log(`Codex error: ${err.message}`);
           reject(err);
@@ -106,15 +128,45 @@ describe('Real Tool Execution Tests', () => {
       const { args } = runner.buildCommand(prompt, false);
       const cmd = runner.getCommand();
 
+      // Add --skip-git-repo-check flag after 'exec' subcommand for temp directories
+      const codexArgs = [...args];
+      const execIndex = codexArgs.indexOf('exec');
+      if (execIndex !== -1) {
+        codexArgs.splice(execIndex + 1, 0, '--skip-git-repo-check');
+      }
+
       console.log(`Testing codex file creation...`);
 
-      return new Promise<void>((resolve, reject) => {
-        const proc = spawn(cmd, args, {
+      // On Windows, use shell mode with proper quoting
+      const useShell = process.platform === 'win32';
+      let proc: any;
+
+      if (useShell) {
+        // Quote arguments containing spaces for shell mode
+        const quotedArgs = codexArgs.map(arg => {
+          if (arg.includes(' ')) {
+            return `"${arg.replace(/"/g, '""')}"`;
+          }
+          return arg;
+        });
+        const commandString = `"${cmd}" ${quotedArgs.join(' ')}`;
+        console.log(`Full command string: ${commandString}`);
+        proc = spawn(commandString, {
           cwd: testDir,
-          shell: false,  // Use false for .cmd files on Windows
+          shell: true,
           stdio: ['pipe', 'pipe', 'pipe'],
           timeout: 30000
         });
+      } else {
+        proc = spawn(cmd, codexArgs, {
+          cwd: testDir,
+          shell: false,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 30000
+        });
+      }
+
+      return new Promise<void>((resolve, reject) => {
 
         let stdout = '';
         let stderr = '';
@@ -133,14 +185,14 @@ describe('Real Tool Execution Tests', () => {
           checkFile();
         }, 30000);
 
-        proc.on('close', (code) => {
+        proc.on('close', (code: number | null) => {
           clearTimeout(timeout);
           console.log(`Codex exited with code: ${code}`);
           console.log(`Stdout: ${stdout.substring(0, 500)}`);
           checkFile();
         });
 
-        proc.on('error', (err) => {
+        proc.on('error', (err: Error) => {
           clearTimeout(timeout);
           console.log(`Codex error: ${err.message}`);
           reject(err);
@@ -176,14 +228,36 @@ describe('Real Tool Execution Tests', () => {
 
       console.log(`Testing gemini spawn: ${cmd} ${args.join(' ')}`);
 
-      return new Promise<void>((resolve, reject) => {
-        const proc = spawn(cmd, args, {
+      // On Windows, use shell mode with proper quoting
+      const useShell = process.platform === 'win32';
+      let proc: any;
+
+      if (useShell) {
+        // Quote arguments containing spaces for shell mode
+        const quotedArgs = args.map(arg => {
+          if (arg.includes(' ')) {
+            return `"${arg.replace(/"/g, '""')}"`;
+          }
+          return arg;
+        });
+        const commandString = `"${cmd}" ${quotedArgs.join(' ')}`;
+        console.log(`Full command string: ${commandString}`);
+        proc = spawn(commandString, {
           cwd: testDir,
-          shell: false,  // gemini is a .cmd file that can be spawned directly
+          shell: true,
           stdio: ['pipe', 'pipe', 'pipe'],
           timeout: 5000
         });
+      } else {
+        proc = spawn(cmd, args, {
+          cwd: testDir,
+          shell: false,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 5000
+        });
+      }
 
+      return new Promise<void>((resolve, reject) => {
         let stdout = '';
         let stderr = '';
 
@@ -200,7 +274,7 @@ describe('Real Tool Execution Tests', () => {
           reject(new Error('Gemini command timed out'));
         }, 5000);
 
-        proc.on('close', (code) => {
+        proc.on('close', (code: number | null) => {
           clearTimeout(timeout);
           console.log(`Gemini process closed with code: ${code}`);
           console.log(`Stdout: ${stdout.substring(0, 200)}`);
@@ -213,7 +287,7 @@ describe('Real Tool Execution Tests', () => {
           }
         });
 
-        proc.on('error', (err) => {
+        proc.on('error', (err: Error) => {
           clearTimeout(timeout);
           console.log(`Gemini error: ${err.message}`);
           reject(err);
@@ -236,14 +310,36 @@ describe('Real Tool Execution Tests', () => {
 
       console.log(`Testing gemini file creation...`);
 
-      return new Promise<void>((resolve, reject) => {
-        const proc = spawn(cmd, args, {
+      // On Windows, use shell mode with proper quoting
+      const useShell = process.platform === 'win32';
+      let proc: any;
+
+      if (useShell) {
+        // Quote arguments containing spaces for shell mode
+        const quotedArgs = args.map(arg => {
+          if (arg.includes(' ')) {
+            return `"${arg.replace(/"/g, '""')}"`;
+          }
+          return arg;
+        });
+        const commandString = `"${cmd}" ${quotedArgs.join(' ')}`;
+        console.log(`Full command string: ${commandString}`);
+        proc = spawn(commandString, {
+          cwd: testDir,
+          shell: true,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 30000
+        });
+      } else {
+        proc = spawn(cmd, args, {
           cwd: testDir,
           shell: false,
           stdio: ['pipe', 'pipe', 'pipe'],
           timeout: 30000
         });
+      }
 
+      return new Promise<void>((resolve, reject) => {
         let stdout = '';
         let stderr = '';
 
@@ -260,14 +356,14 @@ describe('Real Tool Execution Tests', () => {
           checkFile();
         }, 30000);
 
-        proc.on('close', (code) => {
+        proc.on('close', (code: number | null) => {
           clearTimeout(timeout);
           console.log(`Gemini exited with code: ${code}`);
           console.log(`Stdout: ${stdout.substring(0, 500)}`);
           checkFile();
         });
 
-        proc.on('error', (err) => {
+        proc.on('error', (err: Error) => {
           clearTimeout(timeout);
           console.log(`Gemini error: ${err.message}`);
           reject(err);
@@ -301,10 +397,13 @@ describe('Real Tool Execution Tests', () => {
       const { args } = runner.buildCommand('test prompt', false);
       const cmd = runner.getCommand();
 
-      console.log(`Testing rev spawn: ${cmd} ${args.join(' ')}`);
+      // Add --trust-workspace to skip trust notice in temp directories
+      const revArgs = ['--trust-workspace', ...args];
+
+      console.log(`Testing rev spawn: ${cmd} ${revArgs.join(' ')}`);
 
       return new Promise<void>((resolve, reject) => {
-        const proc = spawn(cmd, args, {
+        const proc = spawn(cmd, revArgs, {
           cwd: testDir,
           shell: false,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -327,7 +426,7 @@ describe('Real Tool Execution Tests', () => {
           reject(new Error('Rev command timed out'));
         }, 5000);
 
-        proc.on('close', (code) => {
+        proc.on('close', (code: number | null) => {
           clearTimeout(timeout);
           console.log(`Rev process closed with code: ${code}`);
           console.log(`Stdout: ${stdout.substring(0, 200)}`);
@@ -340,7 +439,7 @@ describe('Real Tool Execution Tests', () => {
           }
         });
 
-        proc.on('error', (err) => {
+        proc.on('error', (err: Error) => {
           clearTimeout(timeout);
           console.log(`Rev error: ${err.message}`);
           reject(err);
@@ -389,14 +488,14 @@ describe('Real Tool Execution Tests', () => {
           checkFile();
         }, 30000);
 
-        proc.on('close', (code) => {
+        proc.on('close', (code: number | null) => {
           clearTimeout(timeout);
           console.log(`Rev exited with code: ${code}`);
           console.log(`Stdout: ${stdout.substring(0, 500)}`);
           checkFile();
         });
 
-        proc.on('error', (err) => {
+        proc.on('error', (err: Error) => {
           clearTimeout(timeout);
           console.log(`Rev error: ${err.message}`);
           reject(err);
@@ -457,7 +556,7 @@ describe('Real Tool Execution Tests', () => {
           reject(new Error('Claude command timed out'));
         }, 5000);
 
-        proc.on('close', (code) => {
+        proc.on('close', (code: number | null) => {
           clearTimeout(timeout);
           console.log(`Claude process closed with code: ${code}`);
           console.log(`Stdout: ${stdout.substring(0, 200)}`);
@@ -528,7 +627,7 @@ describe('Real Tool Execution Tests', () => {
           checkFile();
         }, 30000);
 
-        proc.on('close', (code) => {
+        proc.on('close', (code: number | null) => {
           clearTimeout(timeout);
           console.log(`Claude exited with code: ${code}`);
           console.log(`Stdout: ${stdout.substring(0, 500)}`);

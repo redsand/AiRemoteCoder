@@ -61,7 +61,7 @@ class TestRunner extends BaseRunner {
   }
 
   // Expose protected methods for testing
-  public exposeDetectBlockingPrompt(text: string): { isPrompt: boolean; type?: 'yes' | 'confirm' } {
+  public exposeDetectBlockingPrompt(text: string): { isPrompt: boolean; type?: 'yes' | 'confirm' | 'numeric' } {
     return (this as any).detectBlockingPrompt(text);
   }
 
@@ -259,6 +259,41 @@ describe('BaseRunner - Prompt Detection', () => {
       expect(runner.exposeDetectBlockingPrompt('').isPrompt).toBe(false);
       expect(runner.exposeDetectBlockingPrompt('   ').isPrompt).toBe(false);
       expect(runner.exposeDetectBlockingPrompt('Output without question').isPrompt).toBe(false);
+    });
+
+    it('should detect rev prompt optimization questions', () => {
+      const revPrompts = [
+        'Optimize prompt?',
+        'Select an option:',
+        'Choose an option:',
+        '1. Keep original',
+        '2. Improve clarity',
+        '3. Add details',
+        '[1] Keep original',
+        'Enter 1 to continue',
+        'Type 1 to proceed',
+        'Press 1 to continue',
+      ];
+
+      for (const prompt of revPrompts) {
+        const result = runner.exposeDetectBlockingPrompt(prompt);
+        expect(result.isPrompt).toBe(true);
+        expect(result.type).toBe('numeric');
+      }
+    });
+
+    it('should detect rev prompts with numbered options on new lines', () => {
+      const revPrompts = [
+        'Optimize prompt?\n1. Keep original\n2. Improve clarity\n3. Add details',
+        'Select an option:\n1. Option A\n2. Option B\n3. Option C',
+        'Choose:\n1. Yes\n2. No\n3. Maybe',
+      ];
+
+      for (const prompt of revPrompts) {
+        const result = runner.exposeDetectBlockingPrompt(prompt);
+        expect(result.isPrompt).toBe(true);
+        expect(result.type).toBe('numeric');
+      }
     });
   });
 
@@ -478,5 +513,24 @@ describe('BaseRunner - Input Handling', () => {
 
     expect(promptResolvedEmitted).toBe(true);
     expect(mockStdin.write).toHaveBeenCalledWith('y');
+  });
+
+  it('should handle simple numeric input like "1", "2", "y", "n"', () => {
+    const runner = new TestRunner({
+      runId: 'test-run',
+      capabilityToken: 'token',
+      workingDir: '/test/project',
+      autonomous: false
+    });
+
+    const mockStdin = { write: vi.fn(() => true) };
+    (runner as any).process = { stdin: mockStdin };
+
+    // Test simple numeric inputs
+    ['1', '2', '3', 'y', 'n'].forEach(input => {
+      mockStdin.write.mockClear();
+      runner['sendInput'](input);
+      expect(mockStdin.write).toHaveBeenCalledWith(input);
+    });
   });
 });

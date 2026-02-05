@@ -151,6 +151,12 @@ function parseCommandArgs(raw: string): string[] {
 
 export function validateConfig(): void {
   if (!config.hmacSecret || config.hmacSecret.length < 32) {
-    throw new Error('HMAC_SECRET must be set and at least 32 characters');
+    const error = 'HMAC_SECRET must be set and at least 32 characters\n\n' +
+      'To fix this, set the HMAC_SECRET environment variable:\n' +
+      '  - In PowerShell: $env:HMAC_SECRET="your-32-char-secret-here"\n' +
+      '  - In CMD: set HMAC_SECRET=your-32-char-secret-here\n' +
+      '  - Or create a .env file in the project root with: HMAC_SECRET=your-32-char-secret-here\n\n' +
+      'The HMAC_SECRET must match the gateway\'s HMAC_SECRET for authentication.';
+    throw new Error(error);
   }
 }

@@ -23,6 +23,7 @@ export interface RunnerOptions {
   command?: string;
   workingDir?: string;
   autonomous?: boolean;
+  interactive?: boolean; // For rev: keeps process alive for interactive REPL mode
   resumeFrom?: string;
   model?: string; // For workers that support model selection (Ollama, Gemini, Rev)
   integration?: string; // For ollama-launch: specifies the IDE integration (claude, codex, opencode, droid)
@@ -459,6 +460,9 @@ export abstract class BaseRunner extends EventEmitter {
         if (promptResult.type === 'yes') {
           // For trust/safety prompts, answer "1" (Yes, I trust this folder)
           response = '1\n';
+        } else if (promptResult.type === 'numeric') {
+          // For numeric prompt optimization, answer "1" (default/first option)
+          response = '1\n';
         } else if (promptResult.type === 'confirm') {
           // For general yes/no prompts, answer "y"
           response = 'y\n';
@@ -497,8 +501,11 @@ export abstract class BaseRunner extends EventEmitter {
    * - "(y/N)"
    * - "Press Enter to continue"
    * - Trust/safety prompts from IDE integrations
+   * Rev-specific patterns:
+   * - Prompt optimization questions (numeric options 1, 2, 3)
+   * - Any interactive input prompts
    */
-  private detectBlockingPrompt(text: string): { isPrompt: boolean; type?: 'yes' | 'confirm' } {
+  private detectBlockingPrompt(text: string): { isPrompt: boolean; type?: 'yes' | 'confirm' | 'numeric' } {
     // Detect trust/safety prompts that should be auto-answered with "1" (yes)
     const trustPrompts = [
       /Is this a project you created or one you trust/i,
@@ -510,6 +517,31 @@ export abstract class BaseRunner extends EventEmitter {
     for (const pattern of trustPrompts) {
       if (pattern.test(text)) {
         return { isPrompt: true, type: 'yes' };
+      }
+    }
+
+    // Detect Rev-specific prompt optimization questions
+    // These ask for numeric input (1, 2, 3, etc.) to select options
+    const revPromptPatterns = [
+      /Optimize prompt\?/i,
+      /Select an option/i,
+      /Choose an option/i,
+      /\[1\]/i,
+      /\[2\]/i,
+      /\[3\]/i,
+      /1\.\s+/i, // "1. " followed by options
+      /2\.\s+/i,
+      /3\.\s+/i,
+      /\n\d+\.\s/, // Newline followed by numbered options
+      /Enter\s+\d+\s+to/i,
+      /Type\s+\d+\s+to/i,
+      /Press\s+\d+\s+to/i,
+      /rev.*waiting.*input/i,
+    ];
+
+    for (const pattern of revPromptPatterns) {
+      if (pattern.test(text)) {
+        return { isPrompt: true, type: 'numeric' };
       }
     }
 
@@ -928,39 +960,60 @@ export abstract class BaseRunner extends EventEmitter {
       const input = cmd.command.substring('__INPUT__:'.length);
 
       try {
-        // For workers that support command-line prompts (rev, claude, codex, etc.),
-        // spawn a new process with the prompt instead of trying to send input to stdin
-        const { args, fullCommand } = this.buildCommand(input, this.autonomous);
+        // Detect if this is simple user input (like "1", "2", "y", "n", etc.)
+        // vs. a longer prompt that should spawn a new process
+        const isSimpleInput = input.length <= 10 && /^[a-zA-Z0-9\s]+$/.test(input);
 
-        console.log(`\n>>> Executing task via new process`);
-        console.log(`    Full command: ${fullCommand}`);
-        console.log(`    Command ID: ${cmd.id}`);
-        console.log(`    Task text: ${input.substring(0, 150)}${input.length > 150 ? '...' : ''}`);
+        if (isSimpleInput) {
+          // For simple user input, send to main process's stdin
+          console.log(`\n>>> Sending user input to stdin`);
+          console.log(`    Input: "${input}"`);
+          console.log(`    Command ID: ${cmd.id}`);
 
-        // Send info event about what we're executing
-        await this.sendEvent('info', `Executing task: ${input}`);
+          const success = this.sendInput(input);
+          if (success) {
+            await this.sendEvent('info', `Input sent: ${input}`);
+            await ackCommand(this.auth, cmd.id, `Input sent: ${input}`);
+            console.log(`    ✓ Input sent successfully`);
+          } else {
+            await this.sendEvent('error', 'Failed to send input - process not running');
+            await ackCommand(this.auth, cmd.id, undefined, 'Failed to send input - process not running');
+            console.log(`    ✗ Failed to send input`);
+          }
+        } else {
+          // For longer prompts/tasks, spawn a new process
+          const { args, fullCommand } = this.buildCommand(input, this.autonomous);
 
-        // Mark as processed BEFORE execution to prevent duplicates
-        // Use 30-minute window to prevent re-execution even if ack fails
-        const dedupeMs = 30 * 60 * 1000;
-        this.markCommandProcessed(cmd.id, dedupeMs);
-        console.log(`    ✓ Marked command ${cmd.id} as processed for ${dedupeMs / 60000} minutes`);
+          console.log(`\n>>> Executing task via new process`);
+          console.log(`    Full command: ${fullCommand}`);
+          console.log(`    Command ID: ${cmd.id}`);
+          console.log(`    Task text: ${input.substring(0, 150)}${input.length > 150 ? '...' : ''}`);
 
-        // Track execution start
-        const startTime = Date.now();
+          // Send info event about what we're executing
+          await this.sendEvent('info', `Executing task: ${input}`);
 
-        // Spawn new process for this task
-        console.log(`    ► Starting task execution...`);
-        await this.executePrompt(input, args);
-        const duration = Date.now() - startTime;
+          // Mark as processed BEFORE execution to prevent duplicates
+          // Use 30-minute window to prevent re-execution even if ack fails
+          const dedupeMs = 30 * 60 * 1000;
+          this.markCommandProcessed(cmd.id, dedupeMs);
+          console.log(`    ✓ Marked command ${cmd.id} as processed for ${dedupeMs / 60000} minutes`);
 
-        console.log(`    ◄ Task execution completed after ${duration}ms`);
-        const ackResult = await ackCommand(this.auth, cmd.id, `Executed task: ${input.substring(0, 100)}`);
-        console.log(`    ✓ Command acknowledged successfully`, ackResult);
+          // Track execution start
+          const startTime = Date.now();
+
+          // Spawn new process for this task
+          console.log(`    ► Starting task execution...`);
+          await this.executePrompt(input, args);
+          const duration = Date.now() - startTime;
+
+          console.log(`    ◄ Task execution completed after ${duration}ms`);
+          const ackResult = await ackCommand(this.auth, cmd.id, `Executed task: ${input.substring(0, 100)}`);
+          console.log(`    ✓ Command acknowledged successfully`, ackResult);
+        }
       } catch (err: any) {
-        console.error(`\n>>> FAILED to execute task ${cmd.id}`);
+        console.error(`\n>>> FAILED to handle input command ${cmd.id}`);
         console.error(`    Error: ${err.message}`);
-        await this.sendEvent('error', `Failed to execute task: ${err.message}`);
+        await this.sendEvent('error', `Failed to handle input: ${err.message}`);
         try {
           const ackResult = await ackCommand(this.auth, cmd.id, undefined, `Error: ${err.message}`);
           console.log(`    ✓ Error acknowledged:`, ackResult);
