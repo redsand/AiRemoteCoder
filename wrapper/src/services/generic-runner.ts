@@ -60,7 +60,12 @@ export class GenericRunner extends BaseRunner {
   }
 
   protected shouldUseShell(): boolean {
-    if (this.workerType === 'codex' || this.workerType === 'gemini' || this.workerType === 'rev') {
+    // codex is a PowerShell script on Windows and needs shell mode
+    if (this.workerType === 'codex' && process.platform === 'win32') {
+      return true;
+    }
+    // gemini and rev don't need shell mode to avoid argument parsing issues
+    if (this.workerType === 'gemini' || this.workerType === 'rev') {
       return false;
     }
     return super.shouldUseShell();
@@ -221,7 +226,7 @@ export class GenericRunner extends BaseRunner {
     args.push('--model', model);
 
     // Add prompt as named flag (different from Claude/Rev which use positional)
-    if (command) {
+    if (command && command.trim().length > 0) {
       if (config.geminiPromptFlag) {
         args.push(config.geminiPromptFlag, command);
       } else {
@@ -267,7 +272,7 @@ export class GenericRunner extends BaseRunner {
 
     // Add command/prompt if provided as positional argument
     // Rev treats everything after the flags as the task description
-    if (command) {
+    if (command && command.trim().length > 0) {
       args.push(command);
     }
 

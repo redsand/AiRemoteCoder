@@ -32,7 +32,7 @@ export const config = {
   codexResumeOnStart: process.env.CODEX_RESUME === 'true',
   codexResumeLast: process.env.CODEX_RESUME_LAST !== 'false',
   codexArgs: parseCommandArgs(process.env.CODEX_ARGS || ''),
-  geminiCommand: process.env.GEMINI_COMMAND || 'gemini-cli',
+  geminiCommand: process.env.GEMINI_COMMAND || 'gemini',
   geminiModel: process.env.GEMINI_MODEL || 'gemini-pro',
   geminiOutputFormat: process.env.GEMINI_OUTPUT_FORMAT || 'text',
   geminiPromptFlag: process.env.GEMINI_PROMPT_FLAG || '--prompt',

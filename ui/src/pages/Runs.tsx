@@ -237,7 +237,7 @@ export function Runs({ user }: Props) {
         requestBody.command = createCommand.trim();
       }
 
-      if (model && (createWorkerType === 'ollama-launch' || createWorkerType === 'gemini')) {
+      if (model && (createWorkerType === 'ollama-launch' || createWorkerType === 'gemini' || createWorkerType === 'rev')) {
         requestBody.model = model;
       }
 

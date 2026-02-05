@@ -66,7 +66,7 @@ export const WORKER_CONFIGS: Record<WorkerType, WorkerConfig> = {
     displayName: 'Rev',
     icon: '',
     defaultModel: undefined,
-    supportsModelSelection: false,
+    supportsModelSelection: true,
     description: 'Custom AI coding tool'
   },
   vnc: {

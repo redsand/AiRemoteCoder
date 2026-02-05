@@ -14,7 +14,7 @@ vi.mock('../config.js', () => ({
     codexResumeOnStart: false,
     codexResumeLast: true,
     codexArgs: [],
-    geminiCommand: 'gemini-cli',
+    geminiCommand: 'gemini',
     geminiModel: 'gemini-pro',
     geminiOutputFormat: 'text',
     geminiPromptFlag: '--prompt',
@@ -31,7 +31,7 @@ vi.mock('../config.js', () => ({
         ollama: 'ollama',
         'ollama-launch': 'ollama',
         codex: 'codex',
-        gemini: 'gemini-cli',
+        gemini: 'gemini',
         rev: 'rev'
       };
       return commands[workerType] || workerType;
@@ -269,7 +269,7 @@ describe('GenericRunner', () => {
         '--prompt', 'refactor',
         '--approval-mode', 'yolo'
       ]);
-      expect(result.fullCommand).toBe('gemini-cli --output-format text --model gemini-1.5-pro --prompt refactor --approval-mode yolo');
+      expect(result.fullCommand).toBe('gemini --output-format text --model gemini-1.5-pro --prompt refactor --approval-mode yolo');
     });
 
     it('should build Rev command with prompt', () => {
@@ -370,7 +370,7 @@ describe('GenericRunner', () => {
         capabilityToken: 'token',
         workerType: 'gemini'
       });
-      expect(geminiRunner.getCommand()).toBe('gemini-cli');
+      expect(geminiRunner.getCommand()).toBe('gemini');
     });
   });
 

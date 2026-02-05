@@ -574,10 +574,7 @@ export abstract class BaseRunner extends EventEmitter {
       if (err.message) {
         const errorMessage = err.message.toLowerCase();
         // Stop on invalid/expired run or auth failures; keep listener alive
-        if (errorMessage.includes('not found') ||
-            errorMessage.includes('unauthorized') ||
-            errorMessage.includes('forbidden') ||
-            errorMessage.includes('invalid capability token')) {
+        if (this.isFatalGatewayError(errorMessage)) {
           console.error('\n========================================');
           console.error('Fatal error communicating with gateway.');
           console.error('The run may have been deleted or rate limit exceeded.');
@@ -628,7 +625,7 @@ export abstract class BaseRunner extends EventEmitter {
     }
 
     // Close log stream and wait for it to finish writing
-    if (this.logStream) {
+    if (this.logStream && typeof this.logStream!.end === 'function') {
       await new Promise<void>((resolve) => {
         this.logStream!.end(() => {
           resolve();
@@ -783,10 +780,25 @@ export abstract class BaseRunner extends EventEmitter {
           console.log(`[POLL #${pollCount}.${i + 1}] ✓ Command execution completed\n`);
         }
       } catch (err) {
+        const errorMessage = err instanceof Error ? err.message.toLowerCase() : '';
+        if (this.isFatalGatewayError(errorMessage)) {
+          console.error(`[POLL #${pollCount}] Fatal error during polling:`, err);
+          await this.handleGatewayInvalidation(errorMessage);
+          return;
+        }
         console.error(`[POLL #${pollCount}] Error during polling:`, err);
         // Ignore polling errors
       }
     }, config.commandPollInterval);
+  }
+
+  private isFatalGatewayError(errorMessage: string): boolean {
+    return (
+      errorMessage.includes('not found') ||
+      errorMessage.includes('unauthorized') ||
+      errorMessage.includes('forbidden') ||
+      errorMessage.includes('invalid capability token')
+    );
   }
 
   private async handleGatewayInvalidation(reason: string): Promise<void> {

@@ -12,7 +12,7 @@ vi.mock('../config.js', () => ({
     codexPromptFlag: '',
     codexResumeOnStart: false,
     codexResumeLast: true,
-    geminiCommand: 'gemini-cli',
+    geminiCommand: 'gemini',
     geminiModel: 'gemini-pro',
     revCommand: 'rev'
   }
@@ -74,7 +74,7 @@ describe('Worker Registry', () => {
     it('should have correct worker type for Gemini', () => {
       const gemini = WORKER_CONFIGS.gemini;
       expect(gemini.type).toBe('gemini');
-      expect(gemini.command).toBe('gemini-cli');
+      expect(gemini.command).toBe('gemini');
       expect(gemini.displayName).toBe('Gemini CLI');
       expect(gemini.defaultModel).toBe('gemini-pro');
       expect(gemini.supportsModelSelection).toBe(true);
@@ -86,7 +86,7 @@ describe('Worker Registry', () => {
       expect(rev.type).toBe('rev');
       expect(rev.command).toBe('rev');
       expect(rev.displayName).toBe('Rev');
-      expect(rev.supportsModelSelection).toBe(false);
+      expect(rev.supportsModelSelection).toBe(true);
       expect(rev.description).toContain('Custom');
     });
   });
@@ -107,7 +107,7 @@ describe('Worker Registry', () => {
       expect(getWorkerCommand('claude')).toBe('claude');
       expect(getWorkerCommand('ollama-launch')).toBe('ollama');
       expect(getWorkerCommand('codex')).toBe('codex');
-      expect(getWorkerCommand('gemini')).toBe('gemini-cli');
+      expect(getWorkerCommand('gemini')).toBe('gemini');
       expect(getWorkerCommand('rev')).toBe('rev');
       // Fallback for unknown worker
       expect(getWorkerCommand('unknown')).toBe('unknown');
