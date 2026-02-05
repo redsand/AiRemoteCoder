@@ -78,6 +78,14 @@ export class ClaudeRunner extends BaseRunner {
   }
 
   /**
+   * Override to disable shell mode for Claude
+   * Claude CLI doesn't need shell mode and using it causes argument escaping issues on Windows
+   */
+  protected shouldUseShell(): boolean {
+    return false;
+  }
+
+  /**
    * Build Claude Code command arguments with session ID
    *
    * Using --print mode for piped automation + --session-id for context preservation
@@ -100,8 +108,11 @@ export class ClaudeRunner extends BaseRunner {
     }
 
     // Add the command/prompt as the final argument
-    if (command) {
-      args.push(command);
+    // Skip if empty or whitespace-only to avoid Claude error:
+    // "Input must be provided either through stdin or as a prompt argument when using --print"
+    // Wrap in quotes when using shell mode to prevent shell from splitting on spaces
+    if (command && command.trim().length > 0) {
+      args.push(`"${command.replace(/"/g, '\\"')}"`);
     }
 
     const fullCommand = `${this.getCommand()} ${args.join(' ')}`.trim();
@@ -225,9 +236,14 @@ export class ClaudeRunner extends BaseRunner {
     const { args } = this.buildCommand(input, this.autonomous);
     const cmd = this.getCommand();
     const env = this.buildEnvironment();
+    // Use shell mode on Windows to handle command execution
     const useShell = process.platform === 'win32';
 
     console.log(`Spawning Claude (session: ${this.sessionId.substring(0, 8)}...): ${input.substring(0, 50)}...`);
+    console.log(`[DEBUG] Command: ${cmd}`);
+    console.log(`[DEBUG] Args array:`, JSON.stringify(args));
+    console.log(`[DEBUG] Full command string: ${cmd} ${args.join(' ')}`);
+    console.log(`[DEBUG] Using shell: ${useShell}`);
 
     return new Promise<string>((resolve, reject) => {
       const claudeProcess = spawn(cmd, args, {
@@ -279,7 +295,9 @@ export class ClaudeRunner extends BaseRunner {
           reject(new Error(errorMsg));
         }
 
-        await this.handleExit(code, signal);
+        // NOTE: Do NOT call handleExit() here for interactive sessions.
+        // The worker should stay alive and continue polling for __INPUT__ commands.
+        // handleExit() is only called when the user explicitly sends __STOP__.
       });
 
       // Handle process error

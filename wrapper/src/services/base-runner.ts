@@ -627,8 +627,14 @@ export abstract class BaseRunner extends EventEmitter {
       });
     }
 
-    // Close log stream
-    this.logStream?.end();
+    // Close log stream and wait for it to finish writing
+    if (this.logStream) {
+      await new Promise<void>((resolve) => {
+        this.logStream!.end(() => {
+          resolve();
+        });
+      });
+    }
 
     if (!this.suppressGatewayEvents) {
       // Upload log file as artifact
@@ -1054,7 +1060,9 @@ export abstract class BaseRunner extends EventEmitter {
     return new Promise((resolve, reject) => {
       const cmd = this.getCommand();
       const env = this.buildEnvironment();
-      const useShell = process.platform === 'win32';
+      // Don't use shell mode - it causes argument escaping issues on Windows
+      // Use direct spawning for proper argument passing
+      const useShell = false;
 
       console.log(`Executing prompt with: ${cmd} ${args.join(' ')}`);
 
