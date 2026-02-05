@@ -11,7 +11,7 @@ vi.mock('../config.js', () => ({
     codexCommand: 'codex',
     codexSubcommand: 'exec',
     codexPromptFlag: '',
-    codexResumeOnStart: true,
+    codexResumeOnStart: false,
     codexResumeLast: true,
     codexArgs: [],
     geminiCommand: 'gemini-cli',
@@ -219,8 +219,8 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand('write tests', false);
-      expect(result.args).toEqual(['resume', '--last', 'write tests']);
-      expect(result.fullCommand).toBe('codex resume --last write tests');
+      expect(result.args).toEqual(['exec', 'write tests']);
+      expect(result.fullCommand).toBe('codex exec write tests');
     });
 
     it('should build Codex resume command when resume is enabled', () => {
@@ -248,8 +248,8 @@ describe('GenericRunner', () => {
       });
 
       const result = runner.buildCommand(undefined, false);
-      expect(result.args).toEqual(['resume', '--last']);
-      expect(result.fullCommand).toBe('codex resume --last');
+      expect(result.args).toEqual(['exec']);
+      expect(result.fullCommand).toBe('codex exec');
     });
 
     it('should build Gemini command with model', () => {
@@ -473,7 +473,7 @@ describe('GenericRunner Edge Cases', () => {
 
     const longCmd = 'write a comprehensive unit test suite for the authentication module including edge cases like expired tokens, invalid passwords, and rate limiting';
     const result = runner.buildCommand(longCmd, false);
-    expect(result.args).toEqual([longCmd]);
+    expect(result.args).toEqual(['exec', longCmd]);
   });
 
   it('should handle commands with special characters', () => {

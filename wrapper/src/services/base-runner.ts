@@ -1,7 +1,7 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { EventEmitter } from 'events';
-import { createWriteStream, existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { createWriteStream, existsSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'fs';
+import { join, relative, resolve, normalize } from 'path';
 import os from 'os';
 import { config } from '../config.js';
 import { redactSecrets } from '../utils/crypto.js';
@@ -193,7 +193,7 @@ export abstract class BaseRunner extends EventEmitter {
 
     // For Windows compatibility, we may need shell, but try to use it carefully
     // shell: true can interfere with output capture, but some CLIs need it
-    const useShell = process.platform === 'win32';
+    const useShell = this.shouldUseShell();
 
     // Inherit stdin so child processes can detect TTY (required for interactive REPL mode)
     // Pipe stdout/stderr so we can capture output for the gateway
@@ -590,6 +590,10 @@ export abstract class BaseRunner extends EventEmitter {
 
       throw err;
     }
+  }
+
+  protected shouldUseShell(): boolean {
+    return process.platform === 'win32';
   }
 
   /**
@@ -1166,8 +1170,6 @@ export abstract class BaseRunner extends EventEmitter {
    * Validate that a path is within the sandbox (initial working directory)
    */
   private validatePathInSandbox(path: string): { valid: boolean; normalized: string } {
-    const { resolve, normalize, relative } = require('path');
-
     const normalized = normalize(path);
     const absolutePath = resolve(this.workingDir, normalized);
     const sandboxRoot = resolve((this as any).sandboxRoot || this.workingDir);
@@ -1188,9 +1190,6 @@ export abstract class BaseRunner extends EventEmitter {
    * Change directory within the sandbox
    */
   private changeDirectory(path: string): { success: boolean; message: string; newDir?: string } {
-    const { existsSync, statSync } = require('fs');
-    const { resolve, normalize } = require('path');
-
     // Handle special cases
     if (!path || path === '~') {
       return {
@@ -1261,7 +1260,6 @@ export abstract class BaseRunner extends EventEmitter {
    */
   private getWorkingDirectory(): string {
     // Return relative path from sandbox root for cleaner display
-    const { relative } = require('path');
     const sandboxRoot = (this as any).sandboxRoot || this.workingDir;
     const relPath = relative(sandboxRoot, this.workingDir);
     return relPath === '.' ? sandboxRoot : relPath;

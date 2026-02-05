@@ -29,7 +29,7 @@ export const config = {
   codexCommand: process.env.CODEX_COMMAND || 'codex',
   codexSubcommand: process.env.CODEX_SUBCOMMAND || 'exec',
   codexPromptFlag: process.env.CODEX_PROMPT_FLAG || '',
-  codexResumeOnStart: process.env.CODEX_RESUME !== 'false',
+  codexResumeOnStart: process.env.CODEX_RESUME === 'true',
   codexResumeLast: process.env.CODEX_RESUME_LAST !== 'false',
   codexArgs: parseCommandArgs(process.env.CODEX_ARGS || ''),
   geminiCommand: process.env.GEMINI_COMMAND || 'gemini-cli',

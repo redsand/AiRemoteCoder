@@ -59,6 +59,13 @@ export class GenericRunner extends BaseRunner {
     return config.getWorkerCommand(this.workerType);
   }
 
+  protected shouldUseShell(): boolean {
+    if (this.workerType === 'codex' || this.workerType === 'gemini' || this.workerType === 'rev') {
+      return false;
+    }
+    return super.shouldUseShell();
+  }
+
   /**
    * Override start to handle sending initial command via stdin for ollama-launch
    */

@@ -10,7 +10,7 @@ vi.mock('../config.js', () => ({
     codexCommand: 'codex',
     codexSubcommand: 'exec',
     codexPromptFlag: '',
-    codexResumeOnStart: true,
+    codexResumeOnStart: false,
     codexResumeLast: true,
     geminiCommand: 'gemini-cli',
     geminiModel: 'gemini-pro',
