@@ -201,6 +201,14 @@ export function Runs({ user }: Props) {
     return () => clearInterval(interval);
   }, [fetchRuns]);
 
+  // Auto-refresh clients when new workers connect
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchClients();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [fetchClients]);
+
   // Reset filters
   const resetFilters = () => {
     setSearchParams(new URLSearchParams());

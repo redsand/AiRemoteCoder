@@ -69,6 +69,14 @@ function RunDetail({ user }: Props) {
     }
   }, [events]);
 
+  // Periodically refresh run status to detect client changes
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchRun();
+    }, 10000); // Refresh every 10 seconds
+    return () => clearInterval(interval);
+  }, [runId]);
+
   async function fetchRun() {
     try {
       const res = await fetch(`/api/runs/${runId}`);

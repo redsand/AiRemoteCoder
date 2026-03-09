@@ -566,4 +566,30 @@ describe('Rev Runner - Edge Cases', () => {
       expect(args.every(arg => arg.trim().length > 0)).toBe(true);
     });
   });
+
+  describe('Stdin Handling', () => {
+    it('should pipe stdin for rev workers (for interactive prompts)', () => {
+      const runner = new GenericRunner({
+        runId: 'test-run',
+        capabilityToken: 'test-token',
+        workingDir: testDir,
+        autonomous: false,
+        workerType: 'rev'
+      });
+
+      expect(runner['shouldPipeStdin']()).toBe(true);
+    });
+
+    it('should not pipe stdin for non-rev workers', () => {
+      const claudeRunner = new GenericRunner({
+        runId: 'test-run',
+        capabilityToken: 'test-token',
+        workingDir: testDir,
+        autonomous: false,
+        workerType: 'claude'
+      });
+
+      expect(claudeRunner['shouldPipeStdin']()).toBe(false);
+    });
+  });
 });

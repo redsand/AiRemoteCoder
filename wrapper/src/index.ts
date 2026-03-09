@@ -6,6 +6,9 @@
  */
 
 export { ClaudeRunner, type RunnerOptions } from './services/claude-runner.js';
+export { RevRunner, type RevRunnerOptions } from './services/rev-runner.js';
+export { GeminiRunner, type GeminiRunnerOptions } from './services/gemini-runner.js';
+export { CodexRunner, type CodexRunnerOptions } from './services/codex-runner.js';
 export { VncRunner, type VncRunnerOptions } from './services/vnc-runner.js';
 export { HandsOnRunner, type HandsOnRunnerOptions } from './services/hands-on-runner.js';
 export {

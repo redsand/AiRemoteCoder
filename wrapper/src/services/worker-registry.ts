@@ -31,7 +31,8 @@ export const WORKER_CONFIGS: Record<WorkerType, WorkerConfig> = {
     icon: '',
     defaultModel: undefined,
     supportsModelSelection: false,
-    description: 'Anthropic Claude Code - Interactive AI coding assistant'
+    supportsInteractive: true,
+    description: 'Claude Code - Interactive REPL mode with persistent session'
   },
   'ollama-launch': {
     type: 'ollama-launch',
@@ -59,7 +60,8 @@ export const WORKER_CONFIGS: Record<WorkerType, WorkerConfig> = {
     icon: '',
     defaultModel: config.geminiModel,
     supportsModelSelection: true,
-    description: 'Google Gemini CLI for AI assistance'
+    supportsInteractive: true,
+    description: 'Google Gemini CLI - Interactive mode with persistent session'
   },
   rev: {
     type: 'rev',
@@ -69,7 +71,7 @@ export const WORKER_CONFIGS: Record<WorkerType, WorkerConfig> = {
     defaultModel: undefined,
     supportsModelSelection: true,
     supportsInteractive: true,
-    description: 'Custom AI coding tool with interactive REPL mode (--repl)'
+    description: 'Rev AI - Interactive REPL mode with persistent session'
   },
   vnc: {
     type: 'vnc',

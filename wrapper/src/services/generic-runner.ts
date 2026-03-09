@@ -72,6 +72,14 @@ export class GenericRunner extends BaseRunner {
   }
 
   /**
+   * Override to enable piped stdin for rev
+   * Rev needs piped stdin for handling prompt optimization and other interactive prompts
+   */
+  protected shouldPipeStdin(): boolean {
+    return this.workerType === 'rev';
+  }
+
+  /**
    * Override start to handle sending initial command via stdin for ollama-launch
    */
   async start(command?: string): Promise<void> {

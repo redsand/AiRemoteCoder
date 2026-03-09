@@ -196,10 +196,12 @@ export abstract class BaseRunner extends EventEmitter {
     // shell: true can interfere with output capture, but some CLIs need it
     const useShell = this.shouldUseShell();
 
-    // Inherit stdin so child processes can detect TTY (required for interactive REPL mode)
-    // Pipe stdout/stderr so we can capture output for the gateway
-    // Users should send input via the UI's __INPUT__ mechanism, not manual terminal input
-    const stdio: any = ['inherit', 'pipe', 'pipe'];
+    // Pipe stdin for workers that need programmatic input (like Rev in REPL mode)
+    // Inherit stdin for workers that should use the terminal directly
+    const shouldPipeStdin = this.shouldPipeStdin();
+    const stdio: any = [shouldPipeStdin ? 'pipe' : 'inherit', 'pipe', 'pipe'];
+
+    console.log(`Stdin mode: ${shouldPipeStdin ? 'pipe' : 'inherit'}`);
 
     this.process = spawn(cmd, args, {
       cwd: this.workingDir,
@@ -623,6 +625,14 @@ export abstract class BaseRunner extends EventEmitter {
 
   protected shouldUseShell(): boolean {
     return process.platform === 'win32';
+  }
+
+  /**
+   * Whether to pipe stdin for programmatic input
+   * Workers that need to send input via __INPUT__ commands should return true
+   */
+  protected shouldPipeStdin(): boolean {
+    return false;
   }
 
   /**
