@@ -11,7 +11,7 @@ import { join } from 'path';
 
 import { config, validateConfig } from './config.js';
 import { db } from './services/database.js';
-import { setupWebSocket, getConnectionStats } from './services/websocket.js';
+import { setupWebSocket } from './services/websocket.js';
 import { runsRoutes } from './routes/runs.js';
 import { artifactRoutes } from './routes/artifacts.js';
 import { authRoutes } from './routes/auth.js';
@@ -19,6 +19,7 @@ import { clientsRoutes } from './routes/clients.js';
 import { alertsRoutes } from './routes/alerts.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { modelsRoutes } from './routes/models.js';
+import { healthRoutes } from './routes/health.js';
 import { vncRoutes } from './routes/vnc.js';
 import { rawBodyPlugin } from './middleware/auth.js';
 import { mcpPlugin } from './mcp/plugin.js';
@@ -52,7 +53,7 @@ if (config.tlsEnabled) {
 // Create Fastify instance
 const fastify = Fastify({
   logger: {
-    level: process.env.LOG_LEVEL || 'info',
+    level: config.logLevel,
     transport: {
       target: 'pino-pretty',
       options: {
@@ -154,21 +155,12 @@ await fastify.register(alertsRoutes);
 await fastify.register(dashboardRoutes);
 await fastify.register(modelsRoutes);
 await fastify.register(vncRoutes);
+await fastify.register(healthRoutes);
 
 // MCP control plane (additive — does nothing if AIRC_MCP_ENABLED=false)
 await fastify.register(mcpPlugin);
 // MCP provider setup / auto-install routes
 await fastify.register(mcpSetupRoutes);
-
-// Health check
-fastify.get('/api/health', async () => {
-  const stats = getConnectionStats();
-  return {
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    connections: stats
-  };
-});
 
 // Graceful shutdown
 const shutdown = async () => {

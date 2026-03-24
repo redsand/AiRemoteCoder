@@ -39,7 +39,8 @@ Content-Type: application/json
 | `events:read` | tail_logs |
 | `artifacts:read` | list_artifacts, fetch_artifact, get_run_diff |
 | `artifacts:write` | (reserved for agent artifact upload) |
-| `approvals:read` | request_approval_status, create_approval_request |
+| `approvals:read` | request_approval_status |
+| `approvals:write` | create_approval_request |
 | `approvals:decide` | approve_action, deny_action |
 | `admin` | all of the above + list_mcp_tokens |
 
@@ -225,7 +226,7 @@ Get the most recent git diff artifact from a run.
 ### `create_approval_request`
 Gate an agent action on human approval.
 
-**Scope:** `approvals:read`
+**Scope:** `approvals:write`
 
 **Input:**
 ```json

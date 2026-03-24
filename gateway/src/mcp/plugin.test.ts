@@ -15,6 +15,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Fastify from 'fastify';
 import fastifyCookie from '@fastify/cookie';
+import { createHash } from 'crypto';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -24,6 +25,9 @@ const mockTokens: any[] = [];
 const mockUsers: any[] = [
   { id: 'user-1', username: 'admin', role: 'admin' },
 ];
+const mockSessions = new Map<string, { authToken: string }>();
+let lastTransport: { handleRequest: ReturnType<typeof vi.fn>; onclose: null | (() => void) } | null = null;
+let lastSessionId: string | null = null;
 
 vi.mock('../services/database.js', () => {
   const prepare = (sql: string) => ({
@@ -57,7 +61,16 @@ vi.mock('../services/database.js', () => {
   });
   return {
     db: { prepare, pragma: vi.fn(), exec: vi.fn(), close: vi.fn() },
-    findMcpToken: vi.fn(),
+    findMcpToken: vi.fn((hash: string) => {
+      const token = mockTokens.find((t) => t.token_hash === hash && !t.revoked_at);
+      if (!token) return undefined;
+      return {
+        id: token.id,
+        label: token.label,
+        userId: token.user_id,
+        scopes: JSON.parse(token.scopes),
+      };
+    }),
     expireTimedOutApprovals: vi.fn(),
     cleanupExpiredNonces: vi.fn(),
     cleanupExpiredSessions: vi.fn(),
@@ -66,6 +79,11 @@ vi.mock('../services/database.js', () => {
 });
 
 vi.mock('../services/websocket.js', () => ({ broadcastToRun: vi.fn(), getConnectionStats: vi.fn(() => ({})) }));
+vi.mock('./server.js', () => ({
+  createMcpServer: vi.fn(() => ({
+    connect: vi.fn().mockResolvedValue(undefined),
+  })),
+}));
 vi.mock('../config.js', () => ({
   config: {
     mcpEnabled: true,
@@ -84,10 +102,20 @@ vi.mock('../config.js', () => ({
 
 // @modelcontextprotocol/sdk needs to be mocked for transport tests
 vi.mock('@modelcontextprotocol/sdk/server/streamableHttp.js', () => ({
-  StreamableHTTPServerTransport: vi.fn().mockImplementation(() => ({
-    handleRequest: vi.fn(),
-    onclose: null,
-  })),
+  StreamableHTTPServerTransport: vi.fn().mockImplementation((opts: any) => {
+    const transport = {
+      handleRequest: vi.fn(async (_req: any, _res: any, body?: any) => {
+        if (body && typeof body === 'object' && body.method === 'initialize') {
+          lastSessionId = opts.sessionIdGenerator();
+          opts.onsessioninitialized?.(lastSessionId);
+          mockSessions.set(lastSessionId, { authToken: 'valid-token' });
+        }
+      }),
+      onclose: null as null | (() => void),
+    };
+    lastTransport = transport;
+    return transport;
+  }),
 }));
 vi.mock('@modelcontextprotocol/sdk/types.js', () => ({
   isInitializeRequest: vi.fn().mockReturnValue(true),
@@ -141,6 +169,141 @@ describe('GET /api/mcp/config', () => {
     const body = res.json();
     // legacyWrapper is false in mock config so it should not appear
     expect(body.enabledProviders).not.toContain('legacy_wrapper');
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /mcp, GET /mcp, DELETE /mcp
+// ---------------------------------------------------------------------------
+
+describe('MCP transport routes', () => {
+  beforeEach(() => {
+    mockSessions.clear();
+    lastTransport = null;
+    lastSessionId = null;
+    mockTokens.length = 0;
+    mockTokens.push({
+      id: 'tok-1',
+      token_hash: createHash('sha256').update('valid-token').digest('hex'),
+      label: 'session',
+      user_id: 'user-1',
+      scopes: JSON.stringify([
+        'runs:read', 'runs:write', 'runs:cancel',
+        'sessions:read', 'sessions:write',
+        'events:read', 'artifacts:read',
+        'approvals:read', 'approvals:write', 'approvals:decide',
+      ]),
+    });
+    mockTokens.push({
+      id: 'tok-2',
+      token_hash: createHash('sha256').update('other-token').digest('hex'),
+      label: 'other',
+      user_id: 'user-1',
+      scopes: JSON.stringify(['runs:read']),
+    });
+  });
+
+  it('rejects POST /mcp without bearer auth', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      payload: { jsonrpc: '2.0', method: 'initialize', id: 1, params: {} },
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('initializes a session and reuses the same bearer token for GET/DELETE', async () => {
+    const app = await buildApp();
+
+    const initRes = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: { authorization: 'Bearer valid-token' },
+      payload: {
+        jsonrpc: '2.0',
+        method: 'initialize',
+        id: 1,
+        params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1.0.0' } },
+      },
+    });
+
+    expect(initRes.statusCode).toBe(200);
+    expect(lastSessionId).toBeTruthy();
+    expect(lastTransport?.handleRequest).toHaveBeenCalled();
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: '/mcp',
+      headers: {
+        authorization: 'Bearer valid-token',
+        'mcp-session-id': lastSessionId!,
+      },
+    });
+
+    expect(getRes.statusCode).toBe(200);
+    expect(lastTransport?.handleRequest).toHaveBeenCalledTimes(2);
+
+    const deleteRes = await app.inject({
+      method: 'DELETE',
+      url: '/mcp',
+      headers: {
+        authorization: 'Bearer valid-token',
+        'mcp-session-id': lastSessionId!,
+      },
+    });
+
+    expect(deleteRes.statusCode).toBe(200);
+    expect(deleteRes.json()).toEqual({ ok: true });
+
+    await app.close();
+  });
+
+  it('rejects GET /mcp when bearer token does not match the session identity', async () => {
+    const app = await buildApp();
+
+    await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: { authorization: 'Bearer valid-token' },
+      payload: {
+        jsonrpc: '2.0',
+        method: 'initialize',
+        id: 1,
+        params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1.0.0' } },
+      },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/mcp',
+      headers: {
+        authorization: 'Bearer other-token',
+        'mcp-session-id': lastSessionId!,
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe('Forbidden: session token does not match the authenticated token');
+
+    await app.close();
+  });
+
+  it('rejects DELETE /mcp when session is missing', async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/mcp',
+      headers: {
+        authorization: 'Bearer valid-token',
+        'mcp-session-id': 'missing-session',
+      },
+    });
+
+    expect(res.statusCode).toBe(404);
     await app.close();
   });
 });

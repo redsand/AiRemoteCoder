@@ -286,6 +286,7 @@ export type McpScope =
   | 'artifacts:read'
   | 'artifacts:write'
   | 'approvals:read'
+  | 'approvals:write'
   | 'approvals:decide'
   | 'admin';
 
@@ -295,7 +296,7 @@ export const ALL_MCP_SCOPES: McpScope[] = [
   'sessions:read', 'sessions:write',
   'events:read',
   'artifacts:read', 'artifacts:write',
-  'approvals:read', 'approvals:decide',
+  'approvals:read', 'approvals:write', 'approvals:decide',
   'admin',
 ];
 

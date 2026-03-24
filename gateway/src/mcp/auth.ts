@@ -69,3 +69,41 @@ export function assertScopes(
 
   return `Insufficient scope. Required: ${required.join(', ')}. Missing: ${missing.join(', ')}.`;
 }
+
+/**
+ * Re-validate a session-bound request against the bearer token on the request.
+ * The session is only valid if the token is still active and matches the token
+ * used to open the session.
+ */
+export function validateMcpSessionAccess(
+  sessionAuth: McpAuthContext,
+  authHeader: string | undefined
+): { ok: true; authContext: McpAuthContext } | { ok: false; statusCode: number; message: string } {
+  const rawToken = extractBearerToken(authHeader);
+  if (!rawToken) {
+    return {
+      ok: false,
+      statusCode: 401,
+      message: 'Unauthorized: valid MCP Bearer token required',
+    };
+  }
+
+  const authContext = validateMcpToken(rawToken);
+  if (!authContext) {
+    return {
+      ok: false,
+      statusCode: 401,
+      message: 'Unauthorized: valid MCP Bearer token required',
+    };
+  }
+
+  if (authContext.tokenId !== sessionAuth.tokenId) {
+    return {
+      ok: false,
+      statusCode: 403,
+      message: 'Forbidden: session token does not match the authenticated token',
+    };
+  }
+
+  return { ok: true, authContext };
+}

@@ -10,7 +10,7 @@
  */
 
 import { WebSocket } from 'ws';
-import { logger } from '../index.js';
+const logger = console;
 
 export interface VncTunnel {
   runId: string;

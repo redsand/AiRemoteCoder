@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useToast, Modal } from '../components/ui';
 
 interface AuthStatus {
@@ -33,6 +34,7 @@ const allowedCommands = [
 
 export function Settings({ user, onLogout }: Props) {
   const { addToast } = useToast();
+  const navigate = useNavigate();
 
   // State
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
@@ -165,6 +167,28 @@ export function Settings({ user, onLogout }: Props) {
         <p className="settings-hint">
           For production deployments, Cloudflare Access provides zero-trust authentication.
           Set <code>CF_ACCESS_TEAM</code> and <code>CF_ACCESS_AUD</code> environment variables.
+        </p>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="section-title">MCP Control Plane</h3>
+        <div className="settings-card">
+          <div className="settings-row">
+            <span className="settings-label">Primary agent interface</span>
+            <span className="settings-value">Remote MCP over HTTP/SSE</span>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">Coding environments</span>
+            <span className="settings-value">Claude, Codex, Gemini, OpenCode, Zenflow, Rev</span>
+          </div>
+          <div className="settings-row" style={{ borderBottom: 'none' }}>
+            <button className="btn btn-primary" onClick={() => navigate('/mcp')}>
+              Open MCP setup
+            </button>
+          </div>
+        </div>
+        <p className="settings-hint">
+          MCP is the preferred way to connect coding agents. Use Auto-Install to set up the project for each environment.
         </p>
       </section>
 

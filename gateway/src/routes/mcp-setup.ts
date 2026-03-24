@@ -10,7 +10,7 @@
  *   - Only works when the gateway has filesystem access to the target project directory
  *   - The project directory is the gateway's working directory (GATEWAY_PROJECT_ROOT or cwd)
  *
- * Supported providers: claude, codex, gemini, opencode, rev
+ * Supported providers: claude, codex, gemini, opencode, rev, zenflow
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -29,10 +29,10 @@ const AGENT_DEFAULT_SCOPES = [
   'sessions:read', 'sessions:write',
   'events:read',
   'artifacts:read', 'artifacts:write',
-  'approvals:read',
+  'approvals:read', 'approvals:write',
 ];
 
-const SUPPORTED_PROVIDERS = ['claude', 'codex', 'gemini', 'opencode', 'rev'] as const;
+const SUPPORTED_PROVIDERS = ['claude', 'codex', 'gemini', 'opencode', 'rev', 'zenflow'] as const;
 type SupportedProvider = typeof SUPPORTED_PROVIDERS[number];
 
 // ---------------------------------------------------------------------------
@@ -47,6 +47,7 @@ function buildSnippet(provider: SupportedProvider, mcpUrl: string, token: string
 } {
   switch (provider) {
     case 'claude':
+    case 'zenflow':
       return {
         snippet: {
           mcpServers: {
@@ -57,14 +58,16 @@ function buildSnippet(provider: SupportedProvider, mcpUrl: string, token: string
             },
           },
         },
-        filePath: '.claude/mcp.json',
+        filePath: provider === 'zenflow' ? '.zenflow/mcp.json' : '.claude/mcp.json',
         fileFormat: 'json',
-        instructions: 'Add to .claude/mcp.json in your project root. Claude Code will pick it up automatically.',
+        instructions: provider === 'zenflow'
+          ? 'Add to .zenflow/mcp.json in your project root. Zenflow will pick it up automatically.'
+          : 'Add to .claude/mcp.json in your project root. Claude Code will pick it up automatically.',
       };
 
     case 'codex':
       return {
-        snippet: `MCP_SERVER_URL=${mcpUrl}\nMCP_AUTH_TOKEN=${token}`,
+        snippet: `MCP_SERVER_URL=${mcpUrl}\nMCP_SERVER_TOKEN=${token}`,
         filePath: null, // env var — no standard file
         fileFormat: 'env',
         instructions: 'Export these environment variables before running codex, or add them to your .env file.',
@@ -121,19 +124,6 @@ function getOrCreateAgentToken(
   provider: SupportedProvider
 ): { tokenId: string; rawToken: string; isNew: boolean } {
   const label = `auto:${provider}`;
-
-  // Return existing non-revoked token for this provider if present
-  const existing = db.prepare(`
-    SELECT id FROM mcp_tokens
-    WHERE user_id = ? AND label = ? AND revoked_at IS NULL
-      AND (expires_at IS NULL OR expires_at > unixepoch())
-    LIMIT 1
-  `).get(userId, label) as { id: string } | undefined;
-
-  if (existing) {
-    // We can't return the raw token (hashed at rest) — create a fresh one
-    // so the user always gets a usable value from this endpoint
-  }
 
   const rawToken = nanoid(48);
   const tokenHash = createHash('sha256').update(rawToken).digest('hex');
@@ -206,21 +196,23 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
     { preHandler: [uiAuth] },
     async (req: AuthenticatedRequest, reply) => {
       const { provider } = req.params as { provider: string };
-      const { projectRoot: clientProjectRoot } = req.body as { projectRoot?: string };
+      const { token } = req.body as { token?: string };
 
       if (!SUPPORTED_PROVIDERS.includes(provider as SupportedProvider)) {
         return reply.code(400).send({ error: `Unsupported provider: ${provider}` });
       }
 
+      if (!token || typeof token !== 'string') {
+        return reply.code(400).send({ error: 'token is required and must match the setup response token' });
+      }
+
       const proto = config.tlsEnabled ? 'https' : 'http';
       const host = req.headers.host || `localhost:${config.port}`;
       const mcpUrl = `${proto}://${host}${config.mcpPath}`;
-
-      const { rawToken } = getOrCreateAgentToken(req.user!.id, provider as SupportedProvider);
       const { snippet, filePath, fileFormat, instructions } = buildSnippet(
         provider as SupportedProvider,
         mcpUrl,
-        rawToken
+        token
       );
 
       if (!filePath) {
@@ -231,14 +223,12 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
           reason: 'This provider uses environment variables, not a config file.',
           snippet,
           instructions,
-          token: rawToken,
+          token,
         });
       }
 
       // Resolve target file path
-      const projectDir = clientProjectRoot
-        ? resolve(clientProjectRoot)
-        : config.projectRoot;
+      const projectDir = config.projectRoot;
 
       const targetPath = resolve(projectDir, filePath);
       const targetDir = dirname(targetPath);
@@ -268,7 +258,7 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
           installed: true,
           filePath: targetPath,
           instructions,
-          token: rawToken,
+          token,
           message: `Config written to ${targetPath}`,
         });
       } catch (err: any) {
@@ -287,10 +277,7 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
     '/api/mcp/setup/status',
     { preHandler: [uiAuth] },
     async (req: AuthenticatedRequest, reply) => {
-      const { projectRoot: clientProjectRoot } = req.query as { projectRoot?: string };
-      const projectDir = clientProjectRoot
-        ? resolve(clientProjectRoot)
-        : config.projectRoot;
+      const projectDir = config.projectRoot;
 
       const status: Record<string, {
         configured: boolean;

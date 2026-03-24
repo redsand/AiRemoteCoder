@@ -1,448 +1,218 @@
-/**
- * Tests for clients route module
- * 
- * Tests cover:
- * - Client registration and authentication
- * - WebSocket connection handling
- * - Client session management
- * - Client disconnect and cleanup
- * - Multi-client scenarios
- */
-
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import request from 'supertest';
-import express from 'express';
-import { clientsRouter } from './clients.js';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import Fastify from 'fastify';
+import fastifyCookie from '@fastify/cookie';
+import { dirname, join } from 'path';
+import { createHash } from 'crypto';
+import { clientsRoutes } from './clients.js';
 import { db } from '../services/database.js';
+import { rawBodyPlugin } from '../middleware/auth.js';
+import { createSignature, generateNonce, hashBody } from '../utils/crypto.js';
 
-describe('Clients Route Module', () => {
-  let app: express.Application;
+const { testDbPath } = vi.hoisted(() => ({
+  testDbPath: process.cwd() + '\\.vitest-data\\clients-routes-' + Math.random().toString(36).slice(2) + '.db',
+}));
 
-  beforeEach(() => {
-    app = express();
-    app.use(express.json());
-    app.use('/api/clients', clientsRouter);
-    
-    // Mock database operations
-    vi.mock('../services/database.js');
+vi.mock('../config.js', () => ({
+  config: {
+    dbPath: testDbPath,
+    projectRoot: process.cwd(),
+    dataDir: dirname(testDbPath),
+    artifactsDir: join(dirname(testDbPath), 'artifacts'),
+    runsDir: join(dirname(testDbPath), 'runs'),
+    certsDir: join(dirname(testDbPath), 'certs'),
+    port: 3100,
+    host: '127.0.0.1',
+    tlsEnabled: false,
+    authSecret: 'test-auth-secret',
+    hmacSecret: 'test-hmac-secret',
+    clockSkewSeconds: 300,
+    nonceExpirySeconds: 600,
+    claimLeaseSeconds: 60,
+    approvalTimeoutSeconds: 300,
+    rateLimit: { max: 100, timeWindow: '1 minute' },
+    allowlistedCommands: ['npm test', 'git status'],
+    cfAccessTeam: '',
+    mcpEnabled: true,
+    mcpPath: '/mcp',
+    mcpTokenExpirySeconds: 86400,
+    mcpRateLimit: { max: 300, timeWindow: '1 minute' },
+    providers: {
+      claude: true,
+      codex: true,
+      gemini: true,
+      opencode: true,
+      rev: true,
+      legacyWrapper: true,
+    },
+  },
+}));
+
+vi.mock('../services/websocket.js', () => ({
+  broadcastAll: vi.fn(),
+}));
+
+function cleanup() {
+  db.prepare('DELETE FROM sessions').run();
+  db.prepare('DELETE FROM users').run();
+  db.prepare('DELETE FROM commands').run();
+  db.prepare('DELETE FROM events').run();
+  db.prepare('DELETE FROM runs').run();
+  db.prepare('DELETE FROM clients').run();
+  db.prepare('DELETE FROM nonces').run();
+}
+
+function buildApp() {
+  const fastify = Fastify({ logger: false });
+  rawBodyPlugin(fastify);
+  fastify.register(fastifyCookie, { secret: 'test-auth-secret' });
+  fastify.register(clientsRoutes);
+  return fastify;
+}
+
+function uiSessionHeaders(session: string) {
+  return { cookie: `session=${session}` };
+}
+
+function wrapperHeaders(method: string, url: string, body: string) {
+  const nonce = generateNonce();
+  const timestamp = Math.floor(Date.now() / 1000);
+  return {
+    'x-signature': createSignature({
+      method,
+      path: url,
+      bodyHash: hashBody(body),
+      timestamp,
+      nonce,
+    }, 'test-hmac-secret'),
+    'x-timestamp': String(timestamp),
+    'x-nonce': nonce,
+  };
+}
+
+describe('routes/clients', () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+
+  beforeAll(async () => {
+    cleanup();
+    app = buildApp();
+    await app.ready();
   });
 
-  afterEach(() => {
-    vi.clearAllMocks();
+  afterEach(async () => {
+    cleanup();
   });
 
-  describe('POST /api/clients/register', () => {
-    it('should register a new client with valid credentials', async () => {
-      const mockClient = {
-        id: 'client-1',
-        name: 'Test Client',
-        secret: 'test-secret',
-        workspace: '/test/workspace',
-        createdAt: new Date().toISOString()
-      };
-
-      vi.mocked(db.insert).mockResolvedValueOnce(mockClient);
-
-      const response = await request(app)
-        .post('/api/clients/register')
-        .send({
-          name: 'Test Client',
-          workspace: '/test/workspace'
-        });
-
-      expect(response.status).toBe(201);
-      expect(response.body).toHaveProperty('id');
-      expect(response.body).toHaveProperty('secret');
-      expect(response.body.name).toBe('Test Client');
-      expect(response.body.workspace).toBe('/test/workspace');
-    });
-
-    it('should reject registration without name', async () => {
-      const response = await request(app)
-        .post('/api/clients/register')
-        .send({
-          workspace: '/test/workspace'
-        });
-
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('error');
-    });
-
-    it('should reject registration without workspace', async () => {
-      const response = await request(app)
-        .post('/api/clients/register')
-        .send({
-          name: 'Test Client'
-        });
-
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('error');
-    });
-
-    it('should reject duplicate client names', async () => {
-      vi.mocked(db.query).mockRejectedValueOnce(
-        new Error('UNIQUE constraint failed: clients.name')
-      );
-
-      const response = await request(app)
-        .post('/api/clients/register')
-        .send({
-          name: 'Existing Client',
-          workspace: '/test/workspace'
-        });
-
-      expect(response.status).toBe(409);
-      expect(response.body).toHaveProperty('error');
-    });
+  afterAll(async () => {
+    await app.close();
+    cleanup();
   });
 
-  describe('GET /api/clients/:id', () => {
-    it('should return client information for valid ID', async () => {
-      const mockClient = {
-        id: 'client-1',
-        name: 'Test Client',
-        workspace: '/test/workspace',
-        connected: true,
-        lastSeen: new Date().toISOString()
-      };
+  it('creates and rotates a client token for operators', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
 
-      vi.mocked(db.query).mockResolvedValueOnce([mockClient]);
-
-      const response = await request(app)
-        .get('/api/clients/client-1');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('id', 'client-1');
-      expect(response.body).toHaveProperty('name', 'Test Client');
-      expect(response.body).toHaveProperty('connected', true);
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/clients/create',
+      headers: uiSessionHeaders('session-1'),
+      payload: { displayName: 'Agent One', agentId: 'agent-1' },
     });
 
-    it('should return 404 for non-existent client', async () => {
-      vi.mocked(db.query).mockResolvedValueOnce([]);
+    expect(createRes.statusCode).toBe(200);
+    const created = createRes.json() as { id: string; token: string };
+    expect(created.token).toBeTruthy();
 
-      const response = await request(app)
-        .get('/api/clients/non-existent');
-
-      expect(response.status).toBe(404);
-      expect(response.body).toHaveProperty('error');
+    const rotateRes = await app.inject({
+      method: 'POST',
+      url: `/api/clients/${created.id}/token`,
+      headers: uiSessionHeaders('session-1'),
     });
+
+    expect(rotateRes.statusCode).toBe(200);
+    expect(rotateRes.json()).toMatchObject({ id: created.id });
   });
 
-  describe('GET /api/clients', () => {
-    it('should return list of all clients', async () => {
-      const mockClients = [
-        {
-          id: 'client-1',
-          name: 'Client One',
-          workspace: '/workspace/1',
-          connected: true,
-          lastSeen: new Date().toISOString()
-        },
-        {
-          id: 'client-2',
-          name: 'Client Two',
-          workspace: '/workspace/2',
-          connected: false,
-          lastSeen: new Date().toISOString()
-        }
-      ];
+  it('registers and heartbeats a wrapper client with the current token', async () => {
+    db.prepare(`INSERT INTO clients (id, display_name, agent_id, token_hash, status) VALUES ('client-1', 'Agent One', 'agent-1', ?, 'offline')`).run(
+      'deadbeef'
+    );
 
-      vi.mocked(db.query).mockResolvedValueOnce(mockClients);
+    const token = 'client-token-1';
+    const hash = createHash('sha256').update(token).digest('hex');
+    db.prepare('UPDATE clients SET token_hash = ? WHERE agent_id = ?').run(hash, 'agent-1');
 
-      const response = await request(app)
-        .get('/api/clients');
-
-      expect(response.status).toBe(200);
-      expect(Array.isArray(response.body)).toBe(true);
-      expect(response.body).toHaveLength(2);
-      expect(response.body[0]).toHaveProperty('id', 'client-1');
-      expect(response.body[1]).toHaveProperty('id', 'client-2');
+    const registerBody = JSON.stringify({
+      displayName: 'Agent One',
+      agentId: 'agent-1',
+      version: '1.0.0',
+      capabilities: ['runs', 'artifacts'],
     });
 
-    it('should filter clients by connected status', async () => {
-      const mockClients = [
-        {
-          id: 'client-1',
-          name: 'Client One',
-          workspace: '/workspace/1',
-          connected: true,
-          lastSeen: new Date().toISOString()
-        }
-      ];
-
-      vi.mocked(db.query).mockResolvedValueOnce(mockClients);
-
-      const response = await request(app)
-        .get('/api/clients?connected=true');
-
-      expect(response.status).toBe(200);
-      expect(Array.isArray(response.body)).toBe(true);
-      expect(response.body.every((c: any) => c.connected === true)).toBe(true);
+    const registerRes = await app.inject({
+      method: 'POST',
+      url: '/api/clients/register',
+      headers: {
+        ...wrapperHeaders('POST', '/api/clients/register', registerBody),
+        'content-type': 'application/json',
+        'x-client-token': token,
+      },
+      payload: registerBody,
     });
+
+    expect(registerRes.statusCode).toBe(200);
+    expect(registerRes.json()).toMatchObject({ updated: true });
+
+    const heartbeatBody = JSON.stringify({ agentId: 'agent-1' });
+    const heartbeatRes = await app.inject({
+      method: 'POST',
+      url: '/api/clients/heartbeat',
+      headers: {
+        ...wrapperHeaders('POST', '/api/clients/heartbeat', heartbeatBody),
+        'content-type': 'application/json',
+        'x-client-token': token,
+      },
+      payload: heartbeatBody,
+    });
+
+    expect(heartbeatRes.statusCode).toBe(200);
+    expect(heartbeatRes.json()).toMatchObject({ ok: true });
   });
 
-  describe('DELETE /api/clients/:id', () => {
-    it('should delete an existing client', async () => {
-      vi.mocked(db.delete).mockResolvedValueOnce(1);
+  it('lists clients and returns client details', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
+    db.prepare(`
+      INSERT INTO clients (id, display_name, agent_id, token_hash, status, capabilities, metadata)
+      VALUES ('client-1', 'Agent One', 'agent-1', 'tokenhash', 'online', '["runs"]', '{"os":"linux"}')
+    `).run();
+    db.prepare(`
+      INSERT INTO runs (id, client_id, status, capability_token, worker_type, label)
+      VALUES ('run-1', 'client-1', 'running', 'cap-1', 'claude', 'Smoke Run')
+    `).run();
+    db.prepare(`
+      INSERT INTO events (run_id, type, data, timestamp, sequence)
+      VALUES ('run-1', 'marker', '{"event":"started"}', unixepoch(), 1)
+    `).run();
 
-      const response = await request(app)
-        .delete('/api/clients/client-1');
-
-      expect(response.status).toBe(204);
+    const listRes = await app.inject({
+      method: 'GET',
+      url: '/api/clients',
+      headers: uiSessionHeaders('session-1'),
     });
 
-    it('should return 404 for non-existent client', async () => {
-      vi.mocked(db.delete).mockResolvedValueOnce(0);
+    expect(listRes.statusCode).toBe(200);
+    expect(listRes.json().total).toBe(1);
 
-      const response = await request(app)
-        .delete('/api/clients/non-existent');
-
-      expect(response.status).toBe(404);
-      expect(response.body).toHaveProperty('error');
-    });
-  });
-
-  describe('WebSocket Connection', () => {
-    it('should accept WebSocket connection with valid credentials', async () => {
-      // This test would require a WebSocket client library
-      // For now, we'll test the HTTP endpoint that initiates WebSocket
-      const response = await request(app)
-        .get('/api/clients/client-1/ws')
-        .set('Upgrade', 'websocket')
-        .set('Connection', 'Upgrade')
-        .set('Sec-WebSocket-Key', 'dGhlIHNhbXBsZSBub25jZQ==')
-        .set('Sec-WebSocket-Version', '13');
-
-      // WebSocket upgrade response would be 101 Switching Protocols
-      expect([101, 426]).toContain(response.status);
+    const detailRes = await app.inject({
+      method: 'GET',
+      url: '/api/clients/client-1',
+      headers: uiSessionHeaders('session-1'),
     });
 
-    it('should reject WebSocket connection without authentication', async () => {
-      const response = await request(app)
-        .get('/api/clients/invalid/ws')
-        .set('Upgrade', 'websocket')
-        .set('Connection', 'Upgrade')
-        .set('Sec-WebSocket-Key', 'dGhlIHNhbXBsZSBub25jZQ==')
-        .set('Sec-WebSocket-Version', '13');
-
-      expect(response.status).toBe(401);
-    });
-  });
-
-  describe('Client Session Management', () => {
-    it('should update client last seen timestamp on activity', async () => {
-      vi.mocked(db.update).mockResolvedValueOnce(1);
-
-      const response = await request(app)
-        .post('/api/clients/client-1/heartbeat');
-
-      expect(response.status).toBe(200);
-      expect(db.update).toHaveBeenCalled();
-    });
-
-    it('should handle multiple concurrent client sessions', async () => {
-      const mockClients = Array.from({ length: 5 }, (_, i) => ({
-        id: `client-${i + 1}`,
-        name: `Client ${i + 1}`,
-        workspace: `/workspace/${i + 1}`,
-        connected: true,
-        lastSeen: new Date().toISOString()
-      }));
-
-      vi.mocked(db.query).mockResolvedValueOnce(mockClients);
-
-      const response = await request(app)
-        .get('/api/clients');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(5);
-    });
-  });
-
-  describe('Client Disconnect and Cleanup', () => {
-    it('should mark client as disconnected on session end', async () => {
-      vi.mocked(db.update).mockResolvedValueOnce(1);
-
-      const response = await request(app)
-        .post('/api/clients/client-1/disconnect');
-
-      expect(response.status).toBe(200);
-      expect(db.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          connected: false
-        })
-      );
-    });
-
-    it('should clean up stale sessions periodically', async () => {
-      const staleDate = new Date(Date.now() - 30 * 60 * 1000); // 30 minutes ago
-      
-      vi.mocked(db.query).mockResolvedValueOnce([
-        { id: 'stale-client', connected: true, lastSeen: staleDate.toISOString() }
-      ]);
-      
-      vi.mocked(db.update).mockResolvedValueOnce(1);
-
-      const response = await request(app)
-        .post('/api/clients/cleanup-sessions');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('cleaned');
-    });
-  });
-
-  describe('Multi-Client Scenarios', () => {
-    it('should handle concurrent client registrations', async () => {
-      const registrations = Array.from({ length: 3 }, (_, i) => ({
-        name: `Client ${i + 1}`,
-        workspace: `/workspace/${i + 1}`
-      }));
-
-      for (const reg of registrations) {
-        vi.mocked(db.insert).mockResolvedValueOnce({
-          id: `client-${reg.name}`,
-          ...reg,
-          secret: 'generated-secret',
-          createdAt: new Date().toISOString()
-        });
-
-        const response = await request(app)
-          .post('/api/clients/register')
-          .send(reg);
-
-        expect(response.status).toBe(201);
-      }
-    });
-
-    it('should route messages to specific clients', async () => {
-      const mockClient = {
-        id: 'client-1',
-        name: 'Target Client',
-        workspace: '/workspace/1',
-        connected: true
-      };
-
-      vi.mocked(db.query).mockResolvedValueOnce([mockClient]);
-
-      const response = await request(app)
-        .post('/api/clients/client-1/message')
-        .send({
-          type: 'command',
-          payload: { command: 'echo test' }
-        });
-
-      expect(response.status).toBe(200);
-    });
-  });
-
-  describe('Edge Cases and Error Handling', () => {
-    it('should handle invalid client ID format', async () => {
-      const response = await request(app)
-        .get('/api/clients/invalid-id-format!@#');
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should handle database connection errors gracefully', async () => {
-      vi.mocked(db.query).mockRejectedValueOnce(
-        new Error('Database connection failed')
-      );
-
-      const response = await request(app)
-        .get('/api/clients');
-
-      expect(response.status).toBe(500);
-      expect(response.body).toHaveProperty('error');
-    });
-
-    it('should validate workspace path format', async () => {
-      const response = await request(app)
-        .post('/api/clients/register')
-        .send({
-          name: 'Test Client',
-          workspace: '../../../etc/passwd' // Path traversal attempt
-        });
-
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('error');
-    });
-
-    it('should sanitize client name input', async () => {
-      const response = await request(app)
-        .post('/api/clients/register')
-        .send({
-          name: '<script>alert("xss")</script>',
-          workspace: '/test/workspace'
-        });
-
-      expect(response.status).toBe(400);
-    });
-  });
-
-  describe('Rate Limiting', () => {
-    it('should enforce rate limit on client registration', async () => {
-      const registrationData = {
-        name: 'Test Client',
-        workspace: '/test/workspace'
-      };
-
-      vi.mocked(db.insert).mockResolvedValue({
-        id: 'client-1',
-        ...registrationData,
-        secret: 'test-secret',
-        createdAt: new Date().toISOString()
-      });
-
-      // First request should succeed
-      const firstResponse = await request(app)
-        .post('/api/clients/register')
-        .send(registrationData);
-
-      expect(firstResponse.status).toBe(201);
-
-      // Subsequent requests may be rate limited
-      // (actual rate limiting would be implemented in middleware)
-    });
-  });
-
-  describe('Client Metadata', () => {
-    it('should store and retrieve client metadata', async () => {
-      const mockClient = {
-        id: 'client-1',
-        name: 'Test Client',
-        workspace: '/test/workspace',
-        metadata: {
-          os: 'linux',
-          arch: 'x64',
-          version: '1.0.0'
-        }
-      };
-
-      vi.mocked(db.query).mockResolvedValueOnce([mockClient]);
-
-      const response = await request(app)
-        .get('/api/clients/client-1');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('metadata');
-      expect(response.body.metadata).toHaveProperty('os');
-      expect(response.body.metadata).toHaveProperty('arch');
-    });
-
-    it('should update client metadata', async () => {
-      const updatedMetadata = {
-        os: 'windows',
-        arch: 'arm64',
-        version: '1.1.0'
-      };
-
-      vi.mocked(db.update).mockResolvedValueOnce(1);
-
-      const response = await request(app)
-        .patch('/api/clients/client-1')
-        .send({ metadata: updatedMetadata });
-
-      expect(response.status).toBe(200);
+    expect(detailRes.statusCode).toBe(200);
+    expect(detailRes.json()).toMatchObject({
+      id: 'client-1',
+      display_name: 'Agent One',
     });
   });
 });

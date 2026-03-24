@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import Fastify, { FastifyInstance } from 'fastify';
 import { rawBodyPlugin } from '../middleware/auth.js';
 import { clientsRoutes } from './clients.js';
@@ -53,11 +53,15 @@ describe('Client Tokens', () => {
     await app.ready();
   });
 
+  beforeEach(async () => {
+    db.prepare('DELETE FROM clients').run();
+  });
+
   afterEach(async () => {
     db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
     db.prepare('DELETE FROM users WHERE id = ?').run(userId);
     db.prepare('DELETE FROM runs WHERE id = ?').run('run-test');
-    db.prepare('DELETE FROM clients WHERE id = ?').run(clientId);
+    db.prepare('DELETE FROM clients').run();
     db.prepare('DELETE FROM nonces').run();
   });
 
@@ -89,6 +93,7 @@ describe('Client Tokens', () => {
   });
 
   it('rejects register/claim without a valid client token', async () => {
+    db.prepare('DELETE FROM clients').run();
     db.prepare('INSERT INTO clients (id, display_name, agent_id, token_hash, status) VALUES (?, ?, ?, ?, ?)').run(
       clientId,
       'Test Runner',

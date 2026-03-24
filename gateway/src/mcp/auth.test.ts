@@ -1,15 +1,24 @@
+import { createHash } from 'crypto';
 import { describe, it, expect, vi } from 'vitest';
-import { validateMcpToken, extractBearerToken, assertScopes } from './auth.js';
+import { validateMcpToken, extractBearerToken, assertScopes, validateMcpSessionAccess } from './auth.js';
 import type { McpAuthContext } from './auth.js';
 import type { McpScope } from '../domain/types.js';
+
+const validRawToken = 'valid-raw-token';
+const validTokenHash = createHash('sha256').update(validRawToken).digest('hex');
+const otherRawToken = 'other-raw-token';
+const otherTokenHash = createHash('sha256').update(otherRawToken).digest('hex');
 
 vi.mock('../services/database.js', () => ({
   db: {
     prepare: (sql: string) => ({
       get: (arg: string) => {
         // Simulate a valid token lookup
-        if (sql.includes('FROM mcp_tokens') && arg === 'validhash') {
+        if (sql.includes('FROM mcp_tokens') && arg === validTokenHash) {
           return { id: 'tok-1', label: 'test', user_id: 'user-1', scopes: '["runs:read","runs:write"]' };
+        }
+        if (sql.includes('FROM mcp_tokens') && arg === otherTokenHash) {
+          return { id: 'tok-2', label: 'other', user_id: 'user-1', scopes: '["runs:read"]' };
         }
         // Simulate user lookup
         if (sql.includes('FROM users') && arg === 'user-1') {
@@ -21,8 +30,11 @@ vi.mock('../services/database.js', () => ({
     }),
   },
   findMcpToken: (hash: string) => {
-    if (hash === 'a'.repeat(64)) { // sha256 of 'valid-raw-token'
+    if (hash === validTokenHash) {
       return { id: 'tok-1', label: 'test', userId: 'user-1', scopes: ['runs:read', 'runs:write'] };
+    }
+    if (hash === otherTokenHash) {
+      return { id: 'tok-2', label: 'other', userId: 'user-1', scopes: ['runs:read'] };
     }
     return undefined;
   },
@@ -77,5 +89,37 @@ describe('assertScopes', () => {
 
   it('returns null for empty required list', () => {
     expect(assertScopes(ctx, [])).toBeNull();
+  });
+});
+
+describe('validateMcpSessionAccess', () => {
+  const sessionAuth: McpAuthContext = {
+    tokenId: 'tok-1',
+    user: { id: 'u1', username: 'alice', role: 'operator', source: 'mcp_token' },
+    scopes: ['runs:read', 'runs:write'],
+  };
+
+  it('rejects missing bearer token', () => {
+    const result = validateMcpSessionAccess(sessionAuth, undefined);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.statusCode).toBe(401);
+    }
+  });
+
+  it('rejects a mismatched token', () => {
+    const result = validateMcpSessionAccess(sessionAuth, `Bearer ${otherRawToken}`);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.statusCode).toBe(403);
+    }
+  });
+
+  it('accepts the same token that opened the session', () => {
+    const result = validateMcpSessionAccess(sessionAuth, `Bearer ${validRawToken}`);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.authContext.tokenId).toBe('tok-1');
+    }
   });
 });

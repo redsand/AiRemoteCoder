@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { StatusPill, RunCard, type Run } from '../components/ui';
+import McpSpotlight from '../components/mcp/McpSpotlight';
+import type { McpConfig, McpSetupStatus, McpToken } from '../features/mcp/types';
 
 interface NeedsAttention {
   waitingApproval: Run[];
@@ -70,6 +72,10 @@ function formatRelativeTime(timestamp: number): string {
 
 export function Dashboard({ user: _user }: Props) {
   const navigate = useNavigate();
+  const [mcpConfig, setMcpConfig] = useState<McpConfig | null>(null);
+  const [setupStatus, setSetupStatus] = useState<Record<string, McpSetupStatus>>({});
+  const [activeTokens, setActiveTokens] = useState<McpToken[]>([]);
+  const [copiedUrl, setCopiedUrl] = useState(false);
   const [needsAttention, setNeedsAttention] = useState<NeedsAttention | null>(null);
   const [activeRuns, setActiveRuns] = useState<Run[]>([]);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
@@ -90,6 +96,11 @@ export function Dashboard({ user: _user }: Props) {
         fetch('/api/dashboard/activity?limit=20'),
         fetch('/api/dashboard/stats'),
       ]);
+      const [mcpConfigRes, mcpStatusRes] = await Promise.all([
+        fetch('/api/mcp/config'),
+        fetch('/api/mcp/setup/status'),
+      ]);
+      const mcpTokensRes = await fetch('/api/mcp/tokens');
 
       if (attentionRes.ok) {
         setNeedsAttention(await attentionRes.json());
@@ -103,10 +114,30 @@ export function Dashboard({ user: _user }: Props) {
       if (statsRes.ok) {
         setStats(await statsRes.json());
       }
+      if (mcpConfigRes.ok) {
+        setMcpConfig(await mcpConfigRes.json());
+      }
+      if (mcpStatusRes.ok) {
+        setSetupStatus((await mcpStatusRes.json()).status ?? {});
+      }
+      if (mcpTokensRes.ok) {
+        setActiveTokens((await mcpTokensRes.json()).tokens ?? []);
+      }
     } catch (err) {
       console.error('Failed to fetch dashboard data:', err);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function copyMcpUrl() {
+    if (!mcpConfig?.url) return;
+    try {
+      await navigator.clipboard.writeText(mcpConfig.url);
+      setCopiedUrl(true);
+      setTimeout(() => setCopiedUrl(false), 2000);
+    } catch {
+      // Ignore clipboard failures here.
     }
   }
 
@@ -126,6 +157,16 @@ export function Dashboard({ user: _user }: Props) {
 
   return (
     <div className="dashboard">
+      <McpSpotlight
+        mcpConfig={mcpConfig}
+        connectedCount={Object.values(setupStatus).filter((status) => status.hasAiRemoteCoder).length}
+        activeTokens={activeTokens.filter((token) => !token.revoked_at).length}
+        copiedUrl={copiedUrl}
+        onCopyUrl={copyMcpUrl}
+        onOpenMcp={() => navigate('/mcp')}
+        onOpenTokens={() => navigate('/mcp')}
+      />
+
       {/* Stats row */}
       {stats && (
         <div className="stats-grid">

@@ -19,7 +19,7 @@ import { db } from '../services/database.js';
 import { broadcastToRun } from '../services/websocket.js';
 import { config } from '../config.js';
 import { assertScopes, type McpAuthContext } from './auth.js';
-import type { RunId, ApprovalRequestId } from '../domain/types.js';
+import { createApprovalRequest, resolveApprovalRequest } from '../services/approval-workflow.js';
 import { nanoid } from 'nanoid';
 
 // ---------------------------------------------------------------------------
@@ -534,7 +534,7 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
   // -------------------------------------------------------------------------
   server.tool(
     'create_approval_request',
-    'Create an approval gate for a dangerous or irreversible action. Blocks the agent until a human decides. Scope: approvals:read.',
+    'Create an approval gate for a dangerous or irreversible action. Blocks the agent until a human decides. Scope: approvals:write.',
     {
       run_id: z.string().describe('Run this approval is for'),
       description: z.string().describe('Human-readable description of the action requiring approval'),
@@ -545,34 +545,37 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
     async ({ run_id, description, action, timeout_seconds, provider_correlation_id }) => {
       const ctx = getAuthContext();
       if (!ctx) return scopeError('Authentication required');
-      const err = assertScopes(ctx, ['approvals:read']);
+      const err = assertScopes(ctx, ['approvals:write']);
       if (err) return scopeError(err);
 
-      const run = db.prepare("SELECT id FROM runs WHERE id = ?").get(run_id);
-      if (!run) return notFound('run', run_id);
+      try {
+        const created = createApprovalRequest(db, {
+          runId: run_id,
+          description,
+          action,
+          timeoutSeconds: timeout_seconds,
+          providerCorrelationId: provider_correlation_id ?? null,
+        });
 
-      const reqId = nanoid();
-      db.prepare(`
-        INSERT INTO approval_requests
-          (id, run_id, description, action, status, requested_at, timeout_seconds, provider_correlation_id)
-        VALUES (?, ?, ?, ?, 'pending', unixepoch(), ?, ?)
-      `).run(reqId, run_id, description, JSON.stringify(action), timeout_seconds, provider_correlation_id ?? null);
+        broadcastToRun(run_id, {
+          type: 'approval_requested',
+          runId: run_id,
+          approvalRequestId: created.approvalRequestId,
+          description,
+        });
 
-      // Mark run as waiting for approval
-      db.prepare("UPDATE runs SET waiting_approval = 1, status = 'waiting_approval' WHERE id = ?").run(run_id);
-
-      broadcastToRun(run_id, {
-        type: 'approval_requested',
-        runId: run_id,
-        approvalRequestId: reqId,
-        description,
-      });
-
-      return ok({
-        approval_request_id: reqId,
-        status: 'pending',
-        message: 'Approval request created. Waiting for human decision.',
-      });
+        return ok({
+          approval_request_id: created.approvalRequestId,
+          status: 'pending',
+          message: 'Approval request created. Waiting for human decision.',
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.startsWith('Run not found:')) {
+          return notFound('run', run_id);
+        }
+        return scopeError(`Failed to create approval request: ${message}`);
+      }
     }
   );
 
@@ -591,8 +594,40 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
       if (!ctx) return scopeError('Authentication required');
       const err = assertScopes(ctx, ['approvals:decide']);
       if (err) return scopeError(err);
+      try {
+        const result = resolveApprovalRequest(db, {
+          approvalRequestId: approval_request_id,
+          decision: 'approved',
+          resolvedBy: ctx.user.id,
+          resolution: resolution ?? null,
+        });
 
-      return resolveApproval(approval_request_id, 'approved', ctx.user.id, resolution ?? null);
+        if (result.wasPending) {
+          broadcastToRun(result.runId, {
+            type: 'approval_resolved',
+            runId: result.runId,
+            approvalRequestId: result.requestId,
+            decision: result.decision,
+            resolvedBy: result.resolvedBy,
+          });
+        }
+
+        return ok({
+          request_id: result.requestId,
+          decision: result.currentStatus,
+          resolved_by: result.resolvedBy,
+          resolution: result.resolution,
+          message: result.wasPending
+            ? `Action ${result.decision}. Agent will be notified.`
+            : `Approval is already in state: ${result.currentStatus}`,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.startsWith('Approval request not found:')) {
+          return notFound('approval_request', approval_request_id);
+        }
+        return scopeError(`Failed to approve action: ${message}`);
+      }
     }
   );
 
@@ -611,8 +646,40 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
       if (!ctx) return scopeError('Authentication required');
       const err = assertScopes(ctx, ['approvals:decide']);
       if (err) return scopeError(err);
+      try {
+        const result = resolveApprovalRequest(db, {
+          approvalRequestId: approval_request_id,
+          decision: 'denied',
+          resolvedBy: ctx.user.id,
+          resolution: resolution ?? null,
+        });
 
-      return resolveApproval(approval_request_id, 'denied', ctx.user.id, resolution ?? null);
+        if (result.wasPending) {
+          broadcastToRun(result.runId, {
+            type: 'approval_resolved',
+            runId: result.runId,
+            approvalRequestId: result.requestId,
+            decision: result.decision,
+            resolvedBy: result.resolvedBy,
+          });
+        }
+
+        return ok({
+          request_id: result.requestId,
+          decision: result.currentStatus,
+          resolved_by: result.resolvedBy,
+          resolution: result.resolution,
+          message: result.wasPending
+            ? `Action ${result.decision}. Agent will be notified.`
+            : `Approval is already in state: ${result.currentStatus}`,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.startsWith('Approval request not found:')) {
+          return notFound('approval_request', approval_request_id);
+        }
+        return scopeError(`Failed to deny action: ${message}`);
+      }
     }
   );
 
@@ -749,62 +816,6 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-function resolveApproval(
-  requestId: string,
-  decision: 'approved' | 'denied',
-  resolvedBy: string,
-  resolution: string | null
-) {
-  const req = db.prepare('SELECT * FROM approval_requests WHERE id = ?').get(requestId) as any;
-  if (!req) return notFound('approval_request', requestId);
-  if (req.status !== 'pending') {
-    return ok({ message: `Approval is already in state: ${req.status}`, request_id: requestId });
-  }
-
-  db.prepare(`
-    UPDATE approval_requests
-    SET status = ?, resolved_at = unixepoch(), resolved_by = ?, resolution = ?
-    WHERE id = ?
-  `).run(decision, resolvedBy, resolution, requestId);
-
-  // If no more pending approvals for this run, clear the waiting flag and resume
-  const pendingCount = (db.prepare(
-    "SELECT COUNT(*) as c FROM approval_requests WHERE run_id = ? AND status = 'pending'"
-  ).get(req.run_id) as any).c;
-
-  if (pendingCount === 0) {
-    db.prepare("UPDATE runs SET waiting_approval = 0, status = 'running' WHERE id = ? AND status = 'waiting_approval'")
-      .run(req.run_id);
-  }
-
-  broadcastToRun(req.run_id, {
-    type: 'approval_resolved',
-    runId: req.run_id,
-    approvalRequestId: requestId,
-    decision,
-    resolvedBy,
-  });
-
-  // Post a resume command so the adapter can unblock
-  const cmdId = nanoid();
-  db.prepare(`
-    INSERT INTO commands (id, run_id, command, arguments, status, created_at)
-    VALUES (?, ?, '__APPROVAL_RESOLVED__', ?, 'pending', unixepoch())
-  `).run(cmdId, req.run_id, JSON.stringify({
-    requestId,
-    decision,
-    providerCorrelationId: req.provider_correlation_id,
-  }));
-
-  return ok({
-    request_id: requestId,
-    decision,
-    resolved_by: resolvedBy,
-    resolution,
-    message: `Action ${decision}. Agent will be notified.`,
-  });
-}
 
 function buildCapabilityMatrix() {
   const matrix: Record<string, object> = {};

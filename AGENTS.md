@@ -33,6 +33,10 @@ This project follows strict TDD. For every new feature or bug fix:
 4. **Refactor** — clean up without breaking tests
 5. **Repeat** for each new behaviour
 
+For MCP work, this is mandatory at the feature boundary as well: new tools,
+session semantics, setup flows, approval behavior, and adapter changes must
+start with tests that describe the desired behavior before code changes land.
+
 ### Non-negotiable testing rules
 
 - No new code ships without tests
@@ -81,12 +85,13 @@ The MCP control plane is the primary agent-facing interface. Every change to
 | Component | Test file | Must cover |
 |-----------|-----------|-----------|
 | `mcp/auth.ts` | `mcp/auth.test.ts` | Token extraction, scope assertion, admin bypass, invalid token |
-| `mcp/server.ts` | `mcp/server.test.ts` | Every tool: auth failure, scope failure, success, edge cases |
-| `mcp/plugin.ts` | `mcp/plugin.test.ts` | HTTP routes: POST/GET/DELETE /mcp, token CRUD, /api/mcp/config |
+| `mcp/server.ts` | `mcp/server.test.ts` | Every tool: auth failure, scope failure, success, not-found, idempotency, and approval state transitions |
+| `mcp/plugin.ts` | `mcp/plugin.test.ts` | HTTP routes: POST/GET/DELETE /mcp, session auth/replay checks, token CRUD, /api/mcp/config |
 | `adapters/types.ts` | `adapters/adapter-contract.test.ts` | Interface compliance |
 | `adapters/legacy-wrapper.ts` | `adapters/legacy-wrapper.test.ts` | All adapter methods |
 | `adapters/registry.ts` | `adapters/registry.test.ts` | Register, get, list, has |
 | `services/database.ts` (new helpers) | `services/database.test.ts` | findMcpToken, expireTimedOutApprovals |
+| `services/approval-workflow.ts` | `services/approval-workflow.test.ts` | Transactional approval create/resolve, rollback on failure |
 | `domain/types.ts` | No runtime tests needed (TypeScript) | Compile-time only |
 
 ### Tool handler test template
@@ -115,6 +120,20 @@ create_approval_request → status: pending
 → run.waiting_approval = false
 → __APPROVAL_RESOLVED__ command queued
 ```
+
+Any change to approval creation or resolution must also cover the rollback path
+so the state transition and command enqueue cannot partially apply.
+
+### MCP setup tests
+
+The provider setup flow must have direct tests for:
+
+- deterministic token handoff from setup to install
+- install rejection when no token is provided
+- file write behavior for file-backed providers
+- env-var-only providers such as Codex and Rev
+- unsupported provider rejection
+- configured-provider detection from the project root
 
 ---
 

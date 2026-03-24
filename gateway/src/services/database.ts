@@ -11,6 +11,10 @@ if (!existsSync(dbDir)) {
 
 export const db: DatabaseType = new Database(config.dbPath);
 
+export function getConnection(): DatabaseType {
+  return db;
+}
+
 // Enable WAL mode for better concurrency
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');

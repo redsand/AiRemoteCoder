@@ -72,7 +72,15 @@ vi.mock('../services/database.js', () => {
       }
     }),
   });
-  return { db: { prepare, pragma: vi.fn(), exec: vi.fn(), close: vi.fn() } };
+  return {
+    db: {
+      prepare,
+      pragma: vi.fn(),
+      exec: vi.fn(),
+      close: vi.fn(),
+      transaction: (fn: any) => (...args: any[]) => fn(...args),
+    },
+  };
 });
 
 vi.mock('../services/websocket.js', () => ({ broadcastToRun: vi.fn() }));
@@ -181,7 +189,7 @@ describe('Approval lifecycle', () => {
     expect(JSON.parse(statusResult.content[0].text).status).toBe('denied');
   });
 
-  it('create_approval_request requires approvals:read scope', async () => {
+  it('create_approval_request requires approvals:write scope', async () => {
     const ctx: McpAuthContext = { ...adminCtx(), scopes: ['runs:read'] };
     const result = await callTool('create_approval_request', {
       run_id: 'run-1',

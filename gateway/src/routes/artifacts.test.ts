@@ -1,660 +1,194 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import Fastify from 'fastify';
+import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
+import { dirname, join } from 'path';
+import { existsSync, mkdirSync, rmSync } from 'fs';
 import { Readable } from 'stream';
-import { join, basename } from 'path';
-import { artifactsRoutes } from './artifacts.js';
 import { db } from '../services/database.js';
-import { config } from '../config.js';
-import { broadcastToRun } from '../services/websocket.js';
+import { rawBodyPlugin } from '../middleware/auth.js';
+import { createSignature, generateCapabilityToken, generateNonce, hashBody } from '../utils/crypto.js';
 
-// Mock dependencies
-vi.mock('fs', async () => {
-  const actual = await vi.importActual<typeof import('fs')>('fs');
+const { artifactRoot, testDbPath } = vi.hoisted(() => {
+  const suffix = Math.random().toString(36).slice(2);
+  const root = process.cwd() + '\\.vitest-data\\artifacts-routes-' + suffix;
   return {
-    ...actual,
-    existsSync: vi.fn(),
-    createReadStream: vi.fn(),
-    createWriteStream: vi.fn(),
-    mkdirSync: vi.fn(),
-    unlinkSync: vi.fn(),
-    statSync: vi.fn(),
+    artifactRoot: root,
+    testDbPath: root + '\\gateway.db',
   };
 });
 
-vi.mock('../services/database.js');
-vi.mock('../config.js');
-vi.mock('../services/websocket.js');
+vi.mock('../config.js', () => ({
+  config: {
+    dbPath: testDbPath,
+    projectRoot: process.cwd(),
+    dataDir: dirname(testDbPath),
+    artifactsDir: join(artifactRoot, 'artifacts'),
+    runsDir: join(artifactRoot, 'runs'),
+    certsDir: join(artifactRoot, 'certs'),
+    port: 3100,
+    host: '127.0.0.1',
+    tlsEnabled: false,
+    authSecret: 'test-auth-secret',
+    hmacSecret: 'test-hmac-secret',
+    clockSkewSeconds: 300,
+    nonceExpirySeconds: 600,
+    claimLeaseSeconds: 60,
+    approvalTimeoutSeconds: 300,
+    rateLimit: { max: 100, timeWindow: '1 minute' },
+    allowlistedCommands: ['npm test', 'git status'],
+    cfAccessTeam: '',
+    mcpEnabled: true,
+    mcpPath: '/mcp',
+    mcpTokenExpirySeconds: 86400,
+    mcpRateLimit: { max: 300, timeWindow: '1 minute' },
+    providers: {
+      claude: true,
+      codex: true,
+      gemini: true,
+      opencode: true,
+      rev: true,
+      legacyWrapper: true,
+    },
+    maxArtifactSize: 1024 * 1024,
+  },
+}));
 
-import { existsSync, createReadStream, createWriteStream, mkdirSync, unlinkSync, statSync } from 'fs';
+vi.mock('../services/websocket.js', () => ({
+  broadcastToRun: vi.fn(),
+}));
 
-describe('artifactsRoutes', () => {
-  let fastify: ReturnType<typeof Fastify>;
-  let testRunId: string;
-  let testArtifactPath: string;
+function cleanup() {
+  db.prepare('DELETE FROM sessions').run();
+  db.prepare('DELETE FROM users').run();
+  db.prepare('DELETE FROM artifacts').run();
+  db.prepare('DELETE FROM runs').run();
+  db.prepare('DELETE FROM clients').run();
+  db.prepare('DELETE FROM nonces').run();
+  rmSync(join(artifactRoot, 'artifacts'), { recursive: true, force: true });
+}
 
-  beforeEach(async () => {
-    fastify = Fastify();
-    await fastify.register(artifactsRoutes);
-    testRunId = 'test-run-123';
-    testArtifactPath = join('/tmp', 'artifacts', testRunId);
+async function buildApp() {
+  const { artifactRoutes } = await import('./artifacts.js');
+  if (typeof artifactRoutes !== 'function') {
+    throw new Error(`artifactRoutes unresolved: ${String(artifactRoutes)}`);
+  }
+  const fastify = Fastify({ logger: false });
+  rawBodyPlugin(fastify);
+  fastify.register(fastifyCookie, { secret: 'test-auth-secret' });
+  fastify.register(fastifyMultipart, { limits: { fileSize: 1024 * 1024 } });
+  fastify.addHook('preHandler', async (request) => {
+    if (request.url === '/api/ingest/artifact') {
+      (request as any).file = async () => ({
+        filename: 'result.log',
+        mimetype: 'text/plain',
+        file: Readable.from(['hello artifact']),
+      });
+    }
+  });
+  fastify.register(artifactRoutes);
+  return fastify;
+}
 
-    vi.clearAllMocks();
-    
-    // Default mock implementations
-    vi.mocked(config).artifactsDir = '/tmp/artifacts';
-    vi.mocked(existsSync).mockReturnValue(true);
-    vi.mocked(mkdirSync).mockReturnValue(undefined);
-    vi.mocked(unlinkSync).mockReturnValue(undefined);
+function wrapperHeaders(method: string, url: string, _body: string, runId: string, capabilityToken: string) {
+  const nonce = generateNonce();
+  const timestamp = Math.floor(Date.now() / 1000);
+  return {
+    'x-signature': createSignature({
+      method,
+      path: url,
+      bodyHash: hashBody(''),
+      timestamp,
+      nonce,
+      runId,
+      capabilityToken,
+    }, 'test-hmac-secret'),
+    'x-timestamp': String(timestamp),
+    'x-nonce': nonce,
+    'x-run-id': runId,
+    'x-capability-token': capabilityToken,
+    'content-type': 'multipart/form-data; boundary=----airemotecoder',
+  };
+}
+
+describe('routes/artifacts', () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+
+  beforeAll(async () => {
+    cleanup();
+    mkdirSync(join(artifactRoot, 'artifacts'), { recursive: true });
+    app = await buildApp();
+    await app.ready();
   });
 
   afterEach(async () => {
-    await fastify.close();
+    cleanup();
   });
 
-  describe('GET /artifacts/:runId', () => {
-    it('should list all artifacts for a run', async () => {
-      const mockStat = {
-        isFile: () => true,
-        isDirectory: () => false,
-        size: 1024,
-        mtime: new Date('2024-01-01'),
-      };
-      vi.mocked(statSync).mockReturnValue(mockStat as any);
-      vi.mocked(existsSync).mockReturnValue(true);
-
-      // Mock database to return run info
-      vi.mocked(db.getRun).mockResolvedValue({
-        id: testRunId,
-        status: 'completed',
-        created_at: new Date(),
-        updated_at: new Date(),
-      } as any);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: `/artifacts/${testRunId}`,
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(response.json()).toBeInstanceOf(Array);
-    });
-
-    it('should return 404 if run does not exist', async () => {
-      vi.mocked(db.getRun).mockResolvedValue(null);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: `/artifacts/nonexistent-run`,
-      });
-
-      expect(response.statusCode).toBe(404);
-      expect(response.json()).toHaveProperty('error', 'Run not found');
-    });
-
-    it('should return empty array if no artifacts directory exists', async () => {
-      vi.mocked(db.getRun).mockResolvedValue({
-        id: testRunId,
-        status: 'completed',
-        created_at: new Date(),
-        updated_at: new Date(),
-      } as any);
-      vi.mocked(existsSync).mockReturnValue(false);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: `/artifacts/${testRunId}`,
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual([]);
-    });
+  afterAll(async () => {
+    await app.close();
+    cleanup();
   });
 
-  describe('GET /artifacts/:runId/:filename', () => {
-    it('should download an artifact file', async () => {
-      const mockStream = new Readable();
-      mockStream._read = () => {};
-      mockStream.push('test content');
-      mockStream.push(null);
+  it('uploads an artifact and lists/downloads/deletes it', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
+    db.prepare(`
+      INSERT INTO runs (id, status, capability_token, worker_type)
+      VALUES ('run-1', 'running', ?, 'claude')
+    `).run(generateCapabilityToken());
 
-      vi.mocked(createReadStream).mockReturnValue(mockStream as any);
-      vi.mocked(existsSync).mockReturnValue(true);
+    const capabilityToken = db.prepare('SELECT capability_token FROM runs WHERE id = ?').get('run-1') as { capability_token: string };
+    const multipartBody = [
+      '------airemotecoder',
+      'Content-Disposition: form-data; name="file"; filename="result.log"',
+      'Content-Type: text/plain',
+      '',
+      'hello artifact',
+      '------airemotecoder--',
+      '',
+    ].join('\r\n');
 
-      const response = await fastify.inject({
-        method: 'GET',
-        url: `/artifacts/${testRunId}/test-file.txt`,
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(response.headers['content-type']).toContain('text/plain');
-      expect(response.headers['content-disposition']).toContain('test-file.txt');
+    const uploadRes = await app.inject({
+      method: 'POST',
+      url: '/api/ingest/artifact',
+      headers: {
+        ...wrapperHeaders('POST', '/api/ingest/artifact', multipartBody, 'run-1', capabilityToken.capability_token),
+        'content-length': String(Buffer.byteLength(multipartBody)),
+      },
+      payload: multipartBody,
     });
 
-    it('should return 404 if artifact file does not exist', async () => {
-      vi.mocked(existsSync).mockReturnValue(false);
+    expect(uploadRes.statusCode).toBe(200);
+    const uploaded = uploadRes.json() as { artifactId: string; name: string };
+    expect(uploaded.name).toBe('result.log');
 
-      const response = await fastify.inject({
-        method: 'GET',
-        url: `/artifacts/${testRunId}/nonexistent.txt`,
-      });
-
-      expect(response.statusCode).toBe(404);
-      expect(response.json()).toHaveProperty('error', 'Artifact not found');
+    const listRes = await app.inject({
+      method: 'GET',
+      url: '/api/runs/run-1/artifacts',
+      headers: { cookie: 'session=session-1' },
     });
 
-    it('should set appropriate content-type based on file extension', async () => {
-      const mockStream = new Readable();
-      mockStream._read = () => {};
-      mockStream.push('test');
-      mockStream.push(null);
+    expect(listRes.statusCode).toBe(200);
+    expect((listRes.json() as Array<{ id: string }>)).toEqual(expect.arrayContaining([expect.objectContaining({ id: uploaded.artifactId })]));
 
-      vi.mocked(createReadStream).mockReturnValue(mockStream as any);
-      vi.mocked(existsSync).mockReturnValue(true);
-
-      const jsonResponse = await fastify.inject({
-        method: 'GET',
-        url: `/artifacts/${testRunId}/data.json`,
-      });
-
-      expect(jsonResponse.headers['content-type']).toContain('application/json');
-
-      const htmlResponse = await fastify.inject({
-        method: 'GET',
-        url: `/artifacts/${testRunId}/page.html`,
-      });
-
-      expect(htmlResponse.headers['content-type']).toContain('text/html');
+    const downloadRes = await app.inject({
+      method: 'GET',
+      url: `/api/artifacts/${uploaded.artifactId}`,
+      headers: { cookie: 'session=session-1' },
     });
 
-    it('should handle file stream errors', async () => {
-      const mockStream = new Readable();
-      mockStream._read = () => {};
-      mockStream.emit('error', new Error('Stream error'));
+    expect(downloadRes.statusCode).toBe(200);
+    expect(downloadRes.headers['content-type']).toContain('text/plain');
+    expect(downloadRes.payload).toContain('hello artifact');
 
-      vi.mocked(createReadStream).mockReturnValue(mockStream as any);
-      vi.mocked(existsSync).mockReturnValue(true);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: `/artifacts/${testRunId}/error-file.txt`,
-      });
-
-      expect(response.statusCode).toBeGreaterThanOrEqual(400);
-    });
-  });
-
-  describe('POST /artifacts/:runId', () => {
-    it('should upload an artifact file successfully', async () => {
-      const mockWriteStream = {
-        write: vi.fn((chunk, encoding, callback) => callback?.()),
-        end: vi.fn((callback) => callback?.()),
-        on: vi.fn(function(this: any, event: string, handler: any) {
-          if (event === 'finish') {
-            setTimeout(() => handler(), 10);
-          }
-          return this;
-        }),
-      } as any;
-
-      vi.mocked(createWriteStream).mockReturnValue(mockWriteStream);
-      vi.mocked(mkdirSync).mockReturnValue(undefined);
-      vi.mocked(broadcastToRun).mockResolvedValue(undefined);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: `/artifacts/${testRunId}`,
-        headers: {
-          'content-type': 'multipart/form-data',
-        },
-        payload: {
-          file: {
-            filename: 'upload.txt',
-            mimetype: 'text/plain',
-            data: Buffer.from('test upload content'),
-          },
-        },
-      });
-
-      expect(response.statusCode).toBe(201);
-      expect(response.json()).toHaveProperty('filename', 'upload.txt');
-      expect(broadcastToRun).toHaveBeenCalledWith(testRunId, {
-        type: 'artifact_uploaded',
-        data: expect.objectContaining({
-          filename: 'upload.txt',
-        }),
-      });
+    const deleteRes = await app.inject({
+      method: 'DELETE',
+      url: `/api/artifacts/${uploaded.artifactId}`,
+      headers: { cookie: 'session=session-1' },
     });
 
-    it('should create artifacts directory if it does not exist', async () => {
-      const mockWriteStream = {
-        write: vi.fn((chunk, encoding, callback) => callback?.()),
-        end: vi.fn((callback) => callback?.()),
-        on: vi.fn(function(this: any, event: string, handler: any) {
-          if (event === 'finish') setTimeout(() => handler(), 10);
-          return this;
-        }),
-      } as any;
-
-      vi.mocked(createWriteStream).mockReturnValue(mockWriteStream);
-      vi.mocked(existsSync).mockReturnValue(false);
-      vi.mocked(mkdirSync).mockReturnValue(undefined);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: `/artifacts/${testRunId}`,
-        headers: {
-          'content-type': 'multipart/form-data',
-        },
-        payload: {
-          file: {
-            filename: 'new-file.txt',
-            data: Buffer.from('content'),
-          },
-        },
-      });
-
-      expect(response.statusCode).toBe(201);
-      expect(mkdirSync).toHaveBeenCalledWith(
-        testArtifactPath,
-        { recursive: true }
-      );
-    });
-
-    it('should return 400 when no file is provided', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: `/artifacts/${testRunId}`,
-        headers: {
-          'content-type': 'multipart/form-data',
-        },
-        payload: {},
-      });
-
-      expect(response.statusCode).toBe(400);
-      expect(response.json()).toHaveProperty('error', 'No file uploaded');
-    });
-
-    it('should handle upload errors gracefully', async () => {
-      const mockWriteStream = {
-        write: vi.fn((chunk, encoding, callback) => {
-          callback?.(new Error('Write error'));
-        }),
-        end: vi.fn(),
-        on: vi.fn(function() { return this; }),
-      } as any;
-
-      vi.mocked(createWriteStream).mockReturnValue(mockWriteStream);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: `/artifacts/${testRunId}`,
-        headers: {
-          'content-type': 'multipart/form-data',
-        },
-        payload: {
-          file: {
-            filename: 'error.txt',
-            data: Buffer.from('content'),
-          },
-        },
-      });
-
-      expect(response.statusCode).toBeGreaterThanOrEqual(400);
-    });
-
-    it('should sanitize filenames to prevent directory traversal', async () => {
-      const mockWriteStream = {
-        write: vi.fn((chunk, encoding, callback) => callback?.()),
-        end: vi.fn((callback) => callback?.()),
-        on: vi.fn(function(this: any, event: string, handler: any) {
-          if (event === 'finish') setTimeout(() => handler(), 10);
-          return this;
-        }),
-      } as any;
-
-      vi.mocked(createWriteStream).mockReturnValue(mockWriteStream);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: `/artifacts/${testRunId}`,
-        headers: {
-          'content-type': 'multipart/form-data',
-        },
-        payload: {
-          file: {
-            filename: '../../../malicious.txt',
-            data: Buffer.from('content'),
-          },
-        },
-      });
-
-      expect(response.statusCode).toBe(201);
-      // Should sanitize the filename
-      expect(createWriteStream).toHaveBeenCalledWith(
-        expect.not.stringContaining('../'),
-        expect.anything()
-      );
-    });
-  });
-
-  describe('DELETE /artifacts/:runId/:filename', () => {
-    it('should delete an artifact file successfully', async () => {
-      vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(unlinkSync).mockReturnValue(undefined);
-      vi.mocked(broadcastToRun).mockResolvedValue(undefined);
-
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: `/artifacts/${testRunId}/delete-me.txt`,
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(response.json()).toHaveProperty(
-        'message',
-        'Artifact deleted successfully'
-      );
-      expect(unlinkSync).toHaveBeenCalled();
-      expect(broadcastToRun).toHaveBeenCalledWith(testRunId, {
-        type: 'artifact_deleted',
-        data: expect.objectContaining({
-          filename: 'delete-me.txt',
-        }),
-      });
-    });
-
-    it('should return 404 if artifact file does not exist', async () => {
-      vi.mocked(existsSync).mockReturnValue(false);
-
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: `/artifacts/${testRunId}/nonexistent.txt`,
-      });
-
-      expect(response.statusCode).toBe(404);
-      expect(response.json()).toHaveProperty('error', 'Artifact not found');
-      expect(unlinkSync).not.toHaveBeenCalled();
-    });
-
-    it('should handle deletion errors', async () => {
-      vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(unlinkSync).mockImplementation(() => {
-        throw new Error('Permission denied');
-      });
-
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: `/artifacts/${testRunId}/protected.txt`,
-      });
-
-      expect(response.statusCode).toBeGreaterThanOrEqual(400);
-      expect(response.json()).toHaveProperty('error');
-    });
-  });
-
-  describe('DELETE /artifacts/:runId', () => {
-    it('should delete all artifacts for a run', async () => {
-      vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(unlinkSync).mockReturnValue(undefined);
-      vi.mocked(broadcastToRun).mockResolvedValue(undefined);
-
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: `/artifacts/${testRunId}`,
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(response.json()).toHaveProperty(
-        'message',
-        'All artifacts deleted successfully'
-      );
-      expect(broadcastToRun).toHaveBeenCalledWith(testRunId, {
-        type: 'artifacts_cleared',
-        data: { runId: testRunId },
-      });
-    });
-
-    it('should return 404 if artifacts directory does not exist', async () => {
-      vi.mocked(existsSync).mockReturnValue(false);
-
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: `/artifacts/${testRunId}`,
-      });
-
-      expect(response.statusCode).toBe(404);
-      expect(response.json()).toHaveProperty('error', 'Artifacts directory not found');
-    });
-
-    it('should handle errors when clearing all artifacts', async () => {
-      vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(unlinkSync).mockImplementation(() => {
-        throw new Error('Directory not empty');
-      });
-
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: `/artifacts/${testRunId}`,
-      });
-
-      expect(response.statusCode).toBeGreaterThanOrEqual(400);
-      expect(response.json()).toHaveProperty('error');
-    });
-  });
-
-  describe('HEAD /artifacts/:runId/:filename', () => {
-    it('should return artifact metadata without content', async () => {
-      const mockStat = {
-        isFile: () => true,
-        size: 2048,
-        mtime: new Date('2024-01-15T10:30:00Z'),
-      };
-      vi.mocked(statSync).mockReturnValue(mockStat as any);
-      vi.mocked(existsSync).mockReturnValue(true);
-
-      const response = await fastify.inject({
-        method: 'HEAD',
-        url: `/artifacts/${testRunId}/metadata.txt`,
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(response.headers['content-length']).toBe('2048');
-      expect(response.payload).toBe('');
-    });
-
-    it('should return 404 for non-existent artifact', async () => {
-      vi.mocked(existsSync).mockReturnValue(false);
-
-      const response = await fastify.inject({
-        method: 'HEAD',
-        url: `/artifacts/${testRunId}/missing.txt`,
-      });
-
-      expect(response.statusCode).toBe(404);
-    });
-  });
-
-  describe('Rate limiting and security', () => {
-    it('should enforce rate limits on artifact uploads', async () => {
-      // Assuming rate limit is configured
-      const mockWriteStream = {
-        write: vi.fn((chunk, encoding, callback) => callback?.()),
-        end: vi.fn((callback) => callback?.()),
-        on: vi.fn(function(this: any, event: string, handler: any) {
-          if (event === 'finish') setTimeout(() => handler(), 10);
-          return this;
-        }),
-      } as any;
-
-      vi.mocked(createWriteStream).mockReturnValue(mockWriteStream);
-
-      // Make multiple rapid requests
-      const requests = Array(20).fill(null).map(() =>
-        fastify.inject({
-          method: 'POST',
-          url: `/artifacts/${testRunId}`,
-          headers: { 'content-type': 'multipart/form-data' },
-          payload: {
-            file: {
-              filename: 'test.txt',
-              data: Buffer.from('content'),
-            },
-          },
-        })
-      );
-
-      const responses = await Promise.all(requests);
-      const rateLimitedResponses = responses.filter(
-        (r) => r.statusCode === 429
-      );
-
-      // At least some requests should be rate limited
-      expect(rateLimitedResponses.length).toBeGreaterThan(0);
-    });
-
-    it('should validate file size limits', async () => {
-      const largeFile = Buffer.alloc(100 * 1024 * 1024); // 100MB
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: `/artifacts/${testRunId}`,
-        headers: {
-          'content-type': 'multipart/form-data',
-        },
-        payload: {
-          file: {
-            filename: 'large.bin',
-            data: largeFile,
-          },
-        },
-      });
-
-      expect(response.statusCode).toBeGreaterThanOrEqual(400);
-      expect(response.json()).toHaveProperty('error');
-    });
-  });
-
-  describe('WebSocket integration', () => {
-    it('should broadcast artifact upload events', async () => {
-      const mockWriteStream = {
-        write: vi.fn((chunk, encoding, callback) => callback?.()),
-        end: vi.fn((callback) => callback?.()),
-        on: vi.fn(function(this: any, event: string, handler: any) {
-          if (event === 'finish') setTimeout(() => handler(), 10);
-          return this;
-        }),
-      } as any;
-
-      vi.mocked(createWriteStream).mockReturnValue(mockWriteStream);
-      vi.mocked(broadcastToRun).mockResolvedValue(undefined);
-
-      await fastify.inject({
-        method: 'POST',
-        url: `/artifacts/${testRunId}`,
-        headers: { 'content-type': 'multipart/form-data' },
-        payload: {
-          file: {
-            filename: 'broadcast.txt',
-            data: Buffer.from('test'),
-          },
-        },
-      });
-
-      expect(broadcastToRun).toHaveBeenCalledWith(testRunId, {
-        type: 'artifact_uploaded',
-        data: expect.objectContaining({
-          filename: 'broadcast.txt',
-          runId: testRunId,
-          timestamp: expect.any(String),
-        }),
-      });
-    });
-
-    it('should broadcast artifact deletion events', async () => {
-      vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(unlinkSync).mockReturnValue(undefined);
-      vi.mocked(broadcastToRun).mockResolvedValue(undefined);
-
-      await fastify.inject({
-        method: 'DELETE',
-        url: `/artifacts/${testRunId}/delete.txt`,
-      });
-
-      expect(broadcastToRun).toHaveBeenCalledWith(testRunId, {
-        type: 'artifact_deleted',
-        data: expect.objectContaining({
-          filename: 'delete.txt',
-          runId: testRunId,
-        }),
-      });
-    });
-  });
-
-  describe('Edge cases', () => {
-    it('should handle special characters in filenames', async () => {
-      const mockStream = new Readable();
-      mockStream._read = () => {};
-      mockStream.push('test');
-      mockStream.push(null);
-
-      vi.mocked(createReadStream).mockReturnValue(mockStream as any);
-      vi.mocked(existsSync).mockReturnValue(true);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: `/artifacts/${testRunId}/file with spaces & special@chars.txt`,
-      });
-
-      expect(response.statusCode).toBe(200);
-    });
-
-    it('should handle very long filenames', async () => {
-      const longFilename = 'a'.repeat(255) + '.txt';
-      const mockStream = new Readable();
-      mockStream._read = () => {};
-      mockStream.push('test');
-      mockStream.push(null);
-
-      vi.mocked(createReadStream).mockReturnValue(mockStream as any);
-      vi.mocked(existsSync).mockReturnValue(true);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: `/artifacts/${testRunId}/${encodeURIComponent(longFilename)}`,
-      });
-
-      expect([200, 400, 414]).toContain(response.statusCode);
-    });
-
-    it('should handle concurrent uploads', async () => {
-      const mockWriteStream = {
-        write: vi.fn((chunk, encoding, callback) => callback?.()),
-        end: vi.fn((callback) => callback?.()),
-        on: vi.fn(function(this: any, event: string, handler: any) {
-          if (event === 'finish') setTimeout(() => handler(), 10);
-          return this;
-        }),
-      } as any;
-
-      vi.mocked(createWriteStream).mockReturnValue(mockWriteStream);
-
-      const concurrentUploads = Array(5).fill(null).map((_, i) =>
-        fastify.inject({
-          method: 'POST',
-          url: `/artifacts/${testRunId}`,
-          headers: { 'content-type': 'multipart/form-data' },
-          payload: {
-            file: {
-              filename: `concurrent-${i}.txt`,
-              data: Buffer.from(`content ${i}`),
-            },
-          },
-        })
-      );
-
-      const responses = await Promise.all(concurrentUploads);
-      responses.forEach((response) => {
-        expect(response.statusCode).toBe(201);
-      });
-    });
+    expect(deleteRes.statusCode).toBe(200);
+    expect(db.prepare('SELECT id FROM artifacts WHERE id = ?').get(uploaded.artifactId)).toBeUndefined();
   });
 });

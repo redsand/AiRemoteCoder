@@ -1,1178 +1,210 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify from 'fastify';
-import { authRoutes } from './auth.js';
+import fastifyCookie from '@fastify/cookie';
+import { dirname, join } from 'path';
 import argon2 from 'argon2';
 import { authenticator } from 'otplib';
+import { authRoutes } from './auth.js';
 import { db } from '../services/database.js';
-import { generateTokens, verifyToken } from '../utils/jwt.js';
 
-// Mock dependencies
+const { testDbPath } = vi.hoisted(() => ({
+  testDbPath: process.cwd() + '\\.vitest-data\\auth-routes-' + Math.random().toString(36).slice(2) + '.db',
+}));
+
+vi.mock('../config.js', () => ({
+  config: {
+    dbPath: testDbPath,
+    projectRoot: process.cwd(),
+    dataDir: dirname(testDbPath),
+    artifactsDir: join(dirname(testDbPath), 'artifacts'),
+    runsDir: join(dirname(testDbPath), 'runs'),
+    certsDir: join(dirname(testDbPath), 'certs'),
+    port: 3100,
+    host: '127.0.0.1',
+    tlsEnabled: false,
+    authSecret: 'test-auth-secret',
+    hmacSecret: 'test-hmac-secret',
+    clockSkewSeconds: 300,
+    nonceExpirySeconds: 600,
+    claimLeaseSeconds: 60,
+    approvalTimeoutSeconds: 300,
+    rateLimit: { max: 100, timeWindow: '1 minute' },
+    allowlistedCommands: ['npm test', 'git status'],
+    cfAccessTeam: '',
+    mcpEnabled: true,
+    mcpPath: '/mcp',
+    mcpTokenExpirySeconds: 86400,
+    mcpRateLimit: { max: 300, timeWindow: '1 minute' },
+    providers: {
+      claude: true,
+      codex: true,
+      gemini: true,
+      opencode: true,
+      rev: true,
+      legacyWrapper: true,
+    },
+  },
+}));
+
 vi.mock('argon2');
-vi.mock('otplib');
-vi.mock('../services/database.js');
-vi.mock('../utils/jwt.js');
+vi.mock('otplib', () => ({
+  authenticator: {
+    generateSecret: vi.fn(() => 'TOTPSECRET'),
+    keyuri: vi.fn((user: string, issuer: string, secret: string) => `otpauth://totp/${issuer}:${user}?secret=${secret}`),
+    verify: vi.fn(() => true),
+  },
+}));
 
-describe('Auth Routes', () => {
-  let fastify: any;
+function cleanup() {
+  db.prepare('DELETE FROM sessions').run();
+  db.prepare('DELETE FROM users').run();
+}
 
-  const mockUser = {
-    id: '1',
-    email: 'test@example.com',
-    username: 'testuser',
-    passwordHash: 'hashedpassword',
-    totpSecret: 'JBSWY3DPEHPK3PXP',
-    isTotpEnabled: true,
-    isActive: true,
-    failedLoginAttempts: 0,
-    lastLoginAt: null,
-    createdAt: new Date(),
-    updatedAt: new Date()
-  };
+function buildApp() {
+  const fastify = Fastify({ logger: false });
+  fastify.register(fastifyCookie, { secret: 'test-auth-secret' });
+  fastify.register(authRoutes);
+  return fastify;
+}
 
-  const mockSession = {
-    id: 'session-1',
-    userId: '1',
-    token: 'refresh-token',
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    ipAddress: '127.0.0.1',
-    userAgent: 'test-agent',
-    createdAt: new Date()
-  };
-
-  const mockPasswordReset = {
-    id: 'reset-1',
-    userId: '1',
-    token: 'reset-token',
-    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-    used: false,
-    createdAt: new Date()
-  };
+describe('routes/auth', () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
 
   beforeEach(async () => {
-    fastify = Fastify();
-    await fastify.register(authRoutes);
-
-    // Setup default mocks
-    vi.mocked(argon2.verify).mockResolvedValue(true);
-    vi.mocked(argon2.hash).mockResolvedValue('new-hashed-password');
-    vi.mocked(authenticator.check).mockReturnValue(true);
-    vi.mocked(authenticator.generateSecret).mockReturnValue('JBSWY3DPEHPK3PXP');
-    vi.mocked(authenticator.generate).mockReturnValue('123456');
-    vi.mocked(generateTokens).mockReturnValue({
-      accessToken: 'access-token',
-      refreshToken: 'refresh-token',
-      expiresIn: 900
-    });
-    vi.mocked(verifyToken).mockReturnValue({
-      userId: '1',
-      type: 'access'
-    });
+    cleanup();
+    app = buildApp();
+    await app.ready();
   });
 
   afterEach(async () => {
-    await fastify.close();
-    vi.clearAllMocks();
+    await app.close();
+    cleanup();
   });
 
-  describe('POST /auth/register', () => {
-    it('should register a new user successfully', async () => {
-      const registerData = {
-        email: 'newuser@example.com',
-        username: 'newuser',
-        password: 'Password123!'
-      };
-
-      vi.mocked(db.user.create).mockResolvedValue({
-        ...mockUser,
-        id: '2',
-        email: registerData.email,
-        username: registerData.username,
-        isTotpEnabled: false
-      });
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/register',
-        payload: registerData
-      });
-
-      expect(response.statusCode).toBe(201);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('user');
-      expect(body.user.email).toBe(registerData.email);
-      expect(db.user.create).toHaveBeenCalled();
-    });
-
-    it('should fail with duplicate email', async () => {
-      const registerData = {
-        email: 'test@example.com',
-        username: 'newuser',
-        password: 'Password123!'
-      };
-
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/register',
-        payload: registerData
-      });
-
-      expect(response.statusCode).toBe(409);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('error', 'Email already registered');
-    });
-
-    it('should fail with invalid email format', async () => {
-      const registerData = {
-        email: 'invalid-email',
-        username: 'newuser',
-        password: 'Password123!'
-      };
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/register',
-        payload: registerData
-      });
-
-      expect(response.statusCode).toBe(400);
-    });
-
-    it('should fail with weak password', async () => {
-      const registerData = {
-        email: 'newuser@example.com',
-        username: 'newuser',
-        password: 'weak'
-      };
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/register',
-        payload: registerData
-      });
-
-      expect(response.statusCode).toBe(400);
-    });
-
-    it('should fail with missing required fields', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/register',
-        payload: {
-          email: 'test@example.com'
-        }
-      });
-
-      expect(response.statusCode).toBe(400);
+  it('reports setup required before any users exist', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/auth/status' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      setupRequired: true,
+      localAuthEnabled: false,
     });
   });
 
-  describe('POST /auth/login', () => {
-    it('should login successfully with valid credentials', async () => {
-      const loginData = {
-        email: 'test@example.com',
-        password: 'Password123!',
-        totpCode: '123456'
-      };
+  it('creates the initial admin user during setup', async () => {
+    vi.mocked(argon2.hash).mockResolvedValue('hashed-password' as never);
 
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(db.session.create).mockResolvedValue(mockSession);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: loginData
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('accessToken');
-      expect(body).toHaveProperty('refreshToken');
-      expect(argon2.verify).toHaveBeenCalledWith(mockUser.passwordHash, loginData.password);
-      expect(authenticator.check).toHaveBeenCalledWith(loginData.totpCode, mockUser.totpSecret);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/setup',
+      payload: {
+        username: 'alice',
+        password: 'very-strong-password',
+        enableTotp: true,
+      },
     });
 
-    it('should login without TOTP when not enabled', async () => {
-      const loginData = {
-        email: 'test@example.com',
-        password: 'Password123!'
-      };
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; userId: string; totpUri: string };
+    expect(body.ok).toBe(true);
+    expect(body.totpUri).toContain('otpauth://');
 
-      const userWithoutTotp = { ...mockUser, isTotpEnabled: false };
-      vi.mocked(db.user.findUnique).mockResolvedValue(userWithoutTotp);
-      vi.mocked(db.session.create).mockResolvedValue(mockSession);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: loginData
-      });
-
-      expect(response.statusCode).toBe(200);
-    });
-
-    it('should fail with invalid email', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(null);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: {
-          email: 'nonexistent@example.com',
-          password: 'Password123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(401);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('error', 'Invalid credentials');
-    });
-
-    it('should fail with invalid password', async () => {
-      vi.mocked(argon2.verify).mockResolvedValue(false);
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: {
-          email: 'test@example.com',
-          password: 'WrongPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(401);
-    });
-
-    it('should fail with invalid TOTP code', async () => {
-      vi.mocked(authenticator.check).mockReturnValue(false);
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: {
-          email: 'test@example.com',
-          password: 'Password123!',
-          totpCode: '000000'
-        }
-      });
-
-      expect(response.statusCode).toBe(401);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('error', 'Invalid TOTP code');
-    });
-
-    it('should lock account after too many failed attempts', async () => {
-      const lockedUser = { ...mockUser, failedLoginAttempts: 5 };
-      vi.mocked(db.user.findUnique).mockResolvedValue(lockedUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: {
-          email: 'test@example.com',
-          password: 'Password123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(423);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('error', 'Account locked');
-    });
-
-    it('should fail with inactive account', async () => {
-      const inactiveUser = { ...mockUser, isActive: false };
-      vi.mocked(db.user.findUnique).mockResolvedValue(inactiveUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: {
-          email: 'test@example.com',
-          password: 'Password123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(403);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('error', 'Account inactive');
-    });
-
-    it('should track failed login attempts', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(argon2.verify).mockResolvedValue(false);
-      vi.mocked(db.user.update).mockResolvedValue(mockUser);
-
-      await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: {
-          email: 'test@example.com',
-          password: 'WrongPassword123!'
-        }
-      });
-
-      expect(db.user.update).toHaveBeenCalled();
-    });
+    const user = db.prepare('SELECT username, role, totp_secret FROM users WHERE id = ?').get(body.userId) as {
+      username: string;
+      role: string;
+      totp_secret: string;
+    };
+    expect(user.username).toBe('alice');
+    expect(user.role).toBe('admin');
+    expect(user.totp_secret).toBe('TOTPSECRET');
   });
 
-  describe('POST /auth/logout', () => {
-    it('should logout successfully', async () => {
-      vi.mocked(db.session.delete).mockResolvedValue(mockSession);
+  it('logs in and returns a session cookie for valid credentials', async () => {
+    const userId = 'user-1';
+    db.prepare(`
+      INSERT INTO users (id, username, password_hash, role)
+      VALUES (?, 'alice', 'hashed', 'admin')
+    `).run(userId);
+    vi.mocked(argon2.verify).mockResolvedValue(true as never);
 
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/logout',
-        headers: {
-          authorization: 'Bearer access-token',
-          cookie: 'refreshToken=refresh-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(204);
-      expect(db.session.delete).toHaveBeenCalled();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: {
+        username: 'alice',
+        password: 'password',
+      },
     });
 
-    it('should fail without authentication', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/logout'
-      });
-
-      expect(response.statusCode).toBe(401);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      ok: true,
+      user: { id: userId, username: 'alice', role: 'admin' },
     });
-
-    it('should handle missing refresh token', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/logout',
-        headers: {
-          authorization: 'Bearer access-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(204);
-    });
+    expect(res.headers['set-cookie']).toBeDefined();
+    expect(String(res.headers['set-cookie'])).toContain('session=');
   });
 
-  describe('POST /auth/refresh', () => {
-    it('should refresh tokens successfully', async () => {
-      vi.mocked(db.session.findUnique).mockResolvedValue(mockSession);
-      vi.mocked(db.session.update).mockResolvedValue({
-        ...mockSession,
-        token: 'new-refresh-token'
-      });
+  it('returns the current user and refreshes the session', async () => {
+    const userId = 'user-1';
+    const sessionId = 'session-1';
+    db.prepare(`
+      INSERT INTO users (id, username, password_hash, role)
+      VALUES (?, 'alice', 'hashed', 'admin')
+    `).run(userId);
+    db.prepare(`
+      INSERT INTO sessions (id, user_id, expires_at)
+      VALUES (?, ?, ?)
+    `).run(sessionId, userId, Math.floor(Date.now() / 1000) + 3600);
 
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/refresh',
-        headers: {
-          cookie: 'refreshToken=refresh-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('accessToken');
-      expect(body).toHaveProperty('refreshToken');
+    const meRes = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      cookies: { session: sessionId },
     });
 
-    it('should fail with invalid refresh token', async () => {
-      vi.mocked(db.session.findUnique).mockResolvedValue(null);
+    expect(meRes.statusCode).toBe(200);
+    expect(meRes.json()).toMatchObject({ user: { id: userId, username: 'alice', role: 'admin' } });
 
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/refresh',
-        headers: {
-          cookie: 'refreshToken=invalid-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(401);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('error', 'Invalid refresh token');
+    const refreshRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/refresh',
+      cookies: { session: sessionId },
     });
 
-    it('should fail with expired session', async () => {
-      const expiredSession = {
-        ...mockSession,
-        expiresAt: new Date(Date.now() - 1000)
-      };
-      vi.mocked(db.session.findUnique).mockResolvedValue(expiredSession);
-      vi.mocked(db.session.delete).mockResolvedValue(expiredSession);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/refresh',
-        headers: {
-          cookie: 'refreshToken=refresh-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(401);
-      expect(db.session.delete).toHaveBeenCalled();
-    });
-
-    it('should fail without refresh token', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/refresh'
-      });
-
-      expect(response.statusCode).toBe(401);
-    });
+    expect(refreshRes.statusCode).toBe(200);
+    expect(refreshRes.headers['set-cookie']).toBeDefined();
+    expect(String(refreshRes.headers['set-cookie'])).toContain('session=');
+    expect(db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId)).toBeUndefined();
   });
 
-  describe('POST /auth/forgot-password', () => {
-    it('should send password reset email', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(db.passwordReset.create).mockResolvedValue(mockPasswordReset);
+  it('allows an admin to create additional users', async () => {
+    const userId = 'user-1';
+    const sessionId = 'session-admin';
+    db.prepare(`
+      INSERT INTO users (id, username, password_hash, role)
+      VALUES (?, 'alice', 'hashed', 'admin')
+    `).run(userId);
+    db.prepare(`
+      INSERT INTO sessions (id, user_id, expires_at)
+      VALUES (?, ?, ?)
+    `).run(sessionId, userId, Math.floor(Date.now() / 1000) + 3600);
+    vi.mocked(argon2.hash).mockResolvedValue('other-hash' as never);
 
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/forgot-password',
-        payload: {
-          email: 'test@example.com'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(db.passwordReset.create).toHaveBeenCalled();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/users',
+      cookies: { session: sessionId },
+      payload: {
+        username: 'bob',
+        password: 'another-strong-password',
+        role: 'operator',
+      },
     });
 
-    it('should not reveal if email exists', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(null);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/forgot-password',
-        payload: {
-          email: 'nonexistent@example.com'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('message');
-    });
-
-    it('should fail with missing email', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/forgot-password',
-        payload: {}
-      });
-
-      expect(response.statusCode).toBe(400);
-    });
-
-    it('should invalidate previous reset tokens', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(db.passwordReset.findMany).mockResolvedValue([mockPasswordReset]);
-      vi.mocked(db.passwordReset.updateMany).mockResolvedValue({ count: 1 });
-      vi.mocked(db.passwordReset.create).mockResolvedValue(mockPasswordReset);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/forgot-password',
-        payload: {
-          email: 'test@example.com'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(db.passwordReset.updateMany).toHaveBeenCalled();
-    });
-  });
-
-  describe('POST /auth/reset-password', () => {
-    it('should reset password successfully', async () => {
-      vi.mocked(db.passwordReset.findUnique).mockResolvedValue(mockPasswordReset);
-      vi.mocked(db.user.update).mockResolvedValue(mockUser);
-      vi.mocked(db.passwordReset.update).mockResolvedValue({
-        ...mockPasswordReset,
-        used: true
-      });
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/reset-password',
-        payload: {
-          token: 'reset-token',
-          newPassword: 'NewPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(argon2.hash).toHaveBeenCalledWith('NewPassword123!');
-      expect(db.user.update).toHaveBeenCalled();
-      expect(db.passwordReset.update).toHaveBeenCalled();
-    });
-
-    it('should fail with invalid token', async () => {
-      vi.mocked(db.passwordReset.findUnique).mockResolvedValue(null);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/reset-password',
-        payload: {
-          token: 'invalid-token',
-          newPassword: 'NewPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(400);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('error', 'Invalid or expired reset token');
-    });
-
-    it('should fail with expired token', async () => {
-      const expiredReset = {
-        ...mockPasswordReset,
-        expiresAt: new Date(Date.now() - 1000)
-      };
-      vi.mocked(db.passwordReset.findUnique).mockResolvedValue(expiredReset);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/reset-password',
-        payload: {
-          token: 'reset-token',
-          newPassword: 'NewPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(400);
-    });
-
-    it('should fail with already used token', async () => {
-      const usedReset = { ...mockPasswordReset, used: true };
-      vi.mocked(db.passwordReset.findUnique).mockResolvedValue(usedReset);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/reset-password',
-        payload: {
-          token: 'reset-token',
-          newPassword: 'NewPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(400);
-    });
-
-    it('should fail with weak new password', async () => {
-      vi.mocked(db.passwordReset.findUnique).mockResolvedValue(mockPasswordReset);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/reset-password',
-        payload: {
-          token: 'reset-token',
-          newPassword: 'weak'
-        }
-      });
-
-      expect(response.statusCode).toBe(400);
-    });
-
-    it('should fail with missing token', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/reset-password',
-        payload: {
-          newPassword: 'NewPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(400);
-    });
-  });
-
-  describe('POST /auth/change-password', () => {
-    it('should change password successfully', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(db.user.update).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/change-password',
-        headers: {
-          authorization: 'Bearer access-token'
-        },
-        payload: {
-          currentPassword: 'Password123!',
-          newPassword: 'NewPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(argon2.verify).toHaveBeenCalledWith(mockUser.passwordHash, 'Password123!');
-      expect(argon2.hash).toHaveBeenCalledWith('NewPassword123!');
-    });
-
-    it('should fail with wrong current password', async () => {
-      vi.mocked(argon2.verify).mockResolvedValue(false);
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/change-password',
-        headers: {
-          authorization: 'Bearer access-token'
-        },
-        payload: {
-          currentPassword: 'WrongPassword123!',
-          newPassword: 'NewPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(401);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('error', 'Current password is incorrect');
-    });
-
-    it('should fail without authentication', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/change-password',
-        payload: {
-          currentPassword: 'Password123!',
-          newPassword: 'NewPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(401);
-    });
-
-    it('should fail with weak new password', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/change-password',
-        headers: {
-          authorization: 'Bearer access-token'
-        },
-        payload: {
-          currentPassword: 'Password123!',
-          newPassword: 'weak'
-        }
-      });
-
-      expect(response.statusCode).toBe(400);
-    });
-  });
-
-  describe('POST /auth/totp/enable', () => {
-    it('should enable TOTP successfully', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue({
-        ...mockUser,
-        isTotpEnabled: false
-      });
-      vi.mocked(db.user.update).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/totp/enable',
-        headers: {
-          authorization: 'Bearer access-token'
-        },
-        payload: {
-          totpCode: '123456'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(db.user.update).toHaveBeenCalledWith({
-        where: { id: '1' },
-        data: { isTotpEnabled: true }
-      });
-    });
-
-    it('should return TOTP secret for setup', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue({
-        ...mockUser,
-        isTotpEnabled: false,
-        totpSecret: null
-      });
-      vi.mocked(db.user.update).mockResolvedValue({
-        ...mockUser,
-        isTotpEnabled: false,
-        totpSecret: 'NEW-SECRET'
-      });
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/totp/setup',
-        headers: {
-          authorization: 'Bearer access-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('secret');
-      expect(body).toHaveProperty('qrCode');
-    });
-
-    it('should fail with invalid TOTP code', async () => {
-      vi.mocked(authenticator.check).mockReturnValue(false);
-      vi.mocked(db.user.findUnique).mockResolvedValue({
-        ...mockUser,
-        isTotpEnabled: false
-      });
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/totp/enable',
-        headers: {
-          authorization: 'Bearer access-token'
-        },
-        payload: {
-          totpCode: '000000'
-        }
-      });
-
-      expect(response.statusCode).toBe(400);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('error', 'Invalid TOTP code');
-    });
-
-    it('should fail if TOTP already enabled', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/totp/enable',
-        headers: {
-          authorization: 'Bearer access-token'
-        },
-        payload: {
-          totpCode: '123456'
-        }
-      });
-
-      expect(response.statusCode).toBe(400);
-    });
-
-    it('should fail without authentication', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/totp/enable',
-        payload: {
-          totpCode: '123456'
-        }
-      });
-
-      expect(response.statusCode).toBe(401);
-    });
-  });
-
-  describe('POST /auth/totp/disable', () => {
-    it('should disable TOTP successfully', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(db.user.update).mockResolvedValue({
-        ...mockUser,
-        isTotpEnabled: false,
-        totpSecret: null
-      });
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/totp/disable',
-        headers: {
-          authorization: 'Bearer access-token'
-        },
-        payload: {
-          password: 'Password123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(db.user.update).toHaveBeenCalledWith({
-        where: { id: '1' },
-        data: { isTotpEnabled: false, totpSecret: null }
-      });
-    });
-
-    it('should fail with wrong password', async () => {
-      vi.mocked(argon2.verify).mockResolvedValue(false);
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/totp/disable',
-        headers: {
-          authorization: 'Bearer access-token'
-        },
-        payload: {
-          password: 'WrongPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(401);
-    });
-
-    it('should fail without authentication', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/totp/disable',
-        payload: {
-          password: 'Password123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(401);
-    });
-  });
-
-  describe('GET /auth/sessions', () => {
-    it('should list all user sessions', async () => {
-      const sessions = [mockSession, { ...mockSession, id: 'session-2' }];
-      vi.mocked(db.session.findMany).mockResolvedValue(sessions);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: '/auth/sessions',
-        headers: {
-          authorization: 'Bearer access-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('sessions');
-      expect(body.sessions).toHaveLength(2);
-    });
-
-    it('should fail without authentication', async () => {
-      const response = await fastify.inject({
-        method: 'GET',
-        url: '/auth/sessions'
-      });
-
-      expect(response.statusCode).toBe(401);
-    });
-
-    it('should handle empty sessions list', async () => {
-      vi.mocked(db.session.findMany).mockResolvedValue([]);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: '/auth/sessions',
-        headers: {
-          authorization: 'Bearer access-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.payload);
-      expect(body.sessions).toHaveLength(0);
-    });
-  });
-
-  describe('DELETE /auth/sessions/:id', () => {
-    it('should delete a specific session', async () => {
-      vi.mocked(db.session.findUnique).mockResolvedValue(mockSession);
-      vi.mocked(db.session.delete).mockResolvedValue(mockSession);
-
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: '/auth/sessions/session-1',
-        headers: {
-          authorization: 'Bearer access-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(204);
-      expect(db.session.delete).toHaveBeenCalled();
-    });
-
-    it('should fail to delete session from another user', async () => {
-      const otherUserSession = { ...mockSession, userId: '2' };
-      vi.mocked(db.session.findUnique).mockResolvedValue(otherUserSession);
-
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: '/auth/sessions/session-1',
-        headers: {
-          authorization: 'Bearer access-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(403);
-    });
-
-    it('should fail with non-existent session', async () => {
-      vi.mocked(db.session.findUnique).mockResolvedValue(null);
-
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: '/auth/sessions/nonexistent',
-        headers: {
-          authorization: 'Bearer access-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(404);
-    });
-
-    it('should fail without authentication', async () => {
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: '/auth/sessions/session-1'
-      });
-
-      expect(response.statusCode).toBe(401);
-    });
-  });
-
-  describe('DELETE /auth/sessions', () => {
-    it('should delete all sessions except current', async () => {
-      const sessions = [mockSession, { ...mockSession, id: 'session-2' }];
-      vi.mocked(db.session.findMany).mockResolvedValue(sessions);
-      vi.mocked(db.session.deleteMany).mockResolvedValue({ count: 1 });
-
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: '/auth/sessions',
-        headers: {
-          authorization: 'Bearer access-token',
-          cookie: 'refreshToken=refresh-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(204);
-      expect(db.session.deleteMany).toHaveBeenCalled();
-    });
-
-    it('should fail without authentication', async () => {
-      const response = await fastify.inject({
-        method: 'DELETE',
-        url: '/auth/sessions'
-      });
-
-      expect(response.statusCode).toBe(401);
-    });
-  });
-
-  describe('GET /auth/me', () => {
-    it('should return current user info', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: '/auth/me',
-        headers: {
-          authorization: 'Bearer access-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('user');
-      expect(body.user.id).toBe('1');
-      expect(body.user.email).toBe('test@example.com');
-    });
-
-    it('should not return sensitive data', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: '/auth/me',
-        headers: {
-          authorization: 'Bearer access-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.payload);
-      expect(body.user).not.toHaveProperty('passwordHash');
-      expect(body.user).not.toHaveProperty('totpSecret');
-    });
-
-    it('should fail without authentication', async () => {
-      const response = await fastify.inject({
-        method: 'GET',
-        url: '/auth/me'
-      });
-
-      expect(response.statusCode).toBe(401);
-    });
-
-    it('should handle non-existent user', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(null);
-
-      const response = await fastify.inject({
-        method: 'GET',
-        url: '/auth/me',
-        headers: {
-          authorization: 'Bearer access-token'
-        }
-      });
-
-      expect(response.statusCode).toBe(404);
-    });
-  });
-
-  describe('Error Handling', () => {
-    it('should handle database errors gracefully', async () => {
-      vi.mocked(db.user.findUnique).mockRejectedValue(new Error('Database connection failed'));
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: {
-          email: 'test@example.com',
-          password: 'Password123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(500);
-      const body = JSON.parse(response.payload);
-      expect(body).toHaveProperty('error');
-    });
-
-    it('should handle JWT generation errors', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(generateTokens).mockImplementation(() => {
-        throw new Error('JWT generation failed');
-      });
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: {
-          email: 'test@example.com',
-          password: 'Password123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(500);
-    });
-
-    it('should handle argon2 errors', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(argon2.verify).mockRejectedValue(new Error('Hashing error'));
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: {
-          email: 'test@example.com',
-          password: 'Password123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(500);
-    });
-
-    it('should handle malformed JSON in request body', async () => {
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/register',
-        headers: {
-          'content-type': 'application/json'
-        },
-        payload: '{ invalid json }'
-      });
-
-      expect(response.statusCode).toBe(400);
-    });
-  });
-
-  describe('Rate Limiting', () => {
-    it('should enforce rate limits on login endpoint', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(argon2.verify).mockResolvedValue(false);
-
-      const requests = Array(6).fill(null).map(() =>
-        fastify.inject({
-          method: 'POST',
-          url: '/auth/login',
-          payload: {
-            email: 'test@example.com',
-            password: 'WrongPassword123!'
-          }
-        })
-      );
-
-      const responses = await Promise.all(requests);
-      const lastResponse = responses[responses.length - 1];
-
-      // Should be rate limited after 5 attempts
-      expect(lastResponse.statusCode).toBe(429);
-    });
-
-    it('should enforce rate limits on forgot password endpoint', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-
-      const requests = Array(6).fill(null).map(() =>
-        fastify.inject({
-          method: 'POST',
-          url: '/auth/forgot-password',
-          payload: {
-            email: 'test@example.com'
-          }
-        })
-      );
-
-      const responses = await Promise.all(requests);
-      const lastResponse = responses[responses.length - 1];
-
-      expect(lastResponse.statusCode).toBe(429);
-    });
-  });
-
-  describe('Session Security', () => {
-    it('should invalidate old session after password change', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(db.session.deleteMany).mockResolvedValue({ count: 5 });
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/change-password',
-        headers: {
-          authorization: 'Bearer access-token'
-        },
-        payload: {
-          currentPassword: 'Password123!',
-          newPassword: 'NewPassword123!'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(db.session.deleteMany).toHaveBeenCalled();
-    });
-
-    it('should track session IP address and user agent', async () => {
-      vi.mocked(db.user.findUnique).mockResolvedValue(mockUser);
-      vi.mocked(db.session.create).mockResolvedValue(mockSession);
-
-      const response = await fastify.inject({
-        method: 'POST',
-        url: '/auth/login',
-        payload: {
-          email: 'test@example.com',
-          password: 'Password123!'
-        },
-        headers: {
-          'user-agent': 'Test Agent/1.0',
-          'x-forwarded-for': '192.168.1.1'
-        }
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(db.session.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ipAddress: expect.any(String),
-          userAgent: expect.any(String)
-        })
-      );
+    expect(res.statusCode).toBe(200);
+    expect(db.prepare('SELECT username, role FROM users WHERE username = ?').get('bob')).toMatchObject({
+      username: 'bob',
+      role: 'operator',
     });
   });
 });

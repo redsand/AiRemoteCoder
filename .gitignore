@@ -20,6 +20,8 @@ build/
 *.swo
 *~
 
+.vitest-data
+
 # OS
 .DS_Store
 Thumbs.db

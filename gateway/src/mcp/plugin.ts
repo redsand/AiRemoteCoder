@@ -22,10 +22,10 @@ import { nanoid } from 'nanoid';
 import { db } from '../services/database.js';
 import { config } from '../config.js';
 import { createMcpServer } from './server.js';
-import { validateMcpToken, extractBearerToken } from './auth.js';
+import { validateMcpToken, extractBearerToken, validateMcpSessionAccess, type McpAuthContext } from './auth.js';
 import { uiAuth } from '../middleware/auth.js';
 import type { AuthenticatedRequest } from '../middleware/auth.js';
-import type { McpScope, McpAuthContext } from '../domain/types.js';
+import type { McpScope } from '../domain/types.js';
 import { ALL_MCP_SCOPES } from '../domain/types.js';
 
 // In-memory session map: sessionId → { transport, authContext }
@@ -68,6 +68,14 @@ export async function mcpPlugin(fastify: FastifyInstance) {
         return reply.code(404).send({
           jsonrpc: '2.0',
           error: { code: -32002, message: `Session not found: ${sessionId}` },
+          id: null,
+        });
+      }
+      const authCheck = validateMcpSessionAccess(session.authContext, req.headers.authorization);
+      if (!authCheck.ok) {
+        return reply.code(authCheck.statusCode).send({
+          jsonrpc: '2.0',
+          error: { code: authCheck.statusCode === 401 ? -32001 : -32003, message: authCheck.message },
           id: null,
         });
       }
@@ -122,6 +130,11 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       return reply.code(404).send({ error: `Session not found: ${sessionId}` });
     }
 
+    const authCheck = validateMcpSessionAccess(session.authContext, req.headers.authorization);
+    if (!authCheck.ok) {
+      return reply.code(authCheck.statusCode).send({ error: authCheck.message });
+    }
+
     await session.transport.handleRequest(req.raw, reply.raw);
   });
 
@@ -137,6 +150,11 @@ export async function mcpPlugin(fastify: FastifyInstance) {
     const session = sessions.get(sessionId);
     if (!session) {
       return reply.code(404).send({ error: `Session not found: ${sessionId}` });
+    }
+
+    const authCheck = validateMcpSessionAccess(session.authContext, req.headers.authorization);
+    if (!authCheck.ok) {
+      return reply.code(authCheck.statusCode).send({ error: authCheck.message });
     }
 
     await session.transport.handleRequest(req.raw, reply.raw);
