@@ -343,4 +343,114 @@ describe('mcpSetupRoutes', () => {
 
     await app.close();
   });
+
+  it('enforces machine-bound targets using x-airc-device-id', async () => {
+    const app = await buildApp();
+    const path = join(projectRoot, 'machine-bound');
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/project-targets',
+      headers: { 'x-airc-device-id': 'device-a' },
+      payload: { label: 'Machine Bound', path },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const target = createRes.json() as { id: string };
+
+    const setupWrongDevice = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude',
+      headers: { 'x-airc-device-id': 'device-b' },
+      payload: { projectTargetId: target.id },
+    });
+    expect(setupWrongDevice.statusCode).toBe(403);
+
+    const setupMissingDevice = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude',
+      payload: { projectTargetId: target.id },
+    });
+    expect(setupMissingDevice.statusCode).toBe(403);
+
+    const setupCorrectDevice = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude',
+      headers: { 'x-airc-device-id': 'device-a' },
+      payload: { projectTargetId: target.id },
+    });
+    expect(setupCorrectDevice.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it('isolates concurrent setup/install flows across users and targets', async () => {
+    const app = await buildApp();
+    const userOnePath = join(projectRoot, 'user-one-project');
+    const userTwoPath = join(projectRoot, 'user-two-project');
+
+    const createOne = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/project-targets',
+      headers: { cookie: 'session=session-user-1', 'x-airc-device-id': 'device-one' },
+      payload: { label: 'User One Target', path: userOnePath },
+    });
+    expect(createOne.statusCode).toBe(201);
+    const targetOne = createOne.json() as { id: string };
+
+    const createTwo = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/project-targets',
+      headers: { cookie: 'session=session-user-2', 'x-airc-device-id': 'device-two' },
+      payload: { label: 'User Two Target', path: userTwoPath },
+    });
+    expect(createTwo.statusCode).toBe(201);
+    const targetTwo = createTwo.json() as { id: string };
+
+    const setupOne = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude',
+      headers: { cookie: 'session=session-user-1', 'x-airc-device-id': 'device-one' },
+      payload: { projectTargetId: targetOne.id },
+    });
+    expect(setupOne.statusCode).toBe(200);
+    const tokenOne = (setupOne.json() as { token: string }).token;
+
+    const setupTwo = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude',
+      headers: { cookie: 'session=session-user-2', 'x-airc-device-id': 'device-two' },
+      payload: { projectTargetId: targetTwo.id },
+    });
+    expect(setupTwo.statusCode).toBe(200);
+    const tokenTwo = (setupTwo.json() as { token: string }).token;
+
+    const crossUserDenied = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude',
+      headers: { cookie: 'session=session-user-2', 'x-airc-device-id': 'device-two' },
+      payload: { projectTargetId: targetOne.id },
+    });
+    expect(crossUserDenied.statusCode).toBe(403);
+
+    const installOne = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude/install',
+      headers: { cookie: 'session=session-user-1', 'x-airc-device-id': 'device-one' },
+      payload: { token: tokenOne, projectTargetId: targetOne.id },
+    });
+    expect(installOne.statusCode).toBe(200);
+
+    const installTwo = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude/install',
+      headers: { cookie: 'session=session-user-2', 'x-airc-device-id': 'device-two' },
+      payload: { token: tokenTwo, projectTargetId: targetTwo.id },
+    });
+    expect(installTwo.statusCode).toBe(200);
+
+    expect(existsSync(join(userOnePath, '.claude', 'mcp.json'))).toBe(true);
+    expect(existsSync(join(userTwoPath, '.claude', 'mcp.json'))).toBe(true);
+
+    await app.close();
+  });
 });
