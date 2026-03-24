@@ -105,6 +105,15 @@ describe('runner cli parsing', () => {
     expect(options.codexMode).toBe('exec');
   });
 
+  it('normalizes /mcp gateway url to base gateway url', () => {
+    const options = parseRunnerOptions([], {
+      AIREMOTECODER_GATEWAY_URL: 'http://localhost:3100/mcp',
+      AIREMOTECODER_MCP_TOKEN: 'token-123',
+      AIREMOTECODER_PROVIDER: 'codex',
+    });
+    expect(options.gatewayUrl).toBe('http://localhost:3100');
+  });
+
   it('allows argv to override env', () => {
     const options = parseRunnerOptions(
       ['--gateway-url', 'http://other:3100', '--token', 't2', '--provider', 'gemini', '--exec-template', 'gemini run {input}'],

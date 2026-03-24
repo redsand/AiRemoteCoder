@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 import { runLoop, type RunnerOptions } from './worker.js';
 
+function normalizeGatewayUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  return trimmed.replace(/\/mcp$/i, '');
+}
+
 export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): RunnerOptions {
   const args = new Map<string, string>();
   for (let i = 0; i < argv.length; i += 1) {
@@ -16,7 +21,8 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
     i += 1;
   }
 
-  const gatewayUrl = args.get('gateway-url') ?? env.AIREMOTECODER_GATEWAY_URL ?? 'http://localhost:3100';
+  const gatewayUrlRaw = args.get('gateway-url') ?? env.AIREMOTECODER_GATEWAY_URL ?? 'http://localhost:3100';
+  const gatewayUrl = normalizeGatewayUrl(gatewayUrlRaw);
   const token = args.get('token') ?? env.AIREMOTECODER_MCP_TOKEN ?? env.AIRC_MCP_TOKEN ?? '';
   const provider = (args.get('provider') ?? env.AIREMOTECODER_PROVIDER ?? 'codex').toLowerCase();
   const codexModeRaw = (args.get('codex-mode') ?? env.AIREMOTECODER_CODEX_MODE ?? 'interactive').toLowerCase();
