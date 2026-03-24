@@ -63,3 +63,15 @@ export interface McpProjectTarget {
   created_at?: number;
   updated_at?: number;
 }
+
+export interface McpActiveSession {
+  id: string;
+  user: {
+    id: string;
+    username: string;
+    role: string;
+  };
+  createdAt: number;
+  lastSeenAt: number;
+  scopes: string[];
+}

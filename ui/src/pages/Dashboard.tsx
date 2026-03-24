@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { StatusPill, RunCard, type Run } from '../components/ui';
 import McpSpotlight from '../components/mcp/McpSpotlight';
-import type { McpConfig, McpSetupStatus, McpToken } from '../features/mcp/types';
+import type { McpActiveSession, McpConfig, McpSetupStatus, McpToken } from '../features/mcp/types';
 
 interface NeedsAttention {
   waitingApproval: Run[];
@@ -75,6 +75,7 @@ export function Dashboard({ user: _user }: Props) {
   const [mcpConfig, setMcpConfig] = useState<McpConfig | null>(null);
   const [setupStatus, setSetupStatus] = useState<Record<string, McpSetupStatus>>({});
   const [activeTokens, setActiveTokens] = useState<McpToken[]>([]);
+  const [mcpSessions, setMcpSessions] = useState<McpActiveSession[]>([]);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [needsAttention, setNeedsAttention] = useState<NeedsAttention | null>(null);
   const [activeRuns, setActiveRuns] = useState<Run[]>([]);
@@ -101,6 +102,7 @@ export function Dashboard({ user: _user }: Props) {
         fetch('/api/mcp/setup/status'),
       ]);
       const mcpTokensRes = await fetch('/api/mcp/tokens');
+      const mcpSessionsRes = await fetch('/api/mcp/sessions');
 
       if (attentionRes.ok) {
         setNeedsAttention(await attentionRes.json());
@@ -122,6 +124,9 @@ export function Dashboard({ user: _user }: Props) {
       }
       if (mcpTokensRes.ok) {
         setActiveTokens((await mcpTokensRes.json()).tokens ?? []);
+      }
+      if (mcpSessionsRes.ok) {
+        setMcpSessions((await mcpSessionsRes.json()).sessions ?? []);
       }
     } catch (err) {
       console.error('Failed to fetch dashboard data:', err);
@@ -159,7 +164,8 @@ export function Dashboard({ user: _user }: Props) {
     <div className="dashboard">
       <McpSpotlight
         mcpConfig={mcpConfig}
-        connectedCount={Object.values(setupStatus).filter((status) => status.hasAiRemoteCoder).length}
+        activeSessionCount={mcpSessions.length}
+        configuredCount={Object.values(setupStatus).filter((status) => status.hasAiRemoteCoder).length}
         activeTokens={activeTokens.filter((token) => !token.revoked_at).length}
         copiedUrl={copiedUrl}
         onCopyUrl={copyMcpUrl}
@@ -176,7 +182,7 @@ export function Dashboard({ user: _user }: Props) {
           </div>
           <div className="stat-card">
             <div className="stat-value">{stats.clients.online}</div>
-            <div className="stat-label">Clients Online</div>
+            <div className="stat-label">Legacy Clients Online</div>
           </div>
           <div className="stat-card">
             <div className="stat-value" style={{ color: totalAttention > 0 ? 'var(--accent-red)' : undefined }}>

@@ -60,6 +60,8 @@ const DEFAULT_AGENT_SCOPES: McpScope[] = [
 const sessions = new Map<string, {
   transport: StreamableHTTPServerTransport;
   authContext: McpAuthContext;
+  createdAt: number;
+  lastSeenAt: number;
 }>();
 
 export async function mcpPlugin(fastify: FastifyInstance) {
@@ -106,6 +108,7 @@ export async function mcpPlugin(fastify: FastifyInstance) {
           id: null,
         });
       }
+      session.lastSeenAt = Math.floor(Date.now() / 1000);
       // Hand off to existing transport
       await session.transport.handleRequest(req.raw, reply.raw, req.body);
       return;
@@ -127,7 +130,8 @@ export async function mcpPlugin(fastify: FastifyInstance) {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => newSessionId,
       onsessioninitialized: (sid) => {
-        sessions.set(sid, { transport, authContext });
+        const now = Math.floor(Date.now() / 1000);
+        sessions.set(sid, { transport, authContext, createdAt: now, lastSeenAt: now });
         fastify.log.info({ sessionId: sid, user: authContext.user.username }, 'MCP session initialized');
       },
     });
@@ -162,6 +166,7 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       return reply.code(authCheck.statusCode).send({ error: authCheck.message });
     }
 
+    session.lastSeenAt = Math.floor(Date.now() / 1000);
     await session.transport.handleRequest(req.raw, reply.raw);
   });
 
@@ -184,6 +189,7 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       return reply.code(authCheck.statusCode).send({ error: authCheck.message });
     }
 
+    session.lastSeenAt = Math.floor(Date.now() / 1000);
     await session.transport.handleRequest(req.raw, reply.raw);
     sessions.delete(sessionId);
     fastify.log.info({ sessionId }, 'MCP session deleted');
@@ -286,6 +292,36 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       `).all(req.user!.id);
 
       return reply.send({ tokens });
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // GET /api/mcp/sessions — list active MCP sessions (UI session required)
+  // -------------------------------------------------------------------------
+  fastify.get(
+    '/api/mcp/sessions',
+    { preHandler: [uiAuth] },
+    async (req: AuthenticatedRequest, reply) => {
+      const entries = Array.from(sessions.entries()).map(([id, session]) => ({
+        id,
+        user: {
+          id: session.authContext.user.id,
+          username: session.authContext.user.username,
+          role: session.authContext.user.role,
+        },
+        createdAt: session.createdAt,
+        lastSeenAt: session.lastSeenAt,
+        scopes: session.authContext.scopes,
+      }));
+
+      const visible = req.user?.role === 'admin'
+        ? entries
+        : entries.filter((entry) => entry.user.id === req.user?.id);
+
+      return reply.send({
+        sessions: visible,
+        total: visible.length,
+      });
     }
   );
 

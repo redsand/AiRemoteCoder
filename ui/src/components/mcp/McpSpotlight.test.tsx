@@ -20,7 +20,8 @@ describe('McpSpotlight', () => {
     const html = renderToStaticMarkup(
       <McpSpotlight
         mcpConfig={config}
-        connectedCount={2}
+        activeSessionCount={2}
+        configuredCount={4}
         activeTokens={5}
         copiedUrl={false}
         onCopyUrl={() => {}}
@@ -31,7 +32,8 @@ describe('McpSpotlight', () => {
 
     expect(html).toContain('Primary control plane');
     expect(html).toContain('MCP-first operations');
-    expect(html).toContain('connected agents');
+    expect(html).toContain('active mcp sessions');
+    expect(html).toContain('configured environments');
     expect(html).toContain('active tokens');
     expect(html).toContain('Copy MCP URL');
     expect(html).toContain('https://gateway.example.test/mcp');
@@ -41,7 +43,8 @@ describe('McpSpotlight', () => {
     const html = renderToStaticMarkup(
       <McpSpotlight
         mcpConfig={config}
-        connectedCount={1}
+        activeSessionCount={1}
+        configuredCount={2}
         activeTokens={1}
         copiedUrl
         onCopyUrl={() => {}}

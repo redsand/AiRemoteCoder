@@ -57,7 +57,7 @@ export function McpProviderGrid({
                     onClick={() => onInstall(provider.key)}
                     disabled={isInstalling}
                   >
-                    {isInstalling ? 'Installing…' : isConfigured ? '↺ Reinstall' : '⚡ Auto-Install'}
+                    {isInstalling ? 'Generating…' : isConfigured ? '↺ Regenerate Snippet' : '⚡ Generate Snippet'}
                   </button>
                 )}
               </div>
@@ -78,7 +78,7 @@ export function McpProviderGrid({
                   <div className="snippet-block">
                     <div className="snippet-header">
                       <span className="text-muted">
-                        {setup.installed ? 'Written config:' : 'Manual config (copy this):'}
+                        {setup.installed ? 'Written config:' : 'Setup snippet (copy this):'}
                       </span>
                       <button
                         className="btn-icon"

@@ -2,7 +2,8 @@ import type { McpConfig } from '../../features/mcp/types';
 
 interface Props {
   mcpConfig: McpConfig | null;
-  connectedCount: number;
+  activeSessionCount: number;
+  configuredCount: number;
   activeTokens: number;
   onOpenMcp: () => void;
   onOpenTokens: () => void;
@@ -12,7 +13,8 @@ interface Props {
 
 export function McpSpotlight({
   mcpConfig,
-  connectedCount,
+  activeSessionCount,
+  configuredCount,
   activeTokens,
   onOpenMcp,
   onOpenTokens,
@@ -38,8 +40,12 @@ export function McpSpotlight({
 
       <div className="mcp-spotlight-grid">
         <div className="mcp-spotlight-stat">
-          <span className="mcp-spotlight-stat-value">{connectedCount}</span>
-          <span className="mcp-spotlight-stat-label">connected agents</span>
+          <span className="mcp-spotlight-stat-value">{activeSessionCount}</span>
+          <span className="mcp-spotlight-stat-label">active mcp sessions</span>
+        </div>
+        <div className="mcp-spotlight-stat">
+          <span className="mcp-spotlight-stat-value">{configuredCount}</span>
+          <span className="mcp-spotlight-stat-label">configured environments</span>
         </div>
         <div className="mcp-spotlight-stat">
           <span className="mcp-spotlight-stat-value">{activeTokens}</span>
@@ -78,4 +84,3 @@ export function McpSpotlight({
 }
 
 export default McpSpotlight;
-

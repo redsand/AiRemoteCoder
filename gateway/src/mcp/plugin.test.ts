@@ -400,6 +400,47 @@ describe('GET /api/mcp/tokens', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests: GET /api/mcp/sessions
+// ---------------------------------------------------------------------------
+
+describe('GET /api/mcp/sessions', () => {
+  it('returns 401 without session', async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/api/mcp/sessions' });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('returns active session list for authenticated user', async () => {
+    const app = await buildApp();
+
+    await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: { authorization: 'Bearer valid-token' },
+      payload: {
+        jsonrpc: '2.0',
+        method: 'initialize',
+        id: 1,
+        params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1.0.0' } },
+      },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/sessions',
+      cookies: { session: 'valid-session' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body.sessions)).toBe(true);
+    expect(body.total).toBeGreaterThanOrEqual(1);
+
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: DELETE /api/mcp/tokens/:id
 // ---------------------------------------------------------------------------
 

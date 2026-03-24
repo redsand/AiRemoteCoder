@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useToast } from '../components/ui';
 import McpProviderGrid from '../components/mcp/McpProviderGrid';
 import { MCP_PROVIDERS, type McpProviderKey } from '../features/mcp/providers';
-import type { McpConfig, McpProjectTarget, McpProviderSetupState, McpSetupStatus, McpToken } from '../features/mcp/types';
+import type { McpActiveSession, McpConfig, McpProjectTarget, McpProviderSetupState, McpSetupStatus, McpToken } from '../features/mcp/types';
 
 interface Props {
   user: { id: string; username: string; role: string } | null;
@@ -22,6 +22,8 @@ export function McpSettings(_props: Props) {
   const [newTargetLabel, setNewTargetLabel] = useState('');
   const [currentDeviceId, setCurrentDeviceId] = useState<string | null>(null);
   const [setupStatus, setSetupStatus] = useState<Record<string, McpSetupStatus>>({});
+  const [activeSessionCount, setActiveSessionCount] = useState(0);
+  const [activeSessions, setActiveSessions] = useState<McpActiveSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'connect' | 'tokens' | 'test'>('connect');
   const [installingProvider, setInstallingProvider] = useState<McpProviderKey | null>(null);
@@ -63,6 +65,7 @@ export function McpSettings(_props: Props) {
       ]);
       const targetsRes = await fetch('/api/mcp/project-targets');
       const meRes = await fetch('/api/auth/me');
+      const sessionsRes = await fetch('/api/mcp/sessions');
       if (configRes.ok) {
         const config = (await configRes.json()) as McpConfig;
         setMcpConfig(config);
@@ -74,6 +77,12 @@ export function McpSettings(_props: Props) {
       if (meRes.ok) {
         const me = await meRes.json();
         setCurrentDeviceId(me.deviceId ?? null);
+      }
+      if (sessionsRes.ok) {
+        const sessions = await sessionsRes.json();
+        const list = Array.isArray(sessions.sessions) ? sessions.sessions : [];
+        setActiveSessionCount(list.length);
+        setActiveSessions(list);
       }
     } catch {
       addToast('error', 'Failed to load MCP configuration');
@@ -110,44 +119,11 @@ export function McpSettings(_props: Props) {
       }
 
       const setup = await setupRes.json();
-      if (setup.canAutoInstall) {
-        const installRes = await fetch(`/api/mcp/setup/${providerKey}/install`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: setup.token, ...targetPayload }),
-        });
-        const install = await installRes.json();
-
-        if (installRes.ok && install.installed) {
-          setProviderSetup((prev) => ({
-            ...prev,
-            [providerKey]: {
-              token: setup.token,
-              snippet: setup.snippet,
-              filePath: install.filePath,
-              installed: true,
-            },
-          }));
-          addToast('success', `${providerKey} MCP config installed at ${install.filePath}`);
-        } else {
-          setProviderSetup((prev) => ({
-            ...prev,
-            [providerKey]: {
-              token: setup.token,
-              snippet: setup.snippet,
-              filePath: install.filePath,
-              installed: false,
-              error: install.error,
-            },
-          }));
-          addToast('warning', 'Auto-install failed. Use manual config below.');
-        }
-      } else {
-        setProviderSetup((prev) => ({
-          ...prev,
-          [providerKey]: { token: setup.token, snippet: setup.snippet, filePath: null, installed: false },
-        }));
-      }
+      setProviderSetup((prev) => ({
+        ...prev,
+        [providerKey]: { token: setup.token, snippet: setup.snippet, filePath: null, installed: false },
+      }));
+      addToast('success', `${providerKey} setup snippet generated. Copy it into your project config.`);
 
       const statusRes = await fetch(`/api/mcp/setup/status${buildTargetQuery()}`);
       if (statusRes.ok) setSetupStatus((await statusRes.json()).status ?? {});
@@ -244,7 +220,7 @@ export function McpSettings(_props: Props) {
   }
 
   const activeTokens = tokens.filter((token) => !token.revoked_at);
-  const connectedCount = Object.values(setupStatus).filter((status) => status.hasAiRemoteCoder).length;
+  const configuredCount = Object.values(setupStatus).filter((status) => status.hasAiRemoteCoder).length;
   const providerCount = MCP_PROVIDERS.length;
 
   return (
@@ -260,8 +236,12 @@ export function McpSettings(_props: Props) {
         </div>
         <div className="mcp-hero-stats">
           <div className="hero-stat">
-            <span className="hero-stat-value">{connectedCount}</span>
-            <span className="hero-stat-label">agents connected</span>
+            <span className="hero-stat-value">{activeSessionCount}</span>
+            <span className="hero-stat-label">active mcp sessions</span>
+          </div>
+          <div className="hero-stat">
+            <span className="hero-stat-value">{configuredCount}</span>
+            <span className="hero-stat-label">configured environments</span>
           </div>
           <div className="hero-stat">
             <span className="hero-stat-value">{activeTokens.length}</span>
@@ -347,7 +327,7 @@ export function McpSettings(_props: Props) {
                   </button>
                 </div>
                 <p className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
-                  Auto-install applies to the selected target. This enables multi-project and multi-machine MCP setup.
+                  Generate a provider snippet, copy it into your project config, then launch Claude/Codex/Gemini/OpenCode/Zenflow in that project.
                 </p>
                 {currentDeviceId ? (
                   <p className="text-muted" style={{ marginTop: '6px', fontSize: '12px' }}>
@@ -357,9 +337,28 @@ export function McpSettings(_props: Props) {
               </div>
 
               <p className="text-muted section-intro">
-                Auto-install is available for every supported coding environment.
-                Click a provider card to configure MCP immediately or copy the snippet manually.
+                Manual setup is the default: generate a snippet, paste it in the target project, and run your coding agent in that project context.
               </p>
+
+              <div className="card" style={{ marginBottom: '12px' }}>
+                <h3>Active MCP Sessions</h3>
+                {activeSessions.length === 0 ? (
+                  <p className="text-muted" style={{ fontSize: '12px' }}>No active MCP sessions currently connected.</p>
+                ) : (
+                  <div className="provider-status-grid">
+                    {activeSessions.map((session) => (
+                      <div key={session.id} className="provider-status-item">
+                        <span>
+                          {session.user.username} ({session.user.role})
+                        </span>
+                        <span className="text-muted" style={{ fontSize: '11px' }}>
+                          last seen {new Date(session.lastSeenAt * 1000).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <McpProviderGrid
                 mcpConfig={mcpConfig}

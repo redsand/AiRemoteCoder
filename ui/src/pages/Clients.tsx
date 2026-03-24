@@ -246,6 +246,9 @@ export function Clients({ user }: Props) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           <div>
             <h2 className="page-title">Clients</h2>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Legacy wrapper clients (ai-runner). MCP-connected coding hosts are managed from the MCP page.
+            </div>
             <div
               style={{
                 display: 'flex',
@@ -273,9 +276,9 @@ export function Clients({ user }: Props) {
                 }
               }}
               disabled={!canOperate}
-              title={canOperate ? 'Create a new AI Runner' : 'Requires admin or operator role'}
+              title={canOperate ? 'Create a new legacy AI Runner client' : 'Requires admin or operator role'}
             >
-              New Runner
+              New Legacy Runner
             </button>
             <button
               className={`btn ${showDeploymentGuide ? 'btn-primary' : ''}`}
@@ -475,7 +478,7 @@ export function Clients({ user }: Props) {
                 </button>
                 {' '}for your operating system
               </li>
-              <li style={{ marginBottom: '6px' }}>Create a new AI Runner to get a client token</li>
+              <li style={{ marginBottom: '6px' }}>Create a new legacy AI Runner to get a client token</li>
               <li>Start a listener using the command below</li>
             </ol>
             <p style={{ marginBottom: '8px', marginTop: '12px' }}>

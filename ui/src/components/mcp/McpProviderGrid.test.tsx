@@ -40,7 +40,7 @@ describe('McpProviderGrid', () => {
     expect(html).toContain('OpenCode');
     expect(html).toContain('Zenflow');
     expect(html).toContain('Rev');
-    expect((html.match(/Auto-Install/g) || []).length).toBe(6);
+    expect((html.match(/Generate Snippet/g) || []).length).toBe(6);
   });
 
   it('shows reinstall and copied state when a provider is configured', () => {
@@ -68,7 +68,7 @@ describe('McpProviderGrid', () => {
       />
     );
 
-    expect(html).toContain('Reinstall');
+    expect(html).toContain('Regenerate Snippet');
     expect(html).toContain('✓ Copied');
     expect(html).toContain('Token (shown once)');
   });
