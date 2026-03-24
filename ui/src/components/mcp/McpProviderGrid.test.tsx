@@ -51,6 +51,10 @@ describe('McpProviderGrid', () => {
       claude: {
         token: 'token-123',
         snippet: '{"server":"mcp"}',
+        copyPaste: {
+          bash: ['cat > .claude/mcp.json <<\'EOF\'\n{}\nEOF'],
+          powershell: ["@'\n{}\n'@ | Set-Content .claude/mcp.json"],
+        },
         filePath: '.claude/mcp.json',
         installed: true,
       },
@@ -71,5 +75,7 @@ describe('McpProviderGrid', () => {
     expect(html).toContain('Regenerate Snippet');
     expect(html).toContain('✓ Copied');
     expect(html).toContain('Token (shown once)');
+    expect(html).toContain('Bash copy/paste');
+    expect(html).toContain('PowerShell copy/paste');
   });
 });

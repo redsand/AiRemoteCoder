@@ -53,6 +53,11 @@ interface SetupBody {
   projectPath?: string;
 }
 
+interface CopyPasteCommands {
+  bash: string[];
+  powershell: string[];
+}
+
 function normalizeProjectPath(inputPath: string): string {
   const absolute = isAbsolute(inputPath)
     ? inputPath
@@ -127,66 +132,198 @@ function buildSnippet(provider: SupportedProvider, mcpUrl: string, token: string
   filePath: string | null;
   fileFormat: 'json' | 'env' | 'text';
   instructions: string;
+  copyPaste: CopyPasteCommands;
 } {
+  const quotedUrl = mcpUrl.replace(/"/g, '\\"');
+  const quotedToken = token.replace(/"/g, '\\"');
+  const jsonCopyPaste = (
+    filePath: string,
+    snippetObject: Record<string, unknown>
+  ): CopyPasteCommands => {
+    const rendered = JSON.stringify(snippetObject, null, 2);
+    return {
+      bash: [
+        `mkdir -p "${dirname(filePath).replace(/\\/g, '/')}"\ncat > ${filePath} <<'EOF'\n${rendered}\nEOF`,
+      ],
+      powershell: [
+        `$path = "${filePath.replace(/\//g, '\\\\')}"\nNew-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null\n@'\n${rendered}\n'@ | Set-Content -Path $path -Encoding utf8`,
+      ],
+    };
+  };
+
   switch (provider) {
     case 'claude':
-    case 'zenflow':
-      return {
-        snippet: {
-          mcpServers: {
-            airemotecoder: {
-              type: 'http',
-              url: mcpUrl,
-              headers: { Authorization: `Bearer ${token}` },
-            },
+    case 'zenflow': {
+      const snippet = {
+        mcpServers: {
+          airemotecoder: {
+            type: 'http',
+            url: mcpUrl,
+            headers: { Authorization: `Bearer ${token}` },
           },
         },
-        filePath: provider === 'zenflow' ? '.zenflow/mcp.json' : '.claude/mcp.json',
+      };
+      const filePath = provider === 'zenflow' ? '.zenflow/mcp.json' : '.claude/mcp.json';
+      return {
+        snippet,
+        filePath,
         fileFormat: 'json',
         instructions: provider === 'zenflow'
           ? 'Add to .zenflow/mcp.json in your project root. Zenflow will pick it up automatically.'
           : 'Add to .claude/mcp.json in your project root. Claude Code will pick it up automatically.',
+        copyPaste: jsonCopyPaste(filePath, snippet),
       };
+    }
 
-    case 'codex':
+    case 'codex': {
+      const codexSnippet = `# Preferred (Codex MCP registry command)
+codex mcp add airemotecoder --url ${mcpUrl}
+
+# Token for this setup (current shell/session)
+AIREMOTECODER_MCP_TOKEN=${token}
+
+# Bash one-shot: overwrite ~/.codex/config.toml with AiRemoteCoder only
+mkdir -p ~/.codex
+cat > ~/.codex/config.toml <<'EOF'
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+EOF
+
+# Bash one-shot: replace only the airemotecoder block, keep other MCP servers
+mkdir -p ~/.codex
+touch ~/.codex/config.toml
+awk '
+BEGIN { skip=0 }
+$0 ~ /^\\[mcp_servers\\.airemotecoder\\]/ { skip=1; next }
+$0 ~ /^\\[/ { if (skip==1) skip=0 }
+skip==0 { print }
+' ~/.codex/config.toml > ~/.codex/config.toml.tmp
+mv ~/.codex/config.toml.tmp ~/.codex/config.toml
+cat >> ~/.codex/config.toml <<'EOF'
+
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+EOF
+
+# PowerShell one-shot: overwrite $HOME\\.codex\\config.toml with AiRemoteCoder only
+$configDir = Join-Path $HOME ".codex"
+New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+@'
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+'@ | Set-Content -Path (Join-Path $configDir "config.toml") -Encoding utf8
+
+# PowerShell one-shot: replace only the airemotecoder block
+$configDir = Join-Path $HOME ".codex"
+$configPath = Join-Path $configDir "config.toml"
+New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+if (!(Test-Path $configPath)) { New-Item -ItemType File -Path $configPath | Out-Null }
+$content = Get-Content -Raw -Path $configPath
+$content = [regex]::Replace($content, "(?ms)\\n?\\[mcp_servers\\.airemotecoder\\].*?(?=\\n\\[|$)", "")
+Set-Content -Path $configPath -Value $content -Encoding utf8
+@'
+
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+'@ | Add-Content -Path $configPath -Encoding utf8`;
       return {
-        snippet: `# Preferred (Codex MCP registry command)\ncodex mcp add airemotecoder --url ${mcpUrl}\n\n# Optional example: GitHub MCP server\ncodex mcp add github --url https://api.githubcopilot.com/mcp/\n\n# Fallback (env-based remote MCP)\nMCP_SERVER_URL=${mcpUrl}\nMCP_SERVER_TOKEN=${token}`,
+        snippet: codexSnippet,
         filePath: null, // env var — no standard file
         fileFormat: 'env',
-        instructions: 'Use codex mcp add if available in your Codex build. Otherwise export MCP_SERVER_URL and MCP_SERVER_TOKEN before running codex.',
-      };
+        instructions: 'Use codex mcp add if available, then set AIREMOTECODER_MCP_TOKEN. Use the Bash/PowerShell one-shot commands to overwrite or surgically replace only the airemotecoder config block.',
+        copyPaste: {
+          bash: [
+            `export AIREMOTECODER_MCP_TOKEN="${quotedToken}"\ncodex mcp add airemotecoder --url ${mcpUrl}`,
+            `mkdir -p ~/.codex
+cat > ~/.codex/config.toml <<'EOF'
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+EOF`,
+            `mkdir -p ~/.codex
+touch ~/.codex/config.toml
+awk '
+BEGIN { skip=0 }
+$0 ~ /^\\[mcp_servers\\.airemotecoder\\]/ { skip=1; next }
+$0 ~ /^\\[/ { if (skip==1) skip=0 }
+skip==0 { print }
+' ~/.codex/config.toml > ~/.codex/config.toml.tmp
+mv ~/.codex/config.toml.tmp ~/.codex/config.toml
+cat >> ~/.codex/config.toml <<'EOF'
 
-    case 'gemini':
-      return {
-        snippet: {
-          mcpServers: {
-            airemotecoder: {
-              httpUrl: mcpUrl,
-              headers: { Authorization: `Bearer ${token}` },
-            },
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+EOF`,
+          ],
+          powershell: [
+            `$env:AIREMOTECODER_MCP_TOKEN="${quotedToken}"\ncodex mcp add airemotecoder --url ${mcpUrl}`,
+            `$configDir = Join-Path $HOME ".codex"
+New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+@'
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+'@ | Set-Content -Path (Join-Path $configDir "config.toml") -Encoding utf8`,
+            `$configDir = Join-Path $HOME ".codex"
+$configPath = Join-Path $configDir "config.toml"
+New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+if (!(Test-Path $configPath)) { New-Item -ItemType File -Path $configPath | Out-Null }
+$content = Get-Content -Raw -Path $configPath
+$content = [regex]::Replace($content, "(?ms)\\n?\\[mcp_servers\\.airemotecoder\\].*?(?=\\n\\[|$)", "")
+Set-Content -Path $configPath -Value $content -Encoding utf8
+@'
+
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+'@ | Add-Content -Path $configPath -Encoding utf8`,
+          ],
+        },
+      };
+    }
+
+    case 'gemini': {
+      const snippet = {
+        mcpServers: {
+          airemotecoder: {
+            httpUrl: mcpUrl,
+            headers: { Authorization: `Bearer ${token}` },
           },
         },
+      };
+      return {
+        snippet,
         filePath: '.gemini/settings.json',
         fileFormat: 'json',
         instructions: 'Add to .gemini/settings.json in your project root.',
+        copyPaste: jsonCopyPaste('.gemini/settings.json', snippet),
       };
+    }
 
-    case 'opencode':
-      return {
-        snippet: {
-          $schema: 'https://opencode.ai/config.schema.json',
-          mcp: {
-            airemotecoder: {
-              type: 'remote',
-              url: mcpUrl,
-              headers: { Authorization: `Bearer ${token}` },
-            },
+    case 'opencode': {
+      const snippet = {
+        $schema: 'https://opencode.ai/config.schema.json',
+        mcp: {
+          airemotecoder: {
+            type: 'remote',
+            url: mcpUrl,
+            headers: { Authorization: `Bearer ${token}` },
           },
         },
+      };
+      return {
+        snippet,
         filePath: 'opencode.json',
         fileFormat: 'json',
         instructions: 'Add the mcp.airemotecoder key to your opencode.json config.',
+        copyPaste: jsonCopyPaste('opencode.json', snippet),
       };
+    }
 
     case 'rev':
       return {
@@ -194,6 +331,16 @@ function buildSnippet(provider: SupportedProvider, mcpUrl: string, token: string
         filePath: null,
         fileFormat: 'env',
         instructions: 'Export these environment variables before running rev.',
+        copyPaste: {
+          bash: [
+            `export AIRC_MCP_URL="${mcpUrl}"
+export AIRC_MCP_TOKEN="${token}"`,
+          ],
+          powershell: [
+            `$env:AIRC_MCP_URL="${quotedUrl}"
+$env:AIRC_MCP_TOKEN="${quotedToken}"`,
+          ],
+        },
       };
   }
 }
@@ -251,12 +398,13 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
         return reply.code(resolved.statusCode).send({ error: resolved.error });
       }
 
-      const proto = config.tlsEnabled ? 'https' : 'http';
+      const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
+      const proto = forwardedProto || (req.protocol ?? (config.tlsEnabled ? 'https' : 'http'));
       const host = req.headers.host || `localhost:${config.port}`;
       const mcpUrl = `${proto}://${host}${config.mcpPath}`;
 
       const { rawToken } = getOrCreateAgentToken(req.user!.id, provider as SupportedProvider);
-      const { snippet, filePath, fileFormat, instructions } = buildSnippet(
+      const { snippet, filePath, fileFormat, instructions, copyPaste } = buildSnippet(
         provider as SupportedProvider,
         mcpUrl,
         rawToken
@@ -269,6 +417,7 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
         projectTargetId: resolved.projectTargetId,
         mcpUrl,
         snippet,
+        copyPaste,
         filePath,
         fileFormat,
         instructions,
@@ -301,10 +450,11 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
         return reply.code(resolved.statusCode).send({ error: resolved.error });
       }
 
-      const proto = config.tlsEnabled ? 'https' : 'http';
+      const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
+      const proto = forwardedProto || (req.protocol ?? (config.tlsEnabled ? 'https' : 'http'));
       const host = req.headers.host || `localhost:${config.port}`;
       const mcpUrl = `${proto}://${host}${config.mcpPath}`;
-      const { snippet, filePath, fileFormat, instructions } = buildSnippet(
+      const { snippet, filePath, fileFormat, instructions, copyPaste } = buildSnippet(
         provider as SupportedProvider,
         mcpUrl,
         token
@@ -317,6 +467,7 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
           installed: false,
           reason: 'This provider uses environment variables, not a config file.',
           snippet,
+          copyPaste,
           instructions,
           token,
         });
@@ -352,6 +503,7 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
           projectDir: resolved.projectDir,
           projectTargetId: resolved.projectTargetId,
           filePath: targetPath,
+          copyPaste,
           instructions,
           token,
           message: `Config written to ${targetPath}`,

@@ -201,7 +201,8 @@ export async function mcpPlugin(fastify: FastifyInstance) {
   // Used by the UI to show connection instructions and one-click setup.
   // -------------------------------------------------------------------------
   fastify.get('/api/mcp/config', async (req, reply) => {
-    const proto = config.tlsEnabled ? 'https' : 'http';
+    const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
+    const proto = forwardedProto || (req.protocol ?? (config.tlsEnabled ? 'https' : 'http'));
     const host = req.headers.host || `localhost:${config.port}`;
     const mcpUrl = `${proto}://${host}${config.mcpPath}`;
 
@@ -374,16 +375,59 @@ function buildConnectionInstructions(mcpUrl: string): Record<string, object> {
       },
     },
     codex: {
-      description: 'Codex MCP setup (CLI command preferred; env fallback supported)',
+      description: 'Codex MCP setup (AiRemoteCoder only)',
       commands: [
         `codex mcp add airemotecoder --url ${mcpUrl}`,
-        'codex mcp add github --url https://api.githubcopilot.com/mcp/',
       ],
-      env: {
-        MCP_SERVER_URL: mcpUrl,
-        MCP_SERVER_TOKEN: '<YOUR_MCP_TOKEN>',
+      bash: {
+        overwriteFile: `mkdir -p ~/.codex
+cat > ~/.codex/config.toml <<'EOF'
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+EOF`,
+        replaceBlock: `mkdir -p ~/.codex
+touch ~/.codex/config.toml
+awk '
+BEGIN { skip=0 }
+$0 ~ /^\\[mcp_servers\\.airemotecoder\\]/ { skip=1; next }
+$0 ~ /^\\[/ { if (skip==1) skip=0 }
+skip==0 { print }
+' ~/.codex/config.toml > ~/.codex/config.toml.tmp
+mv ~/.codex/config.toml.tmp ~/.codex/config.toml
+cat >> ~/.codex/config.toml <<'EOF'
+
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+EOF`,
       },
-      note: 'If your Codex build supports MCP registry commands, use codex mcp add. Use MCP_SERVER_* env vars as fallback for tokenized remote MCP.',
+      powershell: {
+        overwriteFile: `$configDir = Join-Path $HOME ".codex"
+New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+@'
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+'@ | Set-Content -Path (Join-Path $configDir "config.toml") -Encoding utf8`,
+        replaceBlock: `$configDir = Join-Path $HOME ".codex"
+$configPath = Join-Path $configDir "config.toml"
+New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+if (!(Test-Path $configPath)) { New-Item -ItemType File -Path $configPath | Out-Null }
+$content = Get-Content -Raw -Path $configPath
+$content = [regex]::Replace($content, "(?ms)\\n?\\[mcp_servers\\.airemotecoder\\].*?(?=\\n\\[|$)", "")
+Set-Content -Path $configPath -Value $content -Encoding utf8
+@'
+
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+'@ | Add-Content -Path $configPath -Encoding utf8`,
+      },
+      env: {
+        AIREMOTECODER_MCP_TOKEN: '<YOUR_MCP_TOKEN>',
+      },
+      note: 'Set AIREMOTECODER_MCP_TOKEN in your shell/session before starting codex. Use overwriteFile for a clean reset or replaceBlock to update only the airemotecoder entry.',
     },
     gemini_cli: {
       description: 'Add to gemini settings.json',

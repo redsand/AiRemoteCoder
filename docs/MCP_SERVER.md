@@ -367,6 +367,67 @@ Return current gateway policy.
 See `GET /api/mcp/config` or the UI at `/mcp` for provider-specific
 connection snippets that are pre-filled with your gateway's URL.
 
+### One-shot install snippets (copy/paste)
+
+For every provider, use:
+
+- `POST /api/mcp/setup/:provider` to generate token + snippet + copy/paste commands
+- `POST /api/mcp/setup/:provider/install` if that provider supports file auto-install
+
+Codex examples are AiRemoteCoder-only:
+
+```bash
+# shell token for this session
+export AIREMOTECODER_MCP_TOKEN="<YOUR_MCP_TOKEN>"
+codex mcp add airemotecoder --url http://localhost:3100/mcp
+```
+
+```bash
+# overwrite ~/.codex/config.toml with only AiRemoteCoder MCP
+mkdir -p ~/.codex
+cat > ~/.codex/config.toml <<'EOF'
+[mcp_servers.airemotecoder]
+url = "http://localhost:3100/mcp"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+EOF
+```
+
+```bash
+# replace only airemotecoder block; keep other entries
+mkdir -p ~/.codex
+touch ~/.codex/config.toml
+awk '
+BEGIN { skip=0 }
+$0 ~ /^\[mcp_servers\.airemotecoder\]/ { skip=1; next }
+$0 ~ /^\[/ { if (skip==1) skip=0 }
+skip==0 { print }
+' ~/.codex/config.toml > ~/.codex/config.toml.tmp
+mv ~/.codex/config.toml.tmp ~/.codex/config.toml
+cat >> ~/.codex/config.toml <<'EOF'
+
+[mcp_servers.airemotecoder]
+url = "http://localhost:3100/mcp"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+EOF
+```
+
+```powershell
+# shell token for this session
+$env:AIREMOTECODER_MCP_TOKEN="<YOUR_MCP_TOKEN>"
+codex mcp add airemotecoder --url http://localhost:3100/mcp
+```
+
+```powershell
+# overwrite $HOME\.codex\config.toml with only AiRemoteCoder MCP
+$configDir = Join-Path $HOME ".codex"
+New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+@'
+[mcp_servers.airemotecoder]
+url = "http://localhost:3100/mcp"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+'@ | Set-Content -Path (Join-Path $configDir "config.toml") -Encoding utf8
+```
+
 Quick test:
 ```bash
 curl -X POST https://your-gateway:3100/mcp \

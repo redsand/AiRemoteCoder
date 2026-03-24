@@ -39,6 +39,10 @@ export interface McpSetupStatus {
 export interface McpProviderSetupState {
   token?: string;
   snippet?: object | string;
+  copyPaste?: {
+    bash?: string[];
+    powershell?: string[];
+  };
   filePath?: string | null;
   installed?: boolean;
   error?: string;

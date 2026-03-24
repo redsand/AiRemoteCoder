@@ -121,7 +121,13 @@ export function McpSettings(_props: Props) {
       const setup = await setupRes.json();
       setProviderSetup((prev) => ({
         ...prev,
-        [providerKey]: { token: setup.token, snippet: setup.snippet, filePath: null, installed: false },
+        [providerKey]: {
+          token: setup.token,
+          snippet: setup.snippet,
+          copyPaste: setup.copyPaste,
+          filePath: null,
+          installed: false,
+        },
       }));
       addToast('success', `${providerKey} setup snippet generated. Copy it into your project config.`);
 
@@ -253,7 +259,7 @@ export function McpSettings(_props: Props) {
           </div>
           <div className={`hero-stat-status ${mcpConfig?.enabled ? 'online' : 'offline'}`}>
             <span className="status-dot" />
-            <span>{mcpConfig?.enabled ? 'MCP Active' : 'MCP Disabled'}</span>
+            <span>{mcpConfig?.enabled ? 'MCP Enabled' : 'MCP Disabled'}</span>
           </div>
         </div>
       </div>

@@ -13,7 +13,7 @@ interface Props {
 
 function ProviderStatusBadge({ status }: { status?: McpSetupStatus }) {
   if (!status) return <span className="provider-badge neutral">not configured</span>;
-  if (status.hasAiRemoteCoder) return <span className="provider-badge success">✓ connected</span>;
+  if (status.hasAiRemoteCoder) return <span className="provider-badge success">✓ configured</span>;
   if (status.exists) return <span className="provider-badge warn">file exists, not configured</span>;
   return <span className="provider-badge neutral">not configured</span>;
 }
@@ -111,6 +111,34 @@ export function McpProviderGrid({
                     )}
                   </div>
                 )}
+                {setup.copyPaste?.bash?.length ? (
+                  <div className="snippet-block">
+                    <div className="snippet-header">
+                      <span className="text-muted">Bash copy/paste</span>
+                      <button
+                        className="btn-icon"
+                        onClick={() => onCopy(setup.copyPaste!.bash!.join('\n\n'), `bash-${provider.key}`)}
+                      >
+                        {copiedField === `bash-${provider.key}` ? '✓ Copied' : '⧉ Copy'}
+                      </button>
+                    </div>
+                    <pre className="code-block">{setup.copyPaste.bash.join('\n\n')}</pre>
+                  </div>
+                ) : null}
+                {setup.copyPaste?.powershell?.length ? (
+                  <div className="snippet-block">
+                    <div className="snippet-header">
+                      <span className="text-muted">PowerShell copy/paste</span>
+                      <button
+                        className="btn-icon"
+                        onClick={() => onCopy(setup.copyPaste!.powershell!.join('\n\n'), `powershell-${provider.key}`)}
+                      >
+                        {copiedField === `powershell-${provider.key}` ? '✓ Copied' : '⧉ Copy'}
+                      </button>
+                    </div>
+                    <pre className="code-block">{setup.copyPaste.powershell.join('\n\n')}</pre>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

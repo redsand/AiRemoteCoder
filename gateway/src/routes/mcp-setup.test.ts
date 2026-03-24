@@ -194,11 +194,36 @@ describe('mcpSetupRoutes', () => {
     });
 
     expect(installRes.statusCode).toBe(200);
-    const install = installRes.json() as { installed: boolean; snippet: string; token: string };
+    const install = installRes.json() as {
+      installed: boolean;
+      snippet: string;
+      token: string;
+      copyPaste?: { bash?: string[]; powershell?: string[] };
+    };
     expect(install.installed).toBe(false);
-    expect(install.snippet).toContain('MCP_SERVER_URL=');
-    expect(install.snippet).toContain(`MCP_SERVER_TOKEN=${setup.token}`);
+    expect(install.snippet).toContain('AIREMOTECODER_MCP_TOKEN=');
+    expect(install.snippet).toContain(`AIREMOTECODER_MCP_TOKEN=${setup.token}`);
+    expect(install.copyPaste?.bash?.length ?? 0).toBeGreaterThan(0);
+    expect(install.copyPaste?.powershell?.length ?? 0).toBeGreaterThan(0);
     expect(install.token).toBe(setup.token);
+
+    await app.close();
+  });
+
+  it('returns copy/paste commands for json-backed providers', async () => {
+    const app = await buildApp();
+
+    const setupRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude',
+    });
+
+    expect(setupRes.statusCode).toBe(200);
+    const setup = setupRes.json() as {
+      copyPaste?: { bash?: string[]; powershell?: string[] };
+    };
+    expect(setup.copyPaste?.bash?.length ?? 0).toBeGreaterThan(0);
+    expect(setup.copyPaste?.powershell?.length ?? 0).toBeGreaterThan(0);
 
     await app.close();
   });
