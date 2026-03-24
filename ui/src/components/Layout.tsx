@@ -19,6 +19,7 @@ const navItems: NavItem[] = [
   { path: '/runs', label: 'Runs', icon: '\uD83D\uDCCB', activeIcon: '\uD83D\uDCCB' },
   { path: '/clients', label: 'Clients', icon: '\uD83D\uDCBB', activeIcon: '\uD83D\uDCBB' },
   { path: '/alerts', label: 'Alerts', icon: '\uD83D\uDD14', activeIcon: '\uD83D\uDD14' },
+  { path: '/mcp', label: 'MCP', icon: '\uD83D\uDD0C', activeIcon: '\uD83D\uDD0C' },
   { path: '/settings', label: 'Settings', icon: '\u2699\uFE0F', activeIcon: '\u2699\uFE0F' },
 ];
 
@@ -54,6 +55,7 @@ export function Layout({ user, onLogout, children }: LayoutProps) {
     if (path.startsWith('/clients/')) return 'Client Details';
     if (path === '/clients') return 'Clients';
     if (path === '/alerts') return 'Alerts';
+    if (path === '/mcp') return 'MCP Control Plane';
     if (path === '/settings') return 'Settings';
     return 'Connect-Back Gateway';
   };

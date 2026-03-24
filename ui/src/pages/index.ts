@@ -5,3 +5,4 @@ export { Clients } from './Clients';
 export { ClientDetailPage } from './ClientDetail';
 export { Alerts } from './Alerts';
 export { Settings } from './Settings';
+export { McpSettings } from './McpSettings';

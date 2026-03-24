@@ -21,6 +21,8 @@ import { dashboardRoutes } from './routes/dashboard.js';
 import { modelsRoutes } from './routes/models.js';
 import { vncRoutes } from './routes/vnc.js';
 import { rawBodyPlugin } from './middleware/auth.js';
+import { mcpPlugin } from './mcp/plugin.js';
+import { mcpSetupRoutes } from './routes/mcp-setup.js';
 
 // Validate configuration
 validateConfig();
@@ -89,6 +91,8 @@ await fastify.register(fastifyRateLimit, {
     const url = request.raw.url || '';
     if (url.startsWith('/ws/vnc/')) return true;
     if (/^\/api\/runs\/[^/]+\/vnc/.test(url)) return true;
+    // MCP has its own rate limit applied inside mcpPlugin
+    if (url === config.mcpPath || url.startsWith(config.mcpPath + '?')) return true;
     return false;
   },
   keyGenerator: (request) => {
@@ -150,6 +154,11 @@ await fastify.register(alertsRoutes);
 await fastify.register(dashboardRoutes);
 await fastify.register(modelsRoutes);
 await fastify.register(vncRoutes);
+
+// MCP control plane (additive — does nothing if AIRC_MCP_ENABLED=false)
+await fastify.register(mcpPlugin);
+// MCP provider setup / auto-install routes
+await fastify.register(mcpSetupRoutes);
 
 // Health check
 fastify.get('/api/health', async () => {

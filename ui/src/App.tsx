@@ -10,6 +10,7 @@ import {
   ClientDetailPage,
   Alerts,
   Settings,
+  McpSettings,
 } from './pages';
 import Login from './components/Login';
 import Setup from './components/Setup';
@@ -106,6 +107,9 @@ function App() {
 
             {/* Alerts */}
             <Route path="/alerts" element={<Alerts user={user} />} />
+
+            {/* MCP Control Plane */}
+            <Route path="/mcp" element={<McpSettings user={user} />} />
 
             {/* Settings */}
             <Route path="/settings" element={<Settings user={user} onLogout={handleLogout} />} />

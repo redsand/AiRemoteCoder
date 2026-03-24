@@ -194,6 +194,42 @@ db.exec(`
     environment TEXT,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+
+  -- MCP API tokens (separate from UI session tokens)
+  -- Each token is scoped, supports expiry, and is linked to a user.
+  CREATE TABLE IF NOT EXISTS mcp_tokens (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT UNIQUE NOT NULL,
+    label TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    scopes TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    expires_at INTEGER,
+    last_used_at INTEGER,
+    revoked_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_mcp_tokens_token_hash ON mcp_tokens(token_hash);
+  CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user_id ON mcp_tokens(user_id);
+
+  -- Approval requests — formal gates for dangerous/irreversible agent actions.
+  -- Replaces ad-hoc prompt_waiting event scanning with a structured flow.
+  CREATE TABLE IF NOT EXISTS approval_requests (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    session_id TEXT,
+    description TEXT NOT NULL,
+    action TEXT NOT NULL,           -- JSON: structured action the agent wants to take
+    status TEXT NOT NULL DEFAULT 'pending',
+    requested_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    resolved_at INTEGER,
+    resolved_by TEXT,
+    resolution TEXT,                -- free-text rationale
+    timeout_seconds INTEGER NOT NULL DEFAULT 300,
+    provider_correlation_id TEXT    -- lets the adapter unblock when resolved
+  );
+  CREATE INDEX IF NOT EXISTS idx_approval_requests_run_id ON approval_requests(run_id);
+  CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(status);
+  CREATE INDEX IF NOT EXISTS idx_approval_requests_requested_at ON approval_requests(requested_at);
 `);
 
 function ensureColumn(table: string, column: string, type: string): void {
@@ -213,6 +249,66 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_runs_claimed_by ON runs(claimed_by);
   CREATE INDEX IF NOT EXISTS idx_runs_claimed_at ON runs(claimed_at);
 `);
+
+// ---------------------------------------------------------------------------
+// MCP token helpers
+// ---------------------------------------------------------------------------
+
+/** Look up a valid (non-revoked, non-expired) MCP token by its SHA-256 hash. */
+export function findMcpToken(tokenHash: string): {
+  id: string;
+  label: string;
+  userId: string;
+  scopes: string[];
+} | undefined {
+  const row = db.prepare(`
+    SELECT id, label, user_id, scopes
+    FROM mcp_tokens
+    WHERE token_hash = ?
+      AND revoked_at IS NULL
+      AND (expires_at IS NULL OR expires_at > unixepoch())
+  `).get(tokenHash) as { id: string; label: string; user_id: string; scopes: string } | undefined;
+
+  if (!row) return undefined;
+
+  db.prepare('UPDATE mcp_tokens SET last_used_at = unixepoch() WHERE id = ?').run(row.id);
+
+  return {
+    id: row.id,
+    label: row.label,
+    userId: row.user_id,
+    scopes: JSON.parse(row.scopes) as string[],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Approval request helpers
+// ---------------------------------------------------------------------------
+
+/** Expire timed-out approval requests and update the parent run's waiting_approval flag. */
+export function expireTimedOutApprovals(): number {
+  const now = Math.floor(Date.now() / 1000);
+  const result = db.prepare(`
+    UPDATE approval_requests
+    SET status = 'timed_out', resolved_at = ?
+    WHERE status = 'pending'
+      AND timeout_seconds > 0
+      AND (requested_at + timeout_seconds) < ?
+  `).run(now, now);
+
+  if (result.changes > 0) {
+    // Clear waiting_approval on runs that no longer have pending approvals
+    db.prepare(`
+      UPDATE runs SET waiting_approval = 0
+      WHERE waiting_approval = 1
+        AND id NOT IN (
+          SELECT DISTINCT run_id FROM approval_requests WHERE status = 'pending'
+        )
+    `).run();
+  }
+
+  return result.changes;
+}
 
 // Helper functions
 export function cleanupExpiredNonces(): number {
@@ -266,4 +362,5 @@ setInterval(() => {
   cleanupExpiredNonces();
   cleanupExpiredSessions();
   updateClientStatus();
+  expireTimedOutApprovals();
 }, 60000); // Every minute

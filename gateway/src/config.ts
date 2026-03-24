@@ -55,6 +55,29 @@ export const config = {
   // Retention
   runRetentionDays: parseInt(process.env.RUN_RETENTION_DAYS || '30', 10),
 
+  // MCP Control Plane feature flags
+  mcpEnabled: process.env.AIRC_MCP_ENABLED !== 'false', // default ON
+  mcpPath: process.env.AIRC_MCP_PATH || '/mcp',
+  mcpTokenExpirySeconds: parseInt(process.env.AIRC_MCP_TOKEN_EXPIRY || '0', 10), // 0 = never expire
+  mcpRateLimit: {
+    max: parseInt(process.env.AIRC_MCP_RATE_LIMIT_MAX || '300', 10),
+    timeWindow: process.env.AIRC_MCP_RATE_LIMIT_WINDOW || '1 minute'
+  },
+
+  // Provider adapter flags (all default ON so any adapter can be used)
+  providers: {
+    claude:    process.env.AIRC_PROVIDER_CLAUDE    !== 'false',
+    codex:     process.env.AIRC_PROVIDER_CODEX     !== 'false',
+    gemini:    process.env.AIRC_PROVIDER_GEMINI    !== 'false',
+    opencode:  process.env.AIRC_PROVIDER_OPENCODE  !== 'false',
+    rev:       process.env.AIRC_PROVIDER_REV       !== 'false',
+    /** @deprecated Legacy stdio/pipe wrapper — scheduled for removal in next major release */
+    legacyWrapper: process.env.AIRC_LEGACY_WRAPPERS_ENABLED !== 'false',
+  },
+
+  // Approval request defaults
+  approvalTimeoutSeconds: parseInt(process.env.AIRC_APPROVAL_TIMEOUT || '300', 10), // 5 min
+
   // Allowlisted commands (can be extended via env)
   allowlistedCommands: [
     // Test commands
