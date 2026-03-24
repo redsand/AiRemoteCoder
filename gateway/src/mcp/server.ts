@@ -20,6 +20,7 @@ import { broadcastToRun } from '../services/websocket.js';
 import { config } from '../config.js';
 import { assertScopes, type McpAuthContext } from './auth.js';
 import { createApprovalRequest, resolveApprovalRequest } from '../services/approval-workflow.js';
+import { vncTunnelManager } from '../services/vnc-tunnel.js';
 import { nanoid } from 'nanoid';
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,10 @@ function scopeError(msg: string) {
 
 function notFound(entity: string, id: string) {
   return { content: [{ type: 'text' as const, text: `${entity} not found: ${id}` }], isError: true };
+}
+
+function invalidRequest(message: string) {
+  return { content: [{ type: 'text' as const, text: message }], isError: true };
 }
 
 function ok(data: unknown) {
@@ -157,7 +162,7 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
     {
       label: z.string().optional().describe('Human-readable label'),
       command: z.string().optional().describe('Initial command or prompt for the agent'),
-      worker_type: z.enum(['claude', 'codex', 'gemini', 'opencode', 'rev', 'hands-on']).default('claude')
+      worker_type: z.enum(['claude', 'codex', 'gemini', 'opencode', 'rev', 'hands-on', 'vnc']).default('claude')
         .describe('Agent runtime to use'),
       repo_path: z.string().optional().describe('Working directory / repository path on the agent machine'),
       repo_name: z.string().optional().describe('Repository name (display only)'),
@@ -359,6 +364,131 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
       broadcastToRun(run_id, { type: 'interrupt_requested', runId: run_id });
 
       return ok({ command_id: cmdId, status: 'queued' });
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // TOOL: get_vnc_status
+  // -------------------------------------------------------------------------
+  server.tool(
+    'get_vnc_status',
+    'Get VNC tunnel and connection status for a VNC run. Scope: runs:read.',
+    {
+      run_id: z.string().describe('Target run ID'),
+    },
+    async ({ run_id }) => {
+      const ctx = getAuthContext();
+      if (!ctx) return scopeError('Authentication required');
+      const err = assertScopes(ctx, ['runs:read']);
+      if (err) return scopeError(err);
+
+      const run = db.prepare('SELECT id, worker_type FROM runs WHERE id = ?').get(run_id) as any;
+      if (!run) return notFound('run', run_id);
+      if (run.worker_type !== 'vnc') return invalidRequest('Run is not a VNC worker');
+
+      const tunnel = vncTunnelManager.getTunnel(run_id);
+      const stats = vncTunnelManager.getTunnelStats(run_id);
+
+      return ok({
+        run_id,
+        available: Boolean(tunnel),
+        status: stats?.status ?? 'disconnected',
+        client_connected: Boolean(stats?.clientConnected),
+        viewer_connected: Boolean(stats?.viewerConnected),
+        ws_url: `/ws/vnc/${run_id}`,
+        stats: stats ?? null,
+      });
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // TOOL: start_vnc_stream
+  // -------------------------------------------------------------------------
+  server.tool(
+    'start_vnc_stream',
+    'Start VNC streaming for a VNC run by enqueueing __START_VNC_STREAM__. Scope: sessions:write.',
+    {
+      run_id: z.string().describe('Target run ID'),
+    },
+    async ({ run_id }) => {
+      const ctx = getAuthContext();
+      if (!ctx) return scopeError('Authentication required');
+      const err = assertScopes(ctx, ['sessions:write']);
+      if (err) return scopeError(err);
+
+      const run = db.prepare('SELECT id, worker_type FROM runs WHERE id = ?').get(run_id) as any;
+      if (!run) return notFound('run', run_id);
+      if (run.worker_type !== 'vnc') return invalidRequest('Run is not a VNC worker');
+
+      if (!vncTunnelManager.getTunnel(run_id)) {
+        vncTunnelManager.createTunnel(run_id);
+      }
+
+      const cmdId = nanoid();
+      db.prepare(`
+        INSERT INTO commands (id, run_id, command, arguments, status, created_at)
+        VALUES (?, ?, '__START_VNC_STREAM__', ?, 'pending', unixepoch())
+      `).run(cmdId, run_id, JSON.stringify({}));
+
+      broadcastToRun(run_id, { type: 'vnc_start_requested', runId: run_id, commandId: cmdId });
+
+      return ok({
+        run_id,
+        command: '__START_VNC_STREAM__',
+        command_id: cmdId,
+        ws_url: `/ws/vnc/${run_id}`,
+        message: 'VNC stream start queued. Connect viewer to ws_url.',
+      });
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // TOOL: stop_vnc_stream
+  // -------------------------------------------------------------------------
+  server.tool(
+    'stop_vnc_stream',
+    'Stop VNC streaming by closing the active tunnel for a run. Scope: sessions:write.',
+    {
+      run_id: z.string().describe('Target run ID'),
+    },
+    async ({ run_id }) => {
+      const ctx = getAuthContext();
+      if (!ctx) return scopeError('Authentication required');
+      const err = assertScopes(ctx, ['sessions:write']);
+      if (err) return scopeError(err);
+
+      const run = db.prepare('SELECT id, worker_type FROM runs WHERE id = ?').get(run_id) as any;
+      if (!run) return notFound('run', run_id);
+      if (run.worker_type !== 'vnc') return invalidRequest('Run is not a VNC worker');
+
+      vncTunnelManager.closeTunnel(run_id);
+      broadcastToRun(run_id, { type: 'vnc_stop_requested', runId: run_id });
+
+      return ok({
+        run_id,
+        message: 'VNC tunnel closed',
+      });
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // TOOL: get_vnc_tunnel_stats
+  // -------------------------------------------------------------------------
+  server.tool(
+    'get_vnc_tunnel_stats',
+    'Get aggregate VNC tunnel stats. Scope: admin.',
+    {},
+    async () => {
+      const ctx = getAuthContext();
+      if (!ctx) return scopeError('Authentication required');
+      const err = assertScopes(ctx, ['admin']);
+      if (err) return scopeError(err);
+
+      return ok({
+        active_tunnels: vncTunnelManager.getActiveTunnelCount(),
+        pending_tunnels: vncTunnelManager.getPendingTunnelCount(),
+        tunnels: vncTunnelManager.getAllTunnelStats(),
+      });
     }
   );
 

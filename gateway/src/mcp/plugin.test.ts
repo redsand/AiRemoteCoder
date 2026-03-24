@@ -152,6 +152,11 @@ describe('GET /api/mcp/config', () => {
     expect(body.enabledProviders).toContain('claude');
     expect(body.connectionInstructions).toBeDefined();
     expect(body.connectionInstructions.claude_code).toBeDefined();
+    expect(Array.isArray(body.availableScopes)).toBe(true);
+    expect(body.availableScopes).toContain('vnc:read');
+    expect(body.availableScopes).toContain('vnc:control');
+    expect(Array.isArray(body.defaultAgentScopes)).toBe(true);
+    expect(body.defaultAgentScopes).toContain('vnc:read');
     await app.close();
   });
 
@@ -351,6 +356,19 @@ describe('POST /api/mcp/tokens', () => {
     expect(body.label).toBe('my-agent');
     expect(body.scopes).toContain('runs:read');
     expect(body.warning).toMatch(/Store this token/);
+    await app.close();
+  });
+
+  it('returns 400 when scopes contains an unknown value', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/tokens',
+      cookies: { session: 'valid-session' },
+      payload: { label: 'bad-scopes', scopes: ['runs:read', 'not:a:scope'] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/Invalid scopes/);
     await app.close();
   });
 });

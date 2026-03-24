@@ -31,18 +31,18 @@ Content-Type: application/json
 
 | Scope | Grants |
 |-------|--------|
-| `runs:read` | list_runs, get_run, get_run_diff, get_policy_snapshot, get_agent_capabilities |
+| `runs:read` | list_runs, get_run, get_run_diff, get_policy_snapshot, get_agent_capabilities, get_vnc_status |
 | `runs:write` | create_run, resume_run, send_input |
 | `runs:cancel` | cancel_run |
 | `sessions:read` | (reserved for future session-query tools) |
-| `sessions:write` | send_input, interrupt_session |
+| `sessions:write` | send_input, interrupt_session, start_vnc_stream, stop_vnc_stream |
 | `events:read` | tail_logs |
 | `artifacts:read` | list_artifacts, fetch_artifact, get_run_diff |
 | `artifacts:write` | (reserved for agent artifact upload) |
 | `approvals:read` | request_approval_status |
 | `approvals:write` | create_approval_request |
 | `approvals:decide` | approve_action, deny_action |
-| `admin` | all of the above + list_mcp_tokens |
+| `admin` | all of the above + list_mcp_tokens + get_vnc_tunnel_stats |
 
 ---
 
@@ -103,7 +103,7 @@ Create a new pending run. A worker will claim it.
 **Input:**
 ```json
 {
-  "worker_type": "claude",       // claude|codex|gemini|opencode|rev|hands-on
+  "worker_type": "claude",       // claude|codex|gemini|opencode|rev|hands-on|vnc
   "label": "Fix auth bug",       // optional
   "command": "fix the login…",   // optional initial prompt
   "repo_path": "/home/…/repo",   // optional working directory
@@ -162,6 +162,51 @@ Send interrupt (Ctrl-C equivalent) to the active process.
 **Input:** `{ "run_id": "abc" }`
 
 **Returns:** `{ command_id, status: "queued" }`
+
+---
+
+### `get_vnc_status`
+Get VNC tunnel status for a VNC run.
+
+**Scope:** `runs:read`
+
+**Input:** `{ "run_id": "abc" }`
+
+**Returns:** `{ run_id, available, status, client_connected, viewer_connected, ws_url, stats }`
+
+---
+
+### `start_vnc_stream`
+Queue VNC stream startup for a VNC run. This is a control-plane action; the
+actual pixel stream remains on the VNC websocket path.
+
+**Scope:** `sessions:write`
+
+**Input:** `{ "run_id": "abc" }`
+
+**Returns:** `{ run_id, command: "__START_VNC_STREAM__", command_id, ws_url }`
+
+---
+
+### `stop_vnc_stream`
+Close an active VNC tunnel for a VNC run.
+
+**Scope:** `sessions:write`
+
+**Input:** `{ "run_id": "abc" }`
+
+**Returns:** `{ run_id, message }`
+
+---
+
+### `get_vnc_tunnel_stats`
+Get aggregate VNC tunnel stats (operator/admin diagnostic view).
+
+**Scope:** `admin`
+
+**Input:** `{}`
+
+**Returns:** `{ active_tunnels, pending_tunnels, tunnels: [] }`
 
 ---
 

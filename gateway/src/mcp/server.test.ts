@@ -18,33 +18,57 @@ import { ALL_MCP_SCOPES } from '../domain/types.js';
 // Mock the database and dependencies
 // ---------------------------------------------------------------------------
 
-vi.mock('../services/database.js', () => {
-  const rows = {
+const { mockRows, mockVncState } = vi.hoisted(() => ({
+  mockRows: {
     runs: [] as any[],
     events: [] as any[],
     artifacts: [] as any[],
     approval_requests: [] as any[],
     run_state: [] as any[],
-  };
+    commands: [] as any[],
+  },
+  mockVncState: {
+    tunnelByRunId: new Map<string, any>(),
+    closeTunnel: vi.fn(),
+  },
+}));
 
+vi.mock('../services/database.js', () => {
   const prepare = (sql: string) => ({
-    all: (..._args: any[]) => {
-      if (sql.includes('FROM runs')) return rows.runs;
-      if (sql.includes('FROM events')) return rows.events;
-      if (sql.includes('FROM artifacts')) return rows.artifacts;
-      if (sql.includes('FROM approval_requests')) return rows.approval_requests;
+    all: (...args: any[]) => {
+      if (sql.includes('FROM runs')) return mockRows.runs;
+      if (sql.includes('FROM events')) return mockRows.events;
+      if (sql.includes('FROM artifacts') && sql.includes('WHERE run_id = ?')) {
+        return mockRows.artifacts.filter((a) => a.run_id === args[0]);
+      }
+      if (sql.includes('FROM artifacts')) return mockRows.artifacts;
+      if (sql.includes('FROM approval_requests')) return mockRows.approval_requests;
       if (sql.includes('COUNT(*)')) return [{ c: 1 }];
       return [];
     },
-    get: (..._args: any[]) => {
-      if (sql.includes('FROM runs WHERE id')) return rows.runs[0] ?? undefined;
-      if (sql.includes('FROM run_state')) return rows.run_state[0] ?? undefined;
-      if (sql.includes('FROM artifacts WHERE id')) return rows.artifacts[0] ?? undefined;
-      if (sql.includes('FROM approval_requests WHERE id')) return rows.approval_requests[0] ?? undefined;
+    get: (...args: any[]) => {
+      if (sql.includes("FROM runs WHERE id = ? AND status = 'running'")) {
+        const run = mockRows.runs.find((r) => r.id === args[0]);
+        return run?.status === 'running' ? run : undefined;
+      }
+      if (sql.includes('FROM runs WHERE id = ?')) return mockRows.runs.find((r) => r.id === args[0]);
+      if (sql.includes('FROM run_state')) return mockRows.run_state.find((r) => r.run_id === args[0]);
+      if (sql.includes('FROM artifacts WHERE id')) return mockRows.artifacts.find((a) => a.id === args[0]);
+      if (sql.includes('FROM approval_requests WHERE id')) return mockRows.approval_requests.find((r) => r.id === args[0]);
       if (sql.includes('COUNT(*)')) return { c: 0 };
       return undefined;
     },
-    run: vi.fn(),
+    run: vi.fn((...args: any[]) => {
+      if (sql.includes('INSERT INTO commands')) {
+        const commandMatch = /VALUES\s*\(\?,\s*\?,\s*'([^']+)'/i.exec(sql);
+        mockRows.commands.push({
+          id: args[0],
+          run_id: args[1],
+          command: commandMatch ? commandMatch[1] : args[2],
+          arguments: commandMatch ? (args[2] ?? null) : (args[3] ?? null),
+        });
+      }
+    }),
   });
 
   return {
@@ -59,6 +83,21 @@ vi.mock('../services/database.js', () => {
 });
 
 vi.mock('../services/websocket.js', () => ({ broadcastToRun: vi.fn() }));
+vi.mock('../services/vnc-tunnel.js', () => ({
+  vncTunnelManager: {
+    getTunnel: vi.fn((runId: string) => mockVncState.tunnelByRunId.get(runId)),
+    getTunnelStats: vi.fn((runId: string) => mockVncState.tunnelByRunId.get(runId) ?? null),
+    createTunnel: vi.fn((runId: string) => {
+      const tunnel = { runId, status: 'pending', clientConnected: false, viewerConnected: false };
+      mockVncState.tunnelByRunId.set(runId, tunnel);
+      return tunnel;
+    }),
+    closeTunnel: mockVncState.closeTunnel,
+    getActiveTunnelCount: vi.fn(() => mockVncState.tunnelByRunId.size),
+    getPendingTunnelCount: vi.fn(() => 0),
+    getAllTunnelStats: vi.fn(() => Array.from(mockVncState.tunnelByRunId.values())),
+  },
+}));
 vi.mock('../utils/crypto.js', () => ({
   generateCapabilityToken: () => 'test-cap-token-xxxx',
 }));
@@ -119,6 +158,17 @@ async function callTool(
 // ---------------------------------------------------------------------------
 
 describe('MCP tool: healthcheck', () => {
+  beforeEach(() => {
+    mockRows.runs.length = 0;
+    mockRows.events.length = 0;
+    mockRows.artifacts.length = 0;
+    mockRows.approval_requests.length = 0;
+    mockRows.run_state.length = 0;
+    mockRows.commands.length = 0;
+    mockVncState.tunnelByRunId.clear();
+    mockVncState.closeTunnel.mockReset();
+  });
+
   it('returns ok without auth', async () => {
     const result = await callTool('healthcheck', {}, null);
     const data = JSON.parse(result.content[0].text);
@@ -258,5 +308,141 @@ describe('MCP tool: approve_action / deny_action', () => {
     const ctx: McpAuthContext = { ...adminCtx(), scopes: ['approvals:read'] };
     const result = await callTool('deny_action', { approval_request_id: 'apr-1' }, ctx);
     expect(result.isError).toBe(true);
+  });
+});
+
+describe('MCP tool: get_vnc_status', () => {
+  beforeEach(() => {
+    mockRows.runs.length = 0;
+    mockRows.runs.push({ id: 'run-vnc', status: 'running', worker_type: 'vnc' });
+    mockRows.runs.push({ id: 'run-codex', status: 'running', worker_type: 'codex' });
+  });
+
+  it('returns auth error when unauthenticated', async () => {
+    const result = await callTool('get_vnc_status', { run_id: 'run-vnc' }, null);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/Authentication required/);
+  });
+
+  it('returns scope error when token lacks vnc:read', async () => {
+    const ctx: McpAuthContext = { ...adminCtx(), scopes: ['runs:read'] };
+    const result = await callTool('get_vnc_status', { run_id: 'run-vnc' }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/Insufficient scope/);
+  });
+
+  it('returns not-found when run does not exist', async () => {
+    const result = await callTool('get_vnc_status', { run_id: 'missing' }, adminCtx());
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/not found/);
+  });
+
+  it('returns invalid-request when run is not a vnc worker', async () => {
+    const result = await callTool('get_vnc_status', { run_id: 'run-codex' }, adminCtx());
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/not a VNC worker/);
+  });
+
+  it('returns vnc connection status for a vnc run', async () => {
+    mockVncState.tunnelByRunId.set('run-vnc', {
+      runId: 'run-vnc',
+      status: 'active',
+      clientConnected: true,
+      viewerConnected: true,
+    });
+
+    const result = await callTool('get_vnc_status', { run_id: 'run-vnc' }, adminCtx());
+    expect(result.isError).toBeUndefined();
+    const data = JSON.parse(result.content[0].text);
+    expect(data.run_id).toBe('run-vnc');
+    expect(data.available).toBe(true);
+    expect(data.ws_url).toBe('/ws/vnc/run-vnc');
+  });
+});
+
+describe('MCP tool: start_vnc_stream', () => {
+  beforeEach(() => {
+    mockRows.runs.length = 0;
+    mockRows.commands.length = 0;
+    mockRows.runs.push({ id: 'run-vnc', status: 'running', worker_type: 'vnc' });
+    mockRows.runs.push({ id: 'run-codex', status: 'running', worker_type: 'codex' });
+  });
+
+  it('returns scope error when token lacks vnc:control', async () => {
+    const ctx: McpAuthContext = { ...adminCtx(), scopes: ['sessions:write'] };
+    const result = await callTool('start_vnc_stream', { run_id: 'run-vnc' }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/Insufficient scope/);
+  });
+
+  it('returns not-found when run does not exist', async () => {
+    const result = await callTool('start_vnc_stream', { run_id: 'missing' }, adminCtx());
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/not found/);
+  });
+
+  it('returns invalid-request when run is not a vnc worker', async () => {
+    const result = await callTool('start_vnc_stream', { run_id: 'run-codex' }, adminCtx());
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/not a VNC worker/);
+  });
+
+  it('queues start command and returns websocket url', async () => {
+    const result = await callTool('start_vnc_stream', { run_id: 'run-vnc' }, adminCtx());
+    expect(result.isError).toBeUndefined();
+    const data = JSON.parse(result.content[0].text);
+    expect(data.command).toBe('__START_VNC_STREAM__');
+    expect(data.ws_url).toBe('/ws/vnc/run-vnc');
+    expect(mockRows.commands.some((c) => c.run_id === 'run-vnc' && c.command === '__START_VNC_STREAM__')).toBe(true);
+  });
+});
+
+describe('MCP tool: stop_vnc_stream', () => {
+  beforeEach(() => {
+    mockRows.runs.length = 0;
+    mockRows.runs.push({ id: 'run-vnc', status: 'running', worker_type: 'vnc' });
+    mockRows.runs.push({ id: 'run-codex', status: 'running', worker_type: 'codex' });
+    mockVncState.closeTunnel.mockReset();
+  });
+
+  it('returns scope error when token lacks vnc:control', async () => {
+    const ctx: McpAuthContext = { ...adminCtx(), scopes: ['sessions:write'] };
+    const result = await callTool('stop_vnc_stream', { run_id: 'run-vnc' }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/Insufficient scope/);
+  });
+
+  it('closes tunnel for valid run', async () => {
+    const result = await callTool('stop_vnc_stream', { run_id: 'run-vnc' }, adminCtx());
+    expect(result.isError).toBeUndefined();
+    expect(mockVncState.closeTunnel).toHaveBeenCalledWith('run-vnc');
+  });
+
+  it('returns invalid-request when run is not a vnc worker', async () => {
+    const result = await callTool('stop_vnc_stream', { run_id: 'run-codex' }, adminCtx());
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/not a VNC worker/);
+  });
+});
+
+describe('MCP tool: get_vnc_tunnel_stats', () => {
+  beforeEach(() => {
+    mockVncState.tunnelByRunId.clear();
+    mockVncState.tunnelByRunId.set('run-vnc', { runId: 'run-vnc', status: 'active' });
+  });
+
+  it('returns scope error for non-admin caller', async () => {
+    const ctx: McpAuthContext = { ...adminCtx(), scopes: ['runs:read'] };
+    const result = await callTool('get_vnc_tunnel_stats', {}, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/Insufficient scope/);
+  });
+
+  it('returns aggregate tunnel stats for admin caller', async () => {
+    const result = await callTool('get_vnc_tunnel_stats', {}, adminCtx());
+    expect(result.isError).toBeUndefined();
+    const data = JSON.parse(result.content[0].text);
+    expect(data.active_tunnels).toBe(1);
+    expect(Array.isArray(data.tunnels)).toBe(true);
   });
 });

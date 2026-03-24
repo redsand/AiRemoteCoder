@@ -19,6 +19,7 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
+    exclude: ['@novnc/novnc'],
     esbuildOptions: {
       target: 'esnext'
     }

@@ -95,6 +95,10 @@ describe('mcpSetupRoutes', () => {
     expect(existsSync(writtenPath)).toBe(true);
     const written = JSON.parse(readFileSync(writtenPath, 'utf-8')) as any;
     expect(written.mcpServers.airemotecoder.headers.Authorization).toBe(`Bearer ${setup.token}`);
+    expect(tokens).toHaveLength(1);
+    const tokenScopes = JSON.parse(tokens[0].scopes) as string[];
+    expect(tokenScopes).toContain('vnc:read');
+    expect(tokenScopes).toContain('vnc:control');
 
     await app.close();
   });
