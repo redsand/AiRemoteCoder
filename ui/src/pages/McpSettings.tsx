@@ -20,6 +20,7 @@ export function McpSettings(_props: Props) {
   const [selectedProjectTargetId, setSelectedProjectTargetId] = useState<string>('');
   const [customProjectPath, setCustomProjectPath] = useState('');
   const [newTargetLabel, setNewTargetLabel] = useState('');
+  const [currentDeviceId, setCurrentDeviceId] = useState<string | null>(null);
   const [setupStatus, setSetupStatus] = useState<Record<string, McpSetupStatus>>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'connect' | 'tokens' | 'test'>('connect');
@@ -61,6 +62,7 @@ export function McpSettings(_props: Props) {
         fetch(`/api/mcp/setup/status${buildTargetQuery()}`),
       ]);
       const targetsRes = await fetch('/api/mcp/project-targets');
+      const meRes = await fetch('/api/auth/me');
       if (configRes.ok) {
         const config = (await configRes.json()) as McpConfig;
         setMcpConfig(config);
@@ -69,6 +71,10 @@ export function McpSettings(_props: Props) {
       if (tokensRes.ok) setTokens((await tokensRes.json()).tokens ?? []);
       if (statusRes.ok) setSetupStatus((await statusRes.json()).status ?? {});
       if (targetsRes.ok) setProjectTargets((await targetsRes.json()).targets ?? []);
+      if (meRes.ok) {
+        const me = await meRes.json();
+        setCurrentDeviceId(me.deviceId ?? null);
+      }
     } catch {
       addToast('error', 'Failed to load MCP configuration');
     } finally {
@@ -343,6 +349,11 @@ export function McpSettings(_props: Props) {
                 <p className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
                   Auto-install applies to the selected target. This enables multi-project and multi-machine MCP setup.
                 </p>
+                {currentDeviceId ? (
+                  <p className="text-muted" style={{ marginTop: '6px', fontSize: '12px' }}>
+                    Trusted device identity: <code>{currentDeviceId}</code>
+                  </p>
+                ) : null}
               </div>
 
               <p className="text-muted section-intro">

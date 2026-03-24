@@ -94,7 +94,7 @@ function resolveProjectDirForRequest(
     }
     if (target.machine_id) {
       if (!request.deviceId) {
-        return { error: 'Target requires device identity header (x-airc-device-id)', statusCode: 403 };
+        return { error: 'Target requires trusted device identity from authenticated session', statusCode: 403 };
       }
       if (target.machine_id !== request.deviceId) {
         return { error: 'Project target is bound to a different device', statusCode: 403 };

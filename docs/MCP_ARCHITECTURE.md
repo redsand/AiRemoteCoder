@@ -152,6 +152,7 @@ in-memory on the gateway; in a multi-instance deployment, move to Redis.
 | `AIRC_MCP_ENABLED` | `true` | Enable/disable the MCP control plane |
 | `AIRC_MCP_PATH` | `/mcp` | MCP endpoint path |
 | `AIRC_MCP_TOKEN_EXPIRY` | `0` | Token expiry in seconds (0 = never) |
+| `AIRC_PROJECT_ROOTS` | `<projectRoot>` | Comma-separated allowlist of filesystem roots allowed for MCP auto-install targets |
 | `AIRC_PROVIDER_CLAUDE` | `true` | Enable Claude adapter |
 | `AIRC_PROVIDER_CODEX` | `true` | Enable Codex adapter |
 | `AIRC_PROVIDER_GEMINI` | `true` | Enable Gemini adapter |

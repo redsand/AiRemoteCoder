@@ -34,12 +34,10 @@ vi.mock('../middleware/auth.js', () => ({
     const cookieHeader = String(req.headers?.cookie || '');
     if (cookieHeader.includes('session=session-user-2')) {
       req.user = { id: 'user-2', username: 'bob', role: 'admin' };
+      req.deviceId = 'dev_device_two';
     } else {
       req.user = { id: 'user-1', username: 'alice', role: 'admin' };
-    }
-    const deviceHeader = req.headers?.['x-airc-device-id'] ?? req.headers?.['x-airc-machine-id'];
-    if (typeof deviceHeader === 'string' && deviceHeader.trim()) {
-      req.deviceId = deviceHeader.trim();
+      req.deviceId = 'dev_device_one';
     }
     done();
   },
@@ -344,14 +342,13 @@ describe('mcpSetupRoutes', () => {
     await app.close();
   });
 
-  it('enforces machine-bound targets using x-airc-device-id', async () => {
+  it('enforces machine-bound targets using trusted session device identity', async () => {
     const app = await buildApp();
     const path = join(projectRoot, 'machine-bound');
 
     const createRes = await app.inject({
       method: 'POST',
       url: '/api/mcp/project-targets',
-      headers: { 'x-airc-device-id': 'device-a' },
       payload: { label: 'Machine Bound', path },
     });
     expect(createRes.statusCode).toBe(201);
@@ -360,22 +357,14 @@ describe('mcpSetupRoutes', () => {
     const setupWrongDevice = await app.inject({
       method: 'POST',
       url: '/api/mcp/setup/claude',
-      headers: { 'x-airc-device-id': 'device-b' },
+      headers: { cookie: 'session=session-user-2' },
       payload: { projectTargetId: target.id },
     });
     expect(setupWrongDevice.statusCode).toBe(403);
 
-    const setupMissingDevice = await app.inject({
-      method: 'POST',
-      url: '/api/mcp/setup/claude',
-      payload: { projectTargetId: target.id },
-    });
-    expect(setupMissingDevice.statusCode).toBe(403);
-
     const setupCorrectDevice = await app.inject({
       method: 'POST',
       url: '/api/mcp/setup/claude',
-      headers: { 'x-airc-device-id': 'device-a' },
       payload: { projectTargetId: target.id },
     });
     expect(setupCorrectDevice.statusCode).toBe(200);

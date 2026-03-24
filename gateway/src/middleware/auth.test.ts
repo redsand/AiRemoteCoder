@@ -172,6 +172,7 @@ describe('middleware/auth', () => {
     const request = {
       headers: {},
       cookies: { session: sessionId },
+      unsignCookie: vi.fn().mockReturnValue({ valid: false, value: '' }),
       ip: '127.0.0.1',
     } as Partial<AuthenticatedRequest> as AuthenticatedRequest;
     const reply = makeReply();
@@ -185,6 +186,34 @@ describe('middleware/auth', () => {
       role: 'admin',
       source: 'session',
     });
+    expect(request.deviceId).toMatch(/^dev_[A-Za-z0-9_-]{16,64}$/);
+    expect(reply.setCookie).toHaveBeenCalled();
+  });
+
+  it('uses trusted signed device cookie and ignores spoofed device headers', async () => {
+    const userId = 'user-1';
+    const sessionId = 'session-1';
+    db.prepare(`
+      INSERT INTO users (id, username, password_hash, role)
+      VALUES (?, 'alice', 'hash', 'admin')
+    `).run(userId);
+    db.prepare(`
+      INSERT INTO sessions (id, user_id, expires_at)
+      VALUES (?, ?, ?)
+    `).run(sessionId, userId, Math.floor(Date.now() / 1000) + 3600);
+
+    const request = {
+      headers: { 'x-airc-device-id': 'attacker-controlled' },
+      cookies: { session: sessionId, airc_device_id: 'signed-cookie-value' },
+      unsignCookie: vi.fn().mockReturnValue({ valid: true, value: 'dev_trusted_device_123456' }),
+      ip: '127.0.0.1',
+    } as Partial<AuthenticatedRequest> as AuthenticatedRequest;
+    const reply = makeReply();
+
+    await uiAuth(request, reply);
+
+    expect(request.deviceId).toBe('dev_trusted_device_123456');
+    expect(reply.setCookie).not.toHaveBeenCalled();
   });
 
   it('rejects ui auth without a session', async () => {

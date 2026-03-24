@@ -374,3 +374,23 @@ curl -X POST https://your-gateway:3100/mcp \
   -H "Authorization: Bearer <token>" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0.0.1"}},"id":1}'
 ```
+
+---
+
+## Multi-Project Auto-Install Targets
+
+MCP setup APIs support targeting different repositories/machines instead of a single gateway project root.
+
+- `GET /api/mcp/project-targets` — list targets visible to current user
+- `POST /api/mcp/project-targets` — create/update target `{ label, path, machineId? }`
+- `DELETE /api/mcp/project-targets/:id` — remove target
+
+Targeted setup/install calls accept:
+
+- `projectTargetId` (preferred for saved targets)
+- `projectPath` (one-off direct path)
+
+Safety:
+
+- Paths are restricted to allowlisted roots from `AIRC_PROJECT_ROOTS`.
+- If a target has `machine_id`, requests must originate from the same trusted session device identity (server-issued, signed device cookie).

@@ -196,7 +196,8 @@ export async function authRoutes(fastify: FastifyInstance) {
     preHandler: [uiAuth]
   }, async (request: AuthenticatedRequest) => {
     return {
-      user: request.user
+      user: request.user,
+      deviceId: request.deviceId ?? null,
     };
   });
 

@@ -2,6 +2,7 @@ import type { FastifyRequest, FastifyReply, FastifyInstance } from 'fastify';
 import { db } from '../services/database.js';
 import { config } from '../config.js';
 import { verifySignature, hashBody, isTimestampValid } from '../utils/crypto.js';
+import { nanoid } from 'nanoid';
 
 export interface AuthenticatedRequest extends FastifyRequest {
   user?: {
@@ -15,6 +16,35 @@ export interface AuthenticatedRequest extends FastifyRequest {
     runId: string;
     capabilityToken: string;
   };
+}
+
+const DEVICE_COOKIE_NAME = 'airc_device_id';
+const DEVICE_ID_REGEX = /^dev_[A-Za-z0-9_-]{16,64}$/;
+
+function resolveTrustedDeviceId(
+  request: AuthenticatedRequest,
+  reply: FastifyReply
+): string {
+  const rawCookieValue = request.cookies?.[DEVICE_COOKIE_NAME];
+  const unsignCookie = (request as any).unsignCookie as ((value: string) => { valid: boolean; value: string }) | undefined;
+
+  if (rawCookieValue && typeof rawCookieValue === 'string' && unsignCookie) {
+    const parsed = unsignCookie(rawCookieValue);
+    if (parsed?.valid && DEVICE_ID_REGEX.test(parsed.value)) {
+      return parsed.value;
+    }
+  }
+
+  const generated = `dev_${nanoid(24)}`;
+  reply.setCookie(DEVICE_COOKIE_NAME, generated, {
+    signed: true,
+    httpOnly: true,
+    secure: config.tlsEnabled,
+    sameSite: 'strict',
+    maxAge: 365 * 24 * 60 * 60,
+    path: '/',
+  });
+  return generated;
 }
 
 /**
@@ -101,13 +131,6 @@ export async function uiAuth(
   request: AuthenticatedRequest,
   reply: FastifyReply
 ): Promise<void> {
-  const rawDeviceId = ((request.headers['x-airc-device-id'] as string | undefined)
-    ?? (request.headers['x-airc-machine-id'] as string | undefined)
-    ?? '').trim();
-  if (rawDeviceId) {
-    request.deviceId = rawDeviceId.slice(0, 128);
-  }
-
   // Check Cloudflare Access headers first
   const cfEmail = request.headers['cf-access-authenticated-user-email'] as string;
   const cfJwt = request.headers['cf-access-jwt-assertion'] as string;
@@ -121,6 +144,7 @@ export async function uiAuth(
       role: 'operator', // Could be configured per-user
       source: 'cloudflare'
     };
+    request.deviceId = resolveTrustedDeviceId(request, reply);
     return;
   }
 
@@ -153,6 +177,7 @@ export async function uiAuth(
     role: session.role,
     source: 'session'
   };
+  request.deviceId = resolveTrustedDeviceId(request, reply);
 }
 
 /**
