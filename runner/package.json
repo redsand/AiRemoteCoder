@@ -1,0 +1,30 @@
+{
+  "name": "@ai-remote-coder/mcp-runner",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/worker.js",
+  "bin": {
+    "airc-mcp-runner": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.1.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

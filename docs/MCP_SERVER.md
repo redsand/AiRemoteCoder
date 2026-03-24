@@ -418,7 +418,7 @@ PY
 export AIREMOTECODER_GATEWAY_URL="http://localhost:3100"
 export AIREMOTECODER_PROVIDER="codex"
 export AIREMOTECODER_CODEX_MODE="interactive"
-npm run worker:mcp -w gateway
+npx -y @ai-remote-coder/mcp-runner@latest
 ```
 
 ```powershell
@@ -452,7 +452,7 @@ bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
 $env:AIREMOTECODER_GATEWAY_URL="http://localhost:3100"
 $env:AIREMOTECODER_PROVIDER="codex"
 $env:AIREMOTECODER_CODEX_MODE="interactive"
-npm run worker:mcp -w gateway
+npx -y @ai-remote-coder/mcp-runner@latest
 ```
 
 All generated setup commands are additive/update-only and scoped to
@@ -467,10 +467,11 @@ export AIREMOTECODER_GATEWAY_URL=http://localhost:3100
 export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
 export AIREMOTECODER_PROVIDER=codex
 export AIREMOTECODER_CODEX_MODE=interactive
-npm run worker:mcp -w gateway
+npx -y @ai-remote-coder/mcp-runner@latest
 ```
 
 Set `AIREMOTECODER_CODEX_MODE=exec` to run one-shot `codex exec` for each prompt.
+For persistent install, run `npm install -g @ai-remote-coder/mcp-runner@latest` and start with `airc-mcp-runner`.
 
 For non-Codex providers set:
 
@@ -518,3 +519,18 @@ Safety:
 
 - Paths are restricted to allowlisted roots from `AIRC_PROJECT_ROOTS`.
 - If a target has `machine_id`, requests must originate from the same trusted session device identity (server-issued, signed device cookie).
+
+---
+
+## Future note: MCP-only (no local runner)
+
+This section is documentation-only for future exploration.
+
+- MCP tools/resources/prompts do not provide a standardized, reliable server-push remote-exec channel on client hosts.
+- Different agent clients may support local command execution differently, and many require explicit interactive user action.
+- Because of that, AiRemoteCoder currently treats the local bridge runner (`@ai-remote-coder/mcp-runner`) as the production execution path for queued runs.
+
+Possible future mode:
+
+- A best-effort "MCP-only assist mode" where agents pull work by calling MCP tools from inside an active chat session.
+- This may reduce setup friction, but it is not equivalent to the durability/replay/ack guarantees provided by the local bridge runner.

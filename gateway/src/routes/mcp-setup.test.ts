@@ -228,11 +228,11 @@ describe('mcpSetupRoutes', () => {
     expect(install.copyPaste?.bash?.[0] ?? '').not.toContain('codex mcp add');
     expect(install.copyPaste?.bash?.[0] ?? '').toContain('python - <<\'PY\'');
     expect(install.copyPaste?.bash?.[1] ?? '').toContain('AIREMOTECODER_CODEX_MODE="interactive"');
-    expect(install.copyPaste?.bash?.[1] ?? '').toContain('npm run worker:mcp -w gateway');
+    expect(install.copyPaste?.bash?.[1] ?? '').toContain('npx -y @ai-remote-coder/mcp-runner@latest');
     expect(install.copyPaste?.powershell?.[0] ?? '').toContain('mcp_servers.airemotecoder');
     expect(install.copyPaste?.powershell?.[0] ?? '').toContain('Set-Content -Path $configPath -Value $out -Encoding utf8');
     expect(install.copyPaste?.powershell?.[1] ?? '').toContain('$env:AIREMOTECODER_CODEX_MODE="interactive"');
-    expect(install.copyPaste?.powershell?.[1] ?? '').toContain('npm run worker:mcp -w gateway');
+    expect(install.copyPaste?.powershell?.[1] ?? '').toContain('npx -y @ai-remote-coder/mcp-runner@latest');
     expect(install.instructions).toContain('AIREMOTECODER_CODEX_MODE=exec');
 
     await app.close();

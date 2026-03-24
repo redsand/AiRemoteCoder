@@ -142,25 +142,32 @@ The MCP page provides copy/paste one-shot Bash and PowerShell commands that repl
 
 ## MCP Worker Mode (Codex-first)
 
-After MCP setup, start the worker loop on the coding host:
+After MCP setup, start the worker loop on the coding host (from any project directory):
 
 ```bash
 export AIREMOTECODER_GATEWAY_URL=http://localhost:3100
 export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
 export AIREMOTECODER_PROVIDER=codex
 export AIREMOTECODER_CODEX_MODE=interactive
-npm run worker:mcp -w gateway
+npx -y @ai-remote-coder/mcp-runner@latest
 ```
 
 This loop claims MCP runs, polls queued commands, executes prompts via a persistent Codex interactive session, acknowledges commands, and streams events/lifecycle markers back to the gateway.
 Set `AIREMOTECODER_CODEX_MODE=exec` to use one-shot `codex exec` per prompt.
+
+Optional global install:
+
+```bash
+npm install -g @ai-remote-coder/mcp-runner@latest
+airc-mcp-runner
+```
 
 For non-Codex providers, supply an explicit execution template:
 
 ```bash
 export AIREMOTECODER_PROVIDER=gemini
 export AIREMOTECODER_EXEC_TEMPLATE="gemini run {input}"
-npm run worker:mcp -w gateway
+npx -y @ai-remote-coder/mcp-runner@latest
 ```
 
 ## Remote Access

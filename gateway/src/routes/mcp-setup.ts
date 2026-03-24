@@ -239,6 +239,8 @@ PY`,
 
   const buildCodexSnippet = (persistEnv: boolean) => {
     const envPrefix = buildEnvPrefix('AIREMOTECODER_MCP_TOKEN', token, persistEnv);
+    const localGatewayPath = `${config.projectRoot.replace(/\\/g, '/')}/gateway`;
+    const localGatewayPathWin = localGatewayPath.replace(/\//g, '\\\\');
     const manualToml = `[mcp_servers.airemotecoder]
 url = "${mcpUrl}"
 bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"`;
@@ -280,7 +282,7 @@ PY`;
 export AIREMOTECODER_MCP_TOKEN="${token}"
 export AIREMOTECODER_PROVIDER="codex"
 export AIREMOTECODER_CODEX_MODE="interactive"
-npm run worker:mcp -w gateway`;
+npx -y @ai-remote-coder/mcp-runner@latest || npm --prefix "${localGatewayPath}" run worker:mcp`;
 
     const powershellOneShot = `${envPrefix.powershell}
 $configDir = Join-Path $HOME ".codex"
@@ -310,7 +312,8 @@ bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
 $env:AIREMOTECODER_MCP_TOKEN="${token}"
 $env:AIREMOTECODER_PROVIDER="codex"
 $env:AIREMOTECODER_CODEX_MODE="interactive"
-npm run worker:mcp -w gateway`;
+npx -y @ai-remote-coder/mcp-runner@latest
+if ($LASTEXITCODE -ne 0) { npm --prefix "${localGatewayPathWin}" run worker:mcp }`;
 
     return {
       snippet: manualToml,
