@@ -75,7 +75,8 @@ describe('McpProviderGrid', () => {
     expect(html).toContain('Regenerate Snippet');
     expect(html).toContain('✓ Copied');
     expect(html).toContain('Token (shown once)');
-    expect(html).toContain('Bash copy/paste');
-    expect(html).toContain('PowerShell copy/paste');
+    expect(html).toContain('Recommended: Bash one-shot setup');
+    expect(html).toContain('Recommended: PowerShell one-shot setup');
+    expect(html).toContain('Written config (advanced/manual):');
   });
 });

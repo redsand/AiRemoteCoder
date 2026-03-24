@@ -1,6 +1,11 @@
 # AI Remote Coder
 
-A secure, mobile-friendly gateway for remotely monitoring and controlling AI coding agents. Supports multiple agent types (Claude, Ollama, Codex, Gemini, Rev, VNC, hands-on) via a connect-back architecture — no inbound ports required on agent machines.
+A secure, mobile-friendly gateway for remotely monitoring and controlling AI coding agents.
+
+AiRemoteCoder is now **MCP-first**:
+- MCP control plane (`/mcp`) is the primary agent-facing interface
+- The existing secure UI/API/WebSocket channel is the primary human-facing interface
+- Legacy subprocess wrappers remain available only as compatibility mode during migration
 
 ## Setup
 
@@ -31,6 +36,11 @@ A secure, mobile-friendly gateway for remotely monitoring and controlling AI cod
    npm run test
    ```
 
+6. MVP MCP test lane (recommended):
+   ```bash
+   npm run test:mvp
+   ```
+
 ## Available Scripts
 
 - `npm run setup` - Install dependencies and build all workspaces
@@ -50,21 +60,22 @@ A secure, mobile-friendly gateway for remotely monitoring and controlling AI cod
 │    (UI)         │  HTTPS  │  (Fastify)      │     (.data/)
 └─────────────────┘         └────────┬────────┘
                                      │
-                            WebSocket│ (connect-back)
+                             MCP HTTP│ + SSE
                                      │
                   ┌──────────────────┼──────────────────┐
                   │                  │                   │
          ┌────────▼─────┐  ┌────────▼─────┐  ┌────────▼─────┐
-         │    Claude    │  │ Ollama/Codex │  │  VNC /       │
-         │    Runner    │  │ Gemini / Rev │  │  Hands-On    │
+         │ Claude/Codex │  │ Gemini/Open- │  │ Rev / Zenflow│
+         │ MCP client   │  │ Code MCP     │  │ MCP adapter  │
          └──────────────┘  └──────────────┘  └──────────────┘
-                           (wrapper agents)
 ```
 
 ## Features
 
-- **Real-time Monitoring**: Stream agent output to your phone via WebSocket
-- **Multi-Agent Support**: Claude, Ollama, Codex, Gemini, Rev, VNC, and hands-on workers
+- **MCP Control Plane (Primary)**: Provider-neutral JSON-RPC control over HTTP/SSE
+- **Secure Human Channel (Primary)**: Existing UI + `/api/*` + WebSocket for approvals, status, artifacts
+- **Real-time Monitoring**: Stream normalized run/session events to your phone/browser
+- **Multi-Agent Support**: Claude, Codex, Gemini, OpenCode, Zenflow, Rev, VNC, and hands-on
 - **Command Execution**: Run allowlisted commands (tests, git operations) from the UI
 - **Secure Authentication**: HMAC-signed requests, session auth, optional TOTP 2FA, Cloudflare Access
 - **Connect-Back Only**: Agents initiate outbound connections — no inbound ports required
@@ -78,24 +89,28 @@ A secure, mobile-friendly gateway for remotely monitoring and controlling AI cod
 ## Quick Start
 
 ```bash
-# Start the gateway
-./run.sh
-
-# Open https://localhost:3100 and create an admin account
-
-# In a second terminal, start the agent listener:
-ai-runner listen
-
-# From the UI, create a new run — the listener picks it up automatically
+npm run setup
+npm run dev
 ```
 
-You can also manage runs from the CLI directly:
+Then:
+1. Open `http://localhost:3100`
+2. Complete auth/setup
+3. Go to **MCP** page
+4. Generate provider setup commands/snippets for your project
+5. Run your coding agent (Claude/Codex/Gemini/OpenCode/Zenflow/Rev) in that project
+6. Create and control runs from the UI
+
+Legacy wrapper mode (deprecated) remains available during migration. See `docs/MIGRATION_FROM_LEGACY.md`.
+
+## MCP Setup (Codex example)
 
 ```bash
-ai-runner login
-ai-runner list
-ai-runner resume <runId>    # resume a previous run
+export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
+codex mcp add airemotecoder --url http://localhost:3100/mcp
 ```
+
+The MCP page also provides one-shot overwrite/replace commands for Bash and PowerShell.
 
 ## Remote Access
 
@@ -107,20 +122,21 @@ For phone access via Cloudflare Tunnel:
 
 ## Documentation
 
+- [MCP Architecture](docs/MCP_ARCHITECTURE.md)
+- [MCP Server Reference](docs/MCP_SERVER.md)
+- [Migration From Legacy Wrappers](docs/MIGRATION_FROM_LEGACY.md)
 - [Quickstart Guide](docs/QUICKSTART.md)
 - [DigitalOcean Deployment](docs/DIGITALOCEAN.md)
 - [Security Model](docs/SECURITY.md)
 - [Operations Guide](docs/OPERATIONS.md)
-- [Claude Code Integration](docs/CLAUDE_CODE.md)
 - [Testing Guide](docs/TESTING.md)
 
 ## Project Structure
 
 ```
-├── gateway/          # Fastify server (REST API + WebSocket hub)
-├── wrapper/          # Agent runner (ai-runner CLI, multi-worker)
+├── gateway/          # Fastify server (MCP server + REST API + WebSocket + SQLite)
+├── wrapper/          # Deprecated wrapper compatibility path
 ├── ui/               # React UI (mobile-friendly)
-├── .claude/          # Claude Code hooks (event streaming, safety gates)
 ├── docs/             # Documentation
 ├── scripts/          # Utility scripts (startup, certs, tunnels, pruning)
 ├── .data/            # Runtime data (gitignored)
@@ -135,7 +151,8 @@ For phone access via Cloudflare Tunnel:
 ## Security
 
 - TLS everywhere (auto-generated self-signed certs for development)
-- HMAC-signed wrapper requests with per-run capability tokens
+- Scoped MCP bearer tokens and per-tool authorization
+- HMAC-signed wrapper requests (legacy compatibility path)
 - Replay protection via nonces (10-minute expiry)
 - Allowlisted commands only (extensible via `EXTRA_ALLOWED_COMMANDS`)
 - Secret redaction in all log streams
@@ -151,7 +168,7 @@ See [SECURITY.md](docs/SECURITY.md) for the full threat model.
 
 - Node.js 20+
 - Python 3 + pip (required for VNC remote desktop support)
-- Claude Code CLI (optional — only needed for the Claude worker type)
+- Any supported MCP-capable agent runtime (Claude Code, Codex, Gemini CLI, OpenCode, Zenflow; Rev via adapter)
 - `cloudflared` (optional — for Cloudflare Tunnel remote access)
 - `tmate` (optional — for assist sessions)
 

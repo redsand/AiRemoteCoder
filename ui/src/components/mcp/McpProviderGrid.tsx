@@ -74,11 +74,39 @@ export function McpProviderGrid({
                 {setup.error && (
                   <div className="alert alert-warning">{setup.error}</div>
                 )}
+                {setup.copyPaste?.bash?.length ? (
+                  <div className="snippet-block">
+                    <div className="snippet-header">
+                      <span className="text-muted">Recommended: Bash one-shot setup</span>
+                      <button
+                        className="btn-icon"
+                        onClick={() => onCopy(setup.copyPaste!.bash!.join('\n\n'), `bash-${provider.key}`)}
+                      >
+                        {copiedField === `bash-${provider.key}` ? '✓ Copied' : '⧉ Copy'}
+                      </button>
+                    </div>
+                    <pre className="code-block">{setup.copyPaste.bash.join('\n\n')}</pre>
+                  </div>
+                ) : null}
+                {setup.copyPaste?.powershell?.length ? (
+                  <div className="snippet-block">
+                    <div className="snippet-header">
+                      <span className="text-muted">Recommended: PowerShell one-shot setup</span>
+                      <button
+                        className="btn-icon"
+                        onClick={() => onCopy(setup.copyPaste!.powershell!.join('\n\n'), `powershell-${provider.key}`)}
+                      >
+                        {copiedField === `powershell-${provider.key}` ? '✓ Copied' : '⧉ Copy'}
+                      </button>
+                    </div>
+                    <pre className="code-block">{setup.copyPaste.powershell.join('\n\n')}</pre>
+                  </div>
+                ) : null}
                 {setup.snippet && (
                   <div className="snippet-block">
                     <div className="snippet-header">
                       <span className="text-muted">
-                        {setup.installed ? 'Written config:' : 'Setup snippet (copy this):'}
+                        {setup.installed ? 'Written config (advanced/manual):' : 'Advanced/manual config snippet:'}
                       </span>
                       <button
                         className="btn-icon"
@@ -111,34 +139,6 @@ export function McpProviderGrid({
                     )}
                   </div>
                 )}
-                {setup.copyPaste?.bash?.length ? (
-                  <div className="snippet-block">
-                    <div className="snippet-header">
-                      <span className="text-muted">Bash copy/paste</span>
-                      <button
-                        className="btn-icon"
-                        onClick={() => onCopy(setup.copyPaste!.bash!.join('\n\n'), `bash-${provider.key}`)}
-                      >
-                        {copiedField === `bash-${provider.key}` ? '✓ Copied' : '⧉ Copy'}
-                      </button>
-                    </div>
-                    <pre className="code-block">{setup.copyPaste.bash.join('\n\n')}</pre>
-                  </div>
-                ) : null}
-                {setup.copyPaste?.powershell?.length ? (
-                  <div className="snippet-block">
-                    <div className="snippet-header">
-                      <span className="text-muted">PowerShell copy/paste</span>
-                      <button
-                        className="btn-icon"
-                        onClick={() => onCopy(setup.copyPaste!.powershell!.join('\n\n'), `powershell-${provider.key}`)}
-                      >
-                        {copiedField === `powershell-${provider.key}` ? '✓ Copied' : '⧉ Copy'}
-                      </button>
-                    </div>
-                    <pre className="code-block">{setup.copyPaste.powershell.join('\n\n')}</pre>
-                  </div>
-                ) : null}
               </div>
             )}
           </div>

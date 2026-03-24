@@ -333,7 +333,7 @@ export function McpSettings(_props: Props) {
                   </button>
                 </div>
                 <p className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
-                  Generate a provider snippet, copy it into your project config, then launch Claude/Codex/Gemini/OpenCode/Zenflow in that project.
+                  Generate provider setup commands, copy/paste one-shot into your project shell, then launch Claude/Codex/Gemini/OpenCode/Zenflow in that project.
                 </p>
                 {currentDeviceId ? (
                   <p className="text-muted" style={{ marginTop: '6px', fontSize: '12px' }}>
@@ -343,7 +343,7 @@ export function McpSettings(_props: Props) {
               </div>
 
               <p className="text-muted section-intro">
-                Manual setup is the default: generate a snippet, paste it in the target project, and run your coding agent in that project context.
+                Command-first setup is the default: generate one-shot commands, run them in the target project environment, then start your coding agent in that context.
               </p>
 
               <div className="card" style={{ marginBottom: '12px' }}>

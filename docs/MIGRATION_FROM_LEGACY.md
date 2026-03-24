@@ -57,10 +57,15 @@ Add to `.claude/mcp.json` in your project or `claude_desktop_config.json`:
 
 #### Codex
 ```bash
-export MCP_SERVER_URL=https://your-gateway:3100/mcp
-export MCP_SERVER_TOKEN=<YOUR_MCP_TOKEN>
-codex --mcp-server $MCP_SERVER_URL
+export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
+codex mcp add airemotecoder --url https://your-gateway:3100/mcp
 ```
+
+For deterministic setup, use the MCP setup API/UI generated one-shot commands:
+- `POST /api/mcp/setup/codex` returns:
+  - Bash and PowerShell overwrite commands
+  - Bash and PowerShell replace-only commands
+  - tokenized command snippets bound to your current gateway URL
 
 #### Gemini CLI
 ```json
@@ -108,6 +113,9 @@ curl -X POST https://your-gateway:3100/mcp \
 
 Run a real task through the new path and confirm events, artifacts, and any
 approval requests flow correctly through the UI.
+
+You can also validate active MCP sessions from:
+- `GET /api/mcp/sessions`
 
 ### Step 5: Disable legacy wrappers (when ready)
 
