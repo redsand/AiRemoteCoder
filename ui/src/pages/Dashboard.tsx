@@ -164,7 +164,7 @@ export function Dashboard({ user: _user }: Props) {
         copiedUrl={copiedUrl}
         onCopyUrl={copyMcpUrl}
         onOpenMcp={() => navigate('/mcp')}
-        onOpenTokens={() => navigate('/mcp')}
+        onOpenTokens={() => navigate('/mcp?tab=tokens')}
       />
 
       {/* Stats row */}

@@ -48,7 +48,7 @@ describe('Worker Registry', () => {
       expect(claude.command).toBe('claude');
       expect(claude.displayName).toBe('Claude');
       expect(claude.supportsModelSelection).toBe(false);
-      expect(claude.description).toContain('Anthropic');
+      expect(claude.description).toContain('Interactive REPL');
     });
 
     it('should have correct worker type for Ollama Launch', () => {
@@ -87,7 +87,7 @@ describe('Worker Registry', () => {
       expect(rev.command).toBe('rev');
       expect(rev.displayName).toBe('Rev');
       expect(rev.supportsModelSelection).toBe(true);
-      expect(rev.description).toContain('Custom');
+      expect(rev.description).toContain('Interactive REPL');
     });
   });
 

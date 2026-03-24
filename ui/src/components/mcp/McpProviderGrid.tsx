@@ -11,7 +11,7 @@ interface Props {
   onCopy: (text: string, field: string) => void;
 }
 
-function ProviderStatusBadge({ providerKey, status }: { providerKey: string; status?: McpSetupStatus }) {
+function ProviderStatusBadge({ status }: { status?: McpSetupStatus }) {
   if (!status) return <span className="provider-badge neutral">not configured</span>;
   if (status.hasAiRemoteCoder) return <span className="provider-badge success">✓ connected</span>;
   if (status.exists) return <span className="provider-badge warn">file exists, not configured</span>;
@@ -49,7 +49,7 @@ export function McpProviderGrid({
                 </div>
               </div>
               <div className="provider-actions">
-                <ProviderStatusBadge providerKey={provider.key} status={setupStatus[provider.key]} />
+                <ProviderStatusBadge status={setupStatus[provider.key]} />
                 {!enabled && <span className="provider-badge disabled">disabled in config</span>}
                 {enabled && (
                   <button
@@ -121,4 +121,3 @@ export function McpProviderGrid({
 }
 
 export default McpProviderGrid;
-

@@ -113,7 +113,7 @@ function Setup({ onComplete }: Props) {
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label className="form-label">Username</label>
+            <label className="form-label">Username or Email</label>
             <input
               type="text"
               className="form-input"
@@ -121,11 +121,14 @@ function Setup({ onComplete }: Props) {
               onChange={(e) => setUsername(e.target.value)}
               required
               minLength={3}
-              maxLength={50}
-              pattern="[a-zA-Z0-9_-]+"
+              maxLength={254}
               autoComplete="username"
               autoFocus
+              placeholder="admin@example.com or admin_user"
             />
+            <p className="settings-hint" style={{ marginTop: '6px' }}>
+              Use a valid email address or a handle with letters, numbers, dot, underscore, or hyphen.
+            </p>
           </div>
 
           <div className="form-group">

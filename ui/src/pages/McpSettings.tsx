@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useToast } from '../components/ui';
 import McpProviderGrid from '../components/mcp/McpProviderGrid';
 import { MCP_PROVIDERS, type McpProviderKey } from '../features/mcp/providers';
@@ -12,6 +12,7 @@ interface Props {
 export function McpSettings(_props: Props) {
   const { addToast } = useToast();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const [mcpConfig, setMcpConfig] = useState<McpConfig | null>(null);
   const [tokens, setTokens] = useState<McpToken[]>([]);
@@ -45,6 +46,13 @@ export function McpSettings(_props: Props) {
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'connect' || tab === 'tokens' || tab === 'test') {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
 
   async function setupProvider(providerKey: McpProviderKey) {
     setInstallingProvider(providerKey);
@@ -264,7 +272,7 @@ export function McpSettings(_props: Props) {
                 <div className="form-row">
                   <input
                     type="text"
-                    className="input"
+                    className="form-input"
                     placeholder='Label (e.g. "My Claude session")'
                     value={newTokenLabel}
                     onChange={(e) => setNewTokenLabel(e.target.value)}
@@ -384,4 +392,3 @@ export function McpSettings(_props: Props) {
 }
 
 export default McpSettings;
-

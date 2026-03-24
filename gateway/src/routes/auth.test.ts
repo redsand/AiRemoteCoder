@@ -118,6 +118,43 @@ describe('routes/auth', () => {
     expect(user.totp_secret).toBe('TOTPSECRET');
   });
 
+  it('accepts email address for initial setup username', async () => {
+    vi.mocked(argon2.hash).mockResolvedValue('hashed-password' as never);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/setup',
+      payload: {
+        username: 'admin@example.com',
+        password: 'very-strong-password',
+        enableTotp: false,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; userId: string };
+    expect(body.ok).toBe(true);
+
+    const user = db.prepare('SELECT username FROM users WHERE id = ?').get(body.userId) as { username: string };
+    expect(user.username).toBe('admin@example.com');
+  });
+
+  it('rejects invalid setup username with 400 instead of 500', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/setup',
+      payload: {
+        username: 'bad username with spaces',
+        password: 'very-strong-password',
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      error: 'Invalid setup payload',
+    });
+  });
+
   it('logs in and returns a session cookie for valid credentials', async () => {
     const userId = 'user-1';
     db.prepare(`
@@ -204,6 +241,37 @@ describe('routes/auth', () => {
     expect(res.statusCode).toBe(200);
     expect(db.prepare('SELECT username, role FROM users WHERE username = ?').get('bob')).toMatchObject({
       username: 'bob',
+      role: 'operator',
+    });
+  });
+
+  it('allows an admin to create users with email usernames', async () => {
+    const userId = 'user-1';
+    const sessionId = 'session-admin';
+    db.prepare(`
+      INSERT INTO users (id, username, password_hash, role)
+      VALUES (?, 'alice', 'hashed', 'admin')
+    `).run(userId);
+    db.prepare(`
+      INSERT INTO sessions (id, user_id, expires_at)
+      VALUES (?, ?, ?)
+    `).run(sessionId, userId, Math.floor(Date.now() / 1000) + 3600);
+    vi.mocked(argon2.hash).mockResolvedValue('other-hash' as never);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/users',
+      cookies: { session: sessionId },
+      payload: {
+        username: 'operator@example.com',
+        password: 'another-strong-password',
+        role: 'operator',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(db.prepare('SELECT username, role FROM users WHERE username = ?').get('operator@example.com')).toMatchObject({
+      username: 'operator@example.com',
       role: 'operator',
     });
   });

@@ -48,6 +48,11 @@ start with tests that describe the desired behavior before code changes land.
 - Tests must mock the database and external services — no real I/O in unit tests
 - Integration tests that test the full HTTP path must be in `*.integration.test.ts`
   files so they can be run separately from unit tests
+- UI changes that affect MCP setup, deployment, or navigation must include
+  `ui/src/**/*.test.tsx` coverage for the affected component or page and must
+  verify the MCP-first flow, supported provider list, and install affordances.
+- Treat UI TDD the same way as gateway TDD: write the component test first,
+  then implement the minimum code to satisfy it, then refactor.
 
 ### Running tests
 
@@ -63,6 +68,9 @@ cd wrapper && npm test
 
 # All tests from root
 npm test --workspaces
+
+# MCP MVP test path (gateway + ui, excludes deprecated wrapper)
+npm run test:mvp
 ```
 
 ### Test file naming

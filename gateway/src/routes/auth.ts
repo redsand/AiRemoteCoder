@@ -10,13 +10,25 @@ import { uiAuth, logAudit, type AuthenticatedRequest } from '../middleware/auth.
 
 // Validation schemas
 const loginSchema = z.object({
-  username: z.string().min(1).max(100),
+  username: z.string().trim().min(1).max(254),
   password: z.string().min(1).max(200),
   totpCode: z.string().length(6).optional()
 });
 
+const HANDLE_USERNAME_REGEX = /^[a-zA-Z0-9_.-]+$/;
+
+const usernameSchema = z
+  .string()
+  .trim()
+  .min(3, 'Username must be at least 3 characters')
+  .max(254, 'Username must be at most 254 characters')
+  .refine(
+    (value) => HANDLE_USERNAME_REGEX.test(value) || z.string().email().safeParse(value).success,
+    'Username must be a valid email or contain only letters, numbers, dot, underscore, or hyphen'
+  );
+
 const setupSchema = z.object({
-  username: z.string().min(3).max(50).regex(/^[a-zA-Z0-9_-]+$/),
+  username: usernameSchema,
   password: z.string().min(12).max(200),
   enableTotp: z.boolean().optional()
 });
@@ -43,7 +55,14 @@ export async function authRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'Setup already completed' });
     }
 
-    const body = setupSchema.parse(request.body);
+    const parsed = setupSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'Invalid setup payload',
+        details: parsed.error.issues,
+      });
+    }
+    const body = parsed.data;
 
     // Hash password
     const passwordHash = await argon2.hash(body.password, {
@@ -82,7 +101,14 @@ export async function authRoutes(fastify: FastifyInstance) {
 
   // Login
   fastify.post('/api/auth/login', async (request, reply) => {
-    const body = loginSchema.parse(request.body);
+    const parsed = loginSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'Invalid login payload',
+        details: parsed.error.issues,
+      });
+    }
+    const body = parsed.data;
 
     const user = db.prepare(`
       SELECT id, username, password_hash, totp_secret, role
@@ -212,11 +238,18 @@ export async function authRoutes(fastify: FastifyInstance) {
       return reply.code(403).send({ error: 'Admin required' });
     }
 
-    const body = z.object({
-      username: z.string().min(3).max(50).regex(/^[a-zA-Z0-9_-]+$/),
+    const parsed = z.object({
+      username: usernameSchema,
       password: z.string().min(12).max(200),
       role: z.enum(['admin', 'operator', 'viewer'])
-    }).parse(request.body);
+    }).safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'Invalid user payload',
+        details: parsed.error.issues,
+      });
+    }
+    const body = parsed.data;
 
     // Check if username exists
     const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(body.username);

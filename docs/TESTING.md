@@ -10,9 +10,13 @@ This document outlines the comprehensive test coverage for the Connect-Back Gate
 # All tests (gateway and wrapper)
 npm test
 
+# MCP MVP focus (gateway + ui, excludes legacy wrapper)
+npm run test:mvp
+
 # Run tests for a specific workspace
 cd gateway && npm test
 cd wrapper && npm test
+cd ui && npm test
 
 # Watch mode (if supported by workspace)
 cd gateway && npm run test:watch
@@ -35,7 +39,9 @@ cd gateway && npm test -- src/utils/crypto.test.ts
 cd wrapper && npm test -- src/services/gateway-client.test.ts
 ```
 
-Note: The root `npm test` command runs all tests across gateway and wrapper workspaces as defined in the root package.json. For workspace-specific test options (coverage, watch mode, etc.), navigate to the workspace directory and check its package.json for available scripts.
+Note: The root `npm test` command runs all tests across gateway, wrapper, and ui workspaces.
+For MCP MVP validation, prefer `npm run test:mvp` so legacy wrapper failures do not block MCP control-plane development.
+For workspace-specific test options (coverage, watch mode, etc.), navigate to the workspace directory and check its package.json for available scripts.
 
 ## Test Structure
 
@@ -262,7 +268,7 @@ describe('ComponentName', () => {
 ## CI/CD Integration
 
 ```yaml
-# Example GitHub Actions workflow
+# MVP-first GitHub Actions workflow
 test:
   runs-on: ubuntu-latest
   steps:
@@ -271,7 +277,18 @@ test:
       with:
         node-version: '20'
     - run: npm ci
-    - run: npm test
-    - run: npm run test -- --coverage
-    - uses: codecov/codecov-action@v3
+    - run: npm run build:mvp
+    - run: npm run test:mvp
+
+# Optional legacy wrapper lane (non-blocking while wrapper is deprecated)
+legacy-wrapper:
+  continue-on-error: true
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - run: npm ci
+    - run: npm run test -w wrapper
 ```

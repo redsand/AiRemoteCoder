@@ -14,8 +14,10 @@
     "dev:gateway": "npm run dev -w gateway",
     "dev:ui": "npm run dev -w ui",
     "build": "npm run build -w gateway && npm run build -w wrapper && npm run build -w ui",
+    "build:mvp": "npm run build -w gateway && npm run build -w ui",
     "start": "npm run start -w gateway",
-    "test": "npm run test -w gateway && npm run test -w wrapper",
+    "test": "npm run test -w gateway && npm run test -w wrapper && npm run test -w ui",
+    "test:mvp": "npm run test -w gateway && npm run test -w ui",
     "setup": "npm install && npm run build",
     "prune": "node scripts/prune.mjs"
   },

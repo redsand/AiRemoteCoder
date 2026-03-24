@@ -54,13 +54,15 @@ function Login({ onLogin }: Props) {
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label className="form-label">Username</label>
+            <label className="form-label">Username or Email</label>
             <input
               type="text"
               className="form-input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               required
+              maxLength={254}
+              placeholder="admin@example.com"
               autoComplete="username"
               autoFocus
             />

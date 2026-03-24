@@ -6,19 +6,15 @@ import { join } from 'path';
 import { GenericRunner } from './generic-runner.js';
 
 /**
- * Real execution tests - These tests actually spawn the installed AI tools
- * and verify they can create files.
+ * Real execution tests - these tests spawn installed AI tools and touch the
+ * local filesystem. They are intentionally opt-in for CI determinism.
  *
- * These tests require:
- * - codex: PowerShell script (codex.ps1) installed
- * - gemini: gemini CLI installed
- * - rev: rev CLI installed
- * - claude: claude CLI installed
- *
- * Run these tests with: npm test -- wrapper real-execution
+ * Run with: AIRC_ENABLE_REAL_EXEC_TESTS=1 npm test -w wrapper
  */
+const runRealExec = process.env.AIRC_ENABLE_REAL_EXEC_TESTS === '1';
+const describeRealExec = runRealExec ? describe : describe.skip;
 
-describe('Real Tool Execution Tests', () => {
+describeRealExec('Real Tool Execution Tests', () => {
   let testDir: string;
 
   beforeEach(() => {
