@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildExecInvocation,
   handleWorkerCommand,
+  isExpectedIdleClaimError,
   PersistentCodexExecutor,
 } from './worker.js';
 import { parseRunnerOptions } from './cli.js';
@@ -130,5 +131,15 @@ describe('runner cli parsing', () => {
 
   it('fails when token is missing', () => {
     expect(() => parseRunnerOptions([], {})).toThrow('Missing MCP token');
+  });
+});
+
+describe('runner error classification', () => {
+  it('suppresses expected no-session claim errors', () => {
+    expect(isExpectedIdleClaimError(new Error('POST /api/mcp/runs/claim failed (404): {"error":"No active MCP session found for this token"}'))).toBe(true);
+  });
+
+  it('does not suppress unrelated errors', () => {
+    expect(isExpectedIdleClaimError(new Error('POST /api/mcp/runs/claim failed (500): boom'))).toBe(false);
   });
 });

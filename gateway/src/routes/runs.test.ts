@@ -722,4 +722,94 @@ describe('routes/runs', () => {
     const commands = pollRes.json() as Array<{ id: string; command: string; arguments?: string }>;
     expect(commands.some((entry) => entry.id === 'cmd-mcp-no-header' && entry.command === '__INPUT__')).toBe(true);
   });
+
+  it('allows MCP claim without active session by falling back to token worker identity', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-no-session-claim';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-9', ?, 'auto:codex', 'user-1', '["runs:read","runs:write","sessions:write"]')
+    `).run(tokenHash);
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, waiting_approval, created_at)
+      VALUES ('run-mcp-no-session-claim', 'pending', 'codex', 'cap-mcp-no-session-claim', 0, unixepoch())
+    `).run();
+
+    const claimRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/claim',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      payload: { provider: 'codex' },
+    });
+
+    expect(claimRes.statusCode).toBe(200);
+    expect(claimRes.json()).toMatchObject({
+      run: {
+        id: 'run-mcp-no-session-claim',
+        workerType: 'codex',
+      },
+    });
+
+    const saved = db.prepare('SELECT status, claimed_by FROM runs WHERE id = ?').get('run-mcp-no-session-claim') as {
+      status: string;
+      claimed_by: string | null;
+    };
+    expect(saved.status).toBe('running');
+    expect(saved.claimed_by).toBe('mcp-token:mcp-tok-9');
+  });
+
+  it('polls and acks commands for token-claimed MCP runs without active session', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-no-session-cmd';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-10', ?, 'auto:codex', 'user-1', '["runs:read","sessions:write"]')
+    `).run(tokenHash);
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-mcp-no-session-cmd', 'running', 'codex', 'cap-mcp-no-session-cmd', 'mcp-token:mcp-tok-10', unixepoch(), unixepoch())
+    `).run();
+    db.prepare(`
+      INSERT INTO commands (id, run_id, command, arguments, status, created_at)
+      VALUES ('cmd-mcp-no-session-cmd', 'run-mcp-no-session-cmd', '__INPUT__', 'hello token claim', 'pending', unixepoch())
+    `).run();
+
+    const pollRes = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/runs/run-mcp-no-session-cmd/commands',
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    });
+    expect(pollRes.statusCode).toBe(200);
+    const commands = pollRes.json() as Array<{ id: string; command: string }>;
+    expect(commands.some((entry) => entry.id === 'cmd-mcp-no-session-cmd' && entry.command === '__INPUT__')).toBe(true);
+
+    const ackRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/run-mcp-no-session-cmd/commands/cmd-mcp-no-session-cmd/ack',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      payload: { result: 'ok' },
+    });
+    expect(ackRes.statusCode).toBe(200);
+
+    const saved = db.prepare('SELECT status, result FROM commands WHERE id = ?').get('cmd-mcp-no-session-cmd') as {
+      status: string;
+      result: string | null;
+    };
+    expect(saved.status).toBe('completed');
+    expect(saved.result).toBe('ok');
+  });
 });

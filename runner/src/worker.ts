@@ -238,6 +238,12 @@ export interface RunnerOptions {
   errorBackoffMs?: number;
 }
 
+export function isExpectedIdleClaimError(err: unknown): boolean {
+  const message = String((err as any)?.message ?? err ?? '');
+  return message.includes('POST /api/mcp/runs/claim failed (404):')
+    && message.includes('No active MCP session found for this token');
+}
+
 function createExecutor(options: RunnerOptions): WorkerExecutor {
   if (options.provider === 'codex') {
     return options.codexMode === 'exec' ? new CodexExecExecutor() : new PersistentCodexExecutor();
@@ -252,6 +258,7 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
   const pollCommandsMs = options.pollCommandsMs ?? 750;
   const errorBackoffMs = options.errorBackoffMs ?? 3000;
   let sequence = 0;
+  let lastIdleClaimLogAt = 0;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -297,8 +304,17 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
       }
       if (executor.shutdown) await executor.shutdown();
     } catch (err: any) {
-      // eslint-disable-next-line no-console
-      console.error('[airc-mcp-runner] error', err?.message ?? err);
+      if (isExpectedIdleClaimError(err)) {
+        const now = Date.now();
+        if (now - lastIdleClaimLogAt > 30000) {
+          // eslint-disable-next-line no-console
+          console.info('[airc-mcp-runner] waiting for MCP session registration');
+          lastIdleClaimLogAt = now;
+        }
+      } else {
+        // eslint-disable-next-line no-console
+        console.error('[airc-mcp-runner] error', err?.message ?? err);
+      }
       await new Promise((resolve) => setTimeout(resolve, errorBackoffMs));
     }
   }

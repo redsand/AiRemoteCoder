@@ -79,7 +79,7 @@ const mcpClaimRunSchema = z.object({
   provider: z.string().optional(),
 });
 
-function resolveAuthorizedMcpSession(
+function resolveAuthorizedMcpWorker(
   request: FastifyRequest,
   reply: FastifyReply,
   requiredScopes: McpScope[]
@@ -107,18 +107,18 @@ function resolveAuthorizedMcpSession(
     ? getMcpSession(headerSessionId)
     : findLatestMcpSessionByTokenId(tokenCtx.tokenId);
 
-  if (!session) {
-    reply.code(404).send({ error: 'No active MCP session found for this token' });
-    return null;
+  if (session) {
+    const authCheck = validateMcpSessionAccess(session.authContext, authHeader);
+    if (!authCheck.ok) {
+      reply.code(authCheck.statusCode).send({ error: authCheck.message });
+      return null;
+    }
+
+    return { sessionId: session.id, session, claimTag: `mcp:${session.id}` };
   }
 
-  const authCheck = validateMcpSessionAccess(session.authContext, authHeader);
-  if (!authCheck.ok) {
-    reply.code(authCheck.statusCode).send({ error: authCheck.message });
-    return null;
-  }
-
-  return { sessionId: session.id, session };
+  // Standalone MCP runner fallback: authorize by token identity when no live MCP session exists.
+  return { sessionId: null, session: null, claimTag: `mcp-token:${tokenCtx.tokenId}` };
 }
 
 export async function runsRoutes(fastify: FastifyInstance) {
@@ -449,19 +449,17 @@ export async function runsRoutes(fastify: FastifyInstance) {
 
   // MCP worker: claim next pending run for this connected MCP session
   fastify.post('/api/mcp/runs/claim', async (request, reply) => {
-    const auth = resolveAuthorizedMcpSession(request, reply, ['runs:write']);
+    const auth = resolveAuthorizedMcpWorker(request, reply, ['runs:write']);
     if (!auth) return;
-    const { sessionId, session } = auth;
+    const { session, claimTag } = auth;
     const body = mcpClaimRunSchema.parse(request.body ?? {});
 
-    const provider = (body.provider ?? providerFromTokenLabel(session.authContext.tokenLabel) ?? '').trim().toLowerCase();
+    const provider = (body.provider ?? providerFromTokenLabel(session?.authContext.tokenLabel) ?? '').trim().toLowerCase();
     if (!provider) {
       return reply.code(400).send({ error: 'Unable to resolve provider for MCP claim' });
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const claimTag = `mcp:${sessionId}`;
-
     const claimTransaction = db.transaction(() => {
       const run = db.prepare(`
         SELECT id, command, metadata, worker_type, capability_token
@@ -761,10 +759,10 @@ export async function runsRoutes(fastify: FastifyInstance) {
 
   // MCP worker: poll pending commands for a claimed run
   fastify.get('/api/mcp/runs/:runId/commands', async (request, reply) => {
-    const auth = resolveAuthorizedMcpSession(request, reply, ['runs:read', 'sessions:write']);
+    const auth = resolveAuthorizedMcpWorker(request, reply, ['runs:read', 'sessions:write']);
     if (!auth) return;
     const { runId } = request.params as { runId: string };
-    const { sessionId } = auth;
+    const { claimTag } = auth;
 
     const run = db.prepare('SELECT id, claimed_by FROM runs WHERE id = ?').get(runId) as {
       id: string;
@@ -774,7 +772,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: 'Run not found' });
     }
 
-    const claimTag = `mcp:${sessionId}`;
     if (run.claimed_by !== claimTag) {
       return reply.code(403).send({ error: 'Run is not claimed by this MCP session' });
     }
@@ -802,11 +799,11 @@ export async function runsRoutes(fastify: FastifyInstance) {
 
   // MCP worker: acknowledge command delivery/execution
   fastify.post('/api/mcp/runs/:runId/commands/:commandId/ack', async (request, reply) => {
-    const auth = resolveAuthorizedMcpSession(request, reply, ['sessions:write']);
+    const auth = resolveAuthorizedMcpWorker(request, reply, ['sessions:write']);
     if (!auth) return;
     const { runId, commandId } = request.params as { runId: string; commandId: string };
     const body = ackSchema.parse(request.body ?? {});
-    const { sessionId } = auth;
+    const { claimTag } = auth;
 
     const run = db.prepare('SELECT id, claimed_by FROM runs WHERE id = ?').get(runId) as {
       id: string;
@@ -816,7 +813,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: 'Run not found' });
     }
 
-    const claimTag = `mcp:${sessionId}`;
     if (run.claimed_by !== claimTag) {
       return reply.code(403).send({ error: 'Run is not claimed by this MCP session' });
     }
@@ -839,11 +835,11 @@ export async function runsRoutes(fastify: FastifyInstance) {
 
   // MCP worker: ingest run event stream
   fastify.post('/api/mcp/runs/:runId/events', async (request, reply) => {
-    const auth = resolveAuthorizedMcpSession(request, reply, ['sessions:write']);
+    const auth = resolveAuthorizedMcpWorker(request, reply, ['sessions:write']);
     if (!auth) return;
     const { runId } = request.params as { runId: string };
     const body = eventSchema.parse(request.body);
-    const { sessionId } = auth;
+    const { claimTag } = auth;
 
     const run = db.prepare('SELECT id, claimed_by FROM runs WHERE id = ?').get(runId) as {
       id: string;
@@ -853,7 +849,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: 'Run not found' });
     }
 
-    const claimTag = `mcp:${sessionId}`;
     if (run.claimed_by !== claimTag) {
       return reply.code(403).send({ error: 'Run is not claimed by this MCP session' });
     }
