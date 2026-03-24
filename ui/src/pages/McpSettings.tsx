@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useToast } from '../components/ui';
 import McpProviderGrid from '../components/mcp/McpProviderGrid';
 import { MCP_PROVIDERS, type McpProviderKey } from '../features/mcp/providers';
-import type { McpActiveSession, McpConfig, McpProjectTarget, McpProviderSetupState, McpSetupStatus, McpToken } from '../features/mcp/types';
+import type { McpActiveSession, McpConfig, McpProjectTarget, McpProviderSetupState, McpToken } from '../features/mcp/types';
 
 interface Props {
   user: { id: string; username: string; role: string } | null;
@@ -21,18 +21,35 @@ export function McpSettings(_props: Props) {
   const [customProjectPath, setCustomProjectPath] = useState('');
   const [newTargetLabel, setNewTargetLabel] = useState('');
   const [currentDeviceId, setCurrentDeviceId] = useState<string | null>(null);
-  const [setupStatus, setSetupStatus] = useState<Record<string, McpSetupStatus>>({});
   const [activeSessionCount, setActiveSessionCount] = useState(0);
   const [activeSessions, setActiveSessions] = useState<McpActiveSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'connect' | 'tokens' | 'test'>('connect');
   const [installingProvider, setInstallingProvider] = useState<McpProviderKey | null>(null);
   const [providerSetup, setProviderSetup] = useState<Record<string, McpProviderSetupState>>({});
+  const [persistEnvVars, setPersistEnvVars] = useState(true);
   const [newTokenLabel, setNewTokenLabel] = useState('');
   const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  function normalizeTokenScopes(scopes: unknown): string[] {
+    if (Array.isArray(scopes)) {
+      return scopes.filter((scope): scope is string => typeof scope === 'string');
+    }
+    if (typeof scopes === 'string') {
+      try {
+        const parsed = JSON.parse(scopes);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((scope): scope is string => typeof scope === 'string');
+        }
+      } catch {
+        // ignore malformed payload
+      }
+    }
+    return [];
+  }
 
   const buildTargetPayload = useCallback(() => {
     const payload: { projectTargetId?: string; projectPath?: string } = {};
@@ -46,22 +63,11 @@ export function McpSettings(_props: Props) {
     return payload;
   }, [customProjectPath, selectedProjectTargetId]);
 
-  const buildTargetQuery = useCallback(() => {
-    if (selectedProjectTargetId) {
-      return `?projectTargetId=${encodeURIComponent(selectedProjectTargetId)}`;
-    }
-    if (customProjectPath.trim()) {
-      return `?projectPath=${encodeURIComponent(customProjectPath.trim())}`;
-    }
-    return '';
-  }, [customProjectPath, selectedProjectTargetId]);
-
   const fetchAll = useCallback(async () => {
     try {
-      const [configRes, tokensRes, statusRes] = await Promise.all([
+      const [configRes, tokensRes] = await Promise.all([
         fetch('/api/mcp/config'),
         fetch('/api/mcp/tokens'),
-        fetch(`/api/mcp/setup/status${buildTargetQuery()}`),
       ]);
       const targetsRes = await fetch('/api/mcp/project-targets');
       const meRes = await fetch('/api/auth/me');
@@ -71,8 +77,14 @@ export function McpSettings(_props: Props) {
         setMcpConfig(config);
         setSelectedScopes((prev) => (prev.length > 0 ? prev : (config.defaultAgentScopes ?? [])));
       }
-      if (tokensRes.ok) setTokens((await tokensRes.json()).tokens ?? []);
-      if (statusRes.ok) setSetupStatus((await statusRes.json()).status ?? {});
+      if (tokensRes.ok) {
+        const payload = await tokensRes.json();
+        const normalized = (payload.tokens ?? []).map((token: any) => ({
+          ...token,
+          scopes: normalizeTokenScopes(token.scopes),
+        })) as McpToken[];
+        setTokens(normalized);
+      }
       if (targetsRes.ok) setProjectTargets((await targetsRes.json()).targets ?? []);
       if (meRes.ok) {
         const me = await meRes.json();
@@ -89,7 +101,7 @@ export function McpSettings(_props: Props) {
     } finally {
       setLoading(false);
     }
-  }, [addToast, buildTargetQuery]);
+  }, [addToast]);
 
   useEffect(() => {
     fetchAll();
@@ -102,14 +114,18 @@ export function McpSettings(_props: Props) {
     }
   }, [searchParams]);
 
-  async function setupProvider(providerKey: McpProviderKey) {
+  async function setupProvider(providerKey: McpProviderKey, options: { generateNewToken?: boolean } = {}) {
     setInstallingProvider(providerKey);
     try {
       const targetPayload = buildTargetPayload();
       const setupRes = await fetch(`/api/mcp/setup/${providerKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(targetPayload),
+        body: JSON.stringify({
+          ...targetPayload,
+          persistEnv: persistEnvVars,
+          generateNewToken: Boolean(options.generateNewToken),
+        }),
       });
       if (!setupRes.ok) {
         const err = await setupRes.json();
@@ -123,16 +139,17 @@ export function McpSettings(_props: Props) {
         ...prev,
         [providerKey]: {
           token: setup.token,
+          tokenReused: Boolean(setup.tokenReused),
           snippet: setup.snippet,
           copyPaste: setup.copyPaste,
           filePath: null,
           installed: false,
         },
       }));
-      addToast('success', `${providerKey} setup snippet generated. Copy it into your project config.`);
+      addToast('success', setup.tokenReused
+        ? `${providerKey} commands refreshed using your latest unused token.`
+        : `${providerKey} setup snippet generated.`);
 
-      const statusRes = await fetch(`/api/mcp/setup/status${buildTargetQuery()}`);
-      if (statusRes.ok) setSetupStatus((await statusRes.json()).status ?? {});
       await fetchAll();
     } catch (e: any) {
       addToast('error', `Setup error: ${e.message}`);
@@ -226,7 +243,11 @@ export function McpSettings(_props: Props) {
   }
 
   const activeTokens = tokens.filter((token) => !token.revoked_at);
-  const configuredCount = Object.values(setupStatus).filter((status) => status.hasAiRemoteCoder).length;
+  const connectedProviderCount = new Set(
+    activeSessions
+      .map((session) => session.provider)
+      .filter((provider): provider is string => Boolean(provider))
+  ).size;
   const providerCount = MCP_PROVIDERS.length;
 
   return (
@@ -246,8 +267,8 @@ export function McpSettings(_props: Props) {
             <span className="hero-stat-label">active mcp sessions</span>
           </div>
           <div className="hero-stat">
-            <span className="hero-stat-value">{configuredCount}</span>
-            <span className="hero-stat-label">configured environments</span>
+            <span className="hero-stat-value">{connectedProviderCount}</span>
+            <span className="hero-stat-label">connected providers</span>
           </div>
           <div className="hero-stat">
             <span className="hero-stat-value">{activeTokens.length}</span>
@@ -335,6 +356,17 @@ export function McpSettings(_props: Props) {
                 <p className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
                   Generate provider setup commands, copy/paste one-shot into your project shell, then launch Claude/Codex/Gemini/OpenCode/Zenflow in that project.
                 </p>
+                <label className="provider-status-item" style={{ marginTop: '10px', justifyContent: 'space-between' }}>
+                  <span>Persist env vars for future shells</span>
+                  <input
+                    type="checkbox"
+                    checked={persistEnvVars}
+                    onChange={(e) => setPersistEnvVars(e.target.checked)}
+                  />
+                </label>
+                <p className="text-muted" style={{ marginTop: '6px', fontSize: '12px' }}>
+                  When enabled, setup commands also persist token variables to your user shell profile/environment.
+                </p>
                 {currentDeviceId ? (
                   <p className="text-muted" style={{ marginTop: '6px', fontSize: '12px' }}>
                     Trusted device identity: <code>{currentDeviceId}</code>
@@ -368,11 +400,10 @@ export function McpSettings(_props: Props) {
 
               <McpProviderGrid
                 mcpConfig={mcpConfig}
-                setupStatus={setupStatus}
                 providerSetup={providerSetup}
                 installingProvider={installingProvider}
                 copiedField={copiedField}
-                onInstall={(providerKey) => setupProvider(providerKey)}
+                onInstall={(providerKey, options) => setupProvider(providerKey, options)}
                 onCopy={copyToClipboard}
               />
             </section>
@@ -496,23 +527,20 @@ export function McpSettings(_props: Props) {
               </div>
 
               <div className="card">
-                <h3>Connection Status</h3>
+                <h3>Connected Provider Sessions</h3>
                 <div className="provider-status-grid">
-                  {MCP_PROVIDERS.map((provider) => {
-                    const status = setupStatus[provider.key];
-                    return (
-                      <div key={provider.key} className="provider-status-item">
-                        <span>
-                          {provider.icon} {provider.label}
-                        </span>
-                        {status?.hasAiRemoteCoder ? (
-                          <span className="badge-green">✓ configured</span>
-                        ) : (
-                          <span className="badge-grey">not configured</span>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {activeSessions.length === 0 ? (
+                    <div className="provider-status-item">
+                      <span>No active provider sessions</span>
+                    </div>
+                  ) : activeSessions.map((session) => (
+                    <div key={session.id} className="provider-status-item">
+                      <span>{(session.provider ?? 'unknown').toUpperCase()} · {session.user.username}</span>
+                      <span className="text-muted" style={{ fontSize: '11px' }}>
+                        session {session.id.slice(0, 8)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
 

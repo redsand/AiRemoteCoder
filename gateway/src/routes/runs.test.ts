@@ -4,9 +4,11 @@ import fastifyCookie from '@fastify/cookie';
 import { dirname, join } from 'path';
 import { createHash } from 'crypto';
 import { runsRoutes } from './runs.js';
+import { vncRoutes } from './vnc.js';
 import { db } from '../services/database.js';
 import { rawBodyPlugin } from '../middleware/auth.js';
 import { createSignature, generateNonce, hashBody } from '../utils/crypto.js';
+import { clearMcpSessionsForTests, registerMcpSession } from '../mcp/session-registry.js';
 
 const { testDbPath } = vi.hoisted(() => ({
   testDbPath: process.cwd() + '\\.vitest-data\\runs-routes-' + Math.random().toString(36).slice(2) + '.db',
@@ -36,6 +38,7 @@ vi.mock('../config.js', () => ({
     mcpPath: '/mcp',
     mcpTokenExpirySeconds: 86400,
     mcpRateLimit: { max: 300, timeWindow: '1 minute' },
+    secretPatterns: [],
     providers: {
       claude: true,
       codex: true,
@@ -67,6 +70,7 @@ function buildApp() {
   rawBodyPlugin(fastify);
   fastify.register(fastifyCookie, { secret: 'test-auth-secret' });
   fastify.register(runsRoutes);
+  fastify.register(vncRoutes);
   return fastify;
 }
 
@@ -106,6 +110,7 @@ describe('routes/runs', () => {
 
   afterEach(async () => {
     cleanup();
+    clearMcpSessionsForTests();
   });
 
   afterAll(async () => {
@@ -220,5 +225,501 @@ describe('routes/runs', () => {
       run: { id: 'run-1', status: 'running' },
       canResume: false,
     });
+  });
+
+  it('accepts MCP provider worker types for UI-created runs', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      headers: adminSessionHeaders('session-1'),
+      payload: {
+        label: 'OpenCode run',
+        workerType: 'opencode',
+      },
+    });
+
+    expect(createRes.statusCode).toBe(200);
+    const runId = (createRes.json() as { id: string }).id;
+    const saved = db.prepare('SELECT worker_type FROM runs WHERE id = ?').get(runId) as { worker_type: string };
+    expect(saved.worker_type).toBe('opencode');
+  });
+
+  it('auto-attaches to active MCP session and starts run immediately', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-1',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'tok-1',
+        tokenLabel: 'auto:codex',
+        user: {
+          id: 'user-1',
+          username: 'alice',
+          role: 'admin',
+          source: 'mcp_token',
+        },
+        scopes: ['runs:read', 'runs:write'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      headers: adminSessionHeaders('session-1'),
+      payload: {
+        label: 'Codex attached run',
+        workerType: 'codex',
+        metadata: {
+          mcpSessionId: 'mcp-session-1',
+        },
+      },
+    });
+
+    expect(createRes.statusCode).toBe(200);
+    expect(createRes.json()).toMatchObject({
+      status: 'running',
+      attachedMcpSessionId: 'mcp-session-1',
+    });
+
+    const runId = (createRes.json() as { id: string }).id;
+    const saved = db.prepare('SELECT status, claimed_by, started_at FROM runs WHERE id = ?').get(runId) as {
+      status: string;
+      claimed_by: string | null;
+      started_at: number | null;
+    };
+
+    expect(saved.status).toBe('running');
+    expect(saved.claimed_by).toBe('mcp:mcp-session-1');
+    expect(saved.started_at).toBeTypeOf('number');
+  });
+
+  it('allows an MCP session to claim a pending run for its provider', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
+
+    const token = 'mcp-token-claim';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-1', ?, 'auto:codex', 'user-1', '["runs:read","runs:write","sessions:write"]')
+    `).run(tokenHash);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-claim',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'mcp-tok-1',
+        tokenLabel: 'auto:codex',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['runs:read', 'runs:write', 'sessions:write'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, waiting_approval, created_at)
+      VALUES ('run-mcp-1', 'pending', 'codex', 'cap-mcp-1', 0, unixepoch())
+    `).run();
+
+    const claimRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/claim',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'mcp-session-id': 'mcp-session-claim',
+        'content-type': 'application/json',
+      },
+      payload: { provider: 'codex' },
+    });
+
+    expect(claimRes.statusCode).toBe(200);
+    expect(claimRes.json()).toMatchObject({
+      run: {
+        id: 'run-mcp-1',
+        workerType: 'codex',
+      },
+    });
+
+    const saved = db.prepare('SELECT status, claimed_by FROM runs WHERE id = ?').get('run-mcp-1') as {
+      status: string;
+      claimed_by: string | null;
+    };
+    expect(saved.status).toBe('running');
+    expect(saved.claimed_by).toBe('mcp:mcp-session-claim');
+  });
+
+  it('lets MCP session poll and ack pending commands for its claimed run', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-commands';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-2', ?, 'auto:codex', 'user-1', '["runs:read","sessions:write"]')
+    `).run(tokenHash);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-cmd',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'mcp-tok-2',
+        tokenLabel: 'auto:codex',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['runs:read', 'sessions:write'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-mcp-2', 'running', 'codex', 'cap-mcp-2', 'mcp:mcp-session-cmd', unixepoch(), unixepoch())
+    `).run();
+    db.prepare(`
+      INSERT INTO commands (id, run_id, command, arguments, status, created_at)
+      VALUES ('cmd-mcp-1', 'run-mcp-2', '__INPUT__', 'hello', 'pending', unixepoch())
+    `).run();
+
+    const pollRes = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/runs/run-mcp-2/commands',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'mcp-session-id': 'mcp-session-cmd',
+      },
+    });
+
+    expect(pollRes.statusCode).toBe(200);
+    const commands = pollRes.json() as Array<{ id: string; command: string; arguments?: string }>;
+    expect(commands.some((entry) => entry.id === 'cmd-mcp-1' && entry.command === '__INPUT__')).toBe(true);
+
+    const ackRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/run-mcp-2/commands/cmd-mcp-1/ack',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'mcp-session-id': 'mcp-session-cmd',
+        'content-type': 'application/json',
+      },
+      payload: { result: 'ok', error: null },
+    });
+
+    expect(ackRes.statusCode).toBe(200);
+    const saved = db.prepare('SELECT status, result, error FROM commands WHERE id = ?').get('cmd-mcp-1') as {
+      status: string;
+      result: string | null;
+      error: string | null;
+    };
+    expect(saved.status).toBe('completed');
+    expect(saved.result).toBe('ok');
+    expect(saved.error).toBe(null);
+  });
+
+  it('delivers VNC control commands through MCP command polling', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-vnc';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-3', ?, 'auto:codex', 'user-1', '["runs:read","sessions:write","vnc:control"]')
+    `).run(tokenHash);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-vnc',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'mcp-tok-3',
+        tokenLabel: 'auto:codex',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['runs:read', 'sessions:write', 'vnc:control'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-vnc-1', 'running', 'vnc', 'cap-vnc-1', 'mcp:mcp-session-vnc', unixepoch(), unixepoch())
+    `).run();
+    db.prepare(`
+      INSERT INTO commands (id, run_id, command, arguments, status, created_at)
+      VALUES ('cmd-vnc-1', 'run-vnc-1', '__START_VNC_STREAM__', '{"source":"ui"}', 'pending', unixepoch())
+    `).run();
+
+    const pollRes = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/runs/run-vnc-1/commands',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'mcp-session-id': 'mcp-session-vnc',
+      },
+    });
+
+    expect(pollRes.statusCode).toBe(200);
+    const commands = pollRes.json() as Array<{ id: string; command: string; arguments?: string }>;
+    expect(commands.some((entry) => entry.id === 'cmd-vnc-1' && entry.command === '__START_VNC_STREAM__')).toBe(true);
+  });
+
+  it('queues UI input for MCP-claimed run as __INPUT__ with arguments', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
+
+    const token = 'mcp-token-input';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-4', ?, 'auto:codex', 'user-1', '["runs:read","sessions:write"]')
+    `).run(tokenHash);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-input',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'mcp-tok-4',
+        tokenLabel: 'auto:codex',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['runs:read', 'sessions:write'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-mcp-input', 'running', 'codex', 'cap-mcp-input', 'mcp:mcp-session-input', unixepoch(), unixepoch())
+    `).run();
+
+    const inputRes = await app.inject({
+      method: 'POST',
+      url: '/api/runs/run-mcp-input/input',
+      headers: adminSessionHeaders('session-1'),
+      payload: { input: 'hello from ui' },
+    });
+    expect(inputRes.statusCode).toBe(200);
+
+    const pollRes = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/runs/run-mcp-input/commands',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'mcp-session-id': 'mcp-session-input',
+      },
+    });
+    expect(pollRes.statusCode).toBe(200);
+    const commands = pollRes.json() as Array<{ command: string; arguments?: string }>;
+    expect(commands.some((entry) => entry.command === '__INPUT__' && entry.arguments === 'hello from ui')).toBe(true);
+  });
+
+  it('exposes VNC start command through MCP poll when queued from VNC route', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-vnc-route';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-5', ?, 'auto:codex', 'user-1', '["runs:read","sessions:write","vnc:control"]')
+    `).run(tokenHash);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-vnc-route',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'mcp-tok-5',
+        tokenLabel: 'auto:codex',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['runs:read', 'sessions:write', 'vnc:control'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-vnc-route-1', 'running', 'vnc', 'cap-vnc-route-1', 'mcp:mcp-session-vnc-route', unixepoch(), unixepoch())
+    `).run();
+
+    const startRes = await app.inject({
+      method: 'POST',
+      url: '/api/runs/run-vnc-route-1/vnc/start',
+    });
+    expect(startRes.statusCode).toBe(200);
+
+    const pollRes = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/runs/run-vnc-route-1/commands',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'mcp-session-id': 'mcp-session-vnc-route',
+      },
+    });
+    expect(pollRes.statusCode).toBe(200);
+    const commands = pollRes.json() as Array<{ command: string }>;
+    expect(commands.some((entry) => entry.command === '__START_VNC_STREAM__')).toBe(true);
+  });
+
+  it('accepts MCP event ingestion for a claimed run and exposes events to UI', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
+
+    const token = 'mcp-token-events';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-6', ?, 'auto:codex', 'user-1', '["runs:write","sessions:write"]')
+    `).run(tokenHash);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-events',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'mcp-tok-6',
+        tokenLabel: 'auto:codex',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['runs:write', 'sessions:write'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-mcp-events', 'running', 'codex', 'cap-mcp-events', 'mcp:mcp-session-events', unixepoch(), unixepoch())
+    `).run();
+
+    const ingestRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/run-mcp-events/events',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'mcp-session-id': 'mcp-session-events',
+        'content-type': 'application/json',
+      },
+      payload: { type: 'stdout', data: 'hello from mcp', sequence: 1 },
+    });
+
+    expect(ingestRes.statusCode).toBe(200);
+
+    const eventsRes = await app.inject({
+      method: 'GET',
+      url: '/api/runs/run-mcp-events/events',
+      headers: adminSessionHeaders('session-1'),
+    });
+    expect(eventsRes.statusCode).toBe(200);
+    const events = eventsRes.json() as Array<{ type: string; data: string }>;
+    expect(events.some((entry) => entry.type === 'stdout' && entry.data === 'hello from mcp')).toBe(true);
+  });
+
+  it('updates run status from MCP marker finished event', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-marker';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-7', ?, 'auto:codex', 'user-1', '["runs:write","sessions:write"]')
+    `).run(tokenHash);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-marker',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'mcp-tok-7',
+        tokenLabel: 'auto:codex',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['runs:write', 'sessions:write'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-mcp-marker', 'running', 'codex', 'cap-mcp-marker', 'mcp:mcp-session-marker', unixepoch(), unixepoch())
+    `).run();
+
+    const markerPayload = { event: 'finished', exitCode: 0 };
+    const markerRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/run-mcp-marker/events',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'mcp-session-id': 'mcp-session-marker',
+        'content-type': 'application/json',
+      },
+      payload: { type: 'marker', data: JSON.stringify(markerPayload), sequence: 99 },
+    });
+
+    expect(markerRes.statusCode).toBe(200);
+    const saved = db.prepare('SELECT status, exit_code, finished_at FROM runs WHERE id = ?').get('run-mcp-marker') as {
+      status: string;
+      exit_code: number | null;
+      finished_at: number | null;
+    };
+    expect(saved.status).toBe('done');
+    expect(saved.exit_code).toBe(0);
+    expect(saved.finished_at).toBeTypeOf('number');
+  });
+
+  it('resolves MCP worker session by bearer token when mcp-session-id is omitted', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-no-header';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-8', ?, 'auto:codex', 'user-1', '["runs:read","sessions:write"]')
+    `).run(tokenHash);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-no-header',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'mcp-tok-8',
+        tokenLabel: 'auto:codex',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['runs:read', 'sessions:write'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-mcp-no-header', 'running', 'codex', 'cap-mcp-no-header', 'mcp:mcp-session-no-header', unixepoch(), unixepoch())
+    `).run();
+    db.prepare(`
+      INSERT INTO commands (id, run_id, command, arguments, status, created_at)
+      VALUES ('cmd-mcp-no-header', 'run-mcp-no-header', '__INPUT__', 'no session header', 'pending', unixepoch())
+    `).run();
+
+    const pollRes = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/runs/run-mcp-no-header/commands',
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    });
+
+    expect(pollRes.statusCode).toBe(200);
+    const commands = pollRes.json() as Array<{ id: string; command: string; arguments?: string }>;
+    expect(commands.some((entry) => entry.id === 'cmd-mcp-no-header' && entry.command === '__INPUT__')).toBe(true);
   });
 });

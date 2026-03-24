@@ -12,6 +12,7 @@ import type { McpScope, UserIdentity } from '../domain/types.js';
 
 export interface McpAuthContext {
   tokenId: string;
+  tokenLabel: string;
   user: UserIdentity;
   scopes: McpScope[];
 }
@@ -33,6 +34,7 @@ export function validateMcpToken(rawToken: string): McpAuthContext | null {
 
   return {
     tokenId: record.id,
+    tokenLabel: record.label,
     user: {
       id: user.id,
       username: user.username,

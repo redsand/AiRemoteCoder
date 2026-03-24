@@ -128,6 +128,10 @@ vi.mock('@modelcontextprotocol/sdk/types.js', () => ({
 async function buildApp() {
   const fastify = Fastify({ logger: false });
   await fastify.register(fastifyCookie as any, { secret: 'testsecret' });
+  fastify.decorateReply('sendFile', function sendFileMock(_file: string) {
+    this.type('text/html');
+    return this.send('<!doctype html><html><body>ui-shell</body></html>');
+  });
   const { mcpPlugin } = await import('./plugin.js');
   await fastify.register(mcpPlugin);
   await fastify.ready();
@@ -168,6 +172,20 @@ describe('GET /api/mcp/config', () => {
     await app.close();
   });
 
+  it('publishes idempotent codex replace-block instructions', async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/api/mcp/config' });
+    const body = res.json();
+    const codex = body.connectionInstructions?.codex;
+    expect(codex).toBeDefined();
+    expect(codex.commands).toEqual([]);
+    expect(codex.bash?.replaceBlock).toContain('python - <<\'PY\'');
+    expect(codex.bash?.replaceBlock).not.toContain('codex mcp add');
+    expect(codex.powershell?.replaceBlock).toContain('mcp_servers.airemotecoder');
+    expect(codex.powershell?.replaceBlock).toContain('Set-Content -Path $configPath -Value $out -Encoding utf8');
+    await app.close();
+  });
+
   it('marks legacy_wrapper as deprecated when enabled', async () => {
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/api/mcp/config' });
@@ -191,7 +209,7 @@ describe('MCP transport routes', () => {
     mockTokens.push({
       id: 'tok-1',
       token_hash: createHash('sha256').update('valid-token').digest('hex'),
-      label: 'session',
+      label: 'auto:codex',
       user_id: 'user-1',
       scopes: JSON.stringify([
         'runs:read', 'runs:write', 'runs:cancel',
@@ -217,6 +235,19 @@ describe('MCP transport routes', () => {
       payload: { jsonrpc: '2.0', method: 'initialize', id: 1, params: {} },
     });
     expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('serves SPA shell for browser navigation to /mcp', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/mcp',
+      headers: { accept: 'text/html' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.body).toContain('ui-shell');
     await app.close();
   });
 
@@ -386,6 +417,19 @@ describe('GET /api/mcp/tokens', () => {
   });
 
   it('returns token list for authenticated user', async () => {
+    mockTokens.length = 0;
+    mockTokens.push({
+      id: 'tok-legacy',
+      token_hash: createHash('sha256').update('legacy').digest('hex'),
+      label: 'legacy-token',
+      user_id: 'user-1',
+      scopes: JSON.stringify(['runs:read', 'events:read']),
+      created_at: 1,
+      expires_at: null,
+      last_used_at: null,
+      revoked_at: null,
+    });
+
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
@@ -395,6 +439,8 @@ describe('GET /api/mcp/tokens', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(Array.isArray(body.tokens)).toBe(true);
+    expect(Array.isArray(body.tokens[0].scopes)).toBe(true);
+    expect(body.tokens[0].scopes).toEqual(['runs:read', 'events:read']);
     await app.close();
   });
 });
@@ -435,6 +481,7 @@ describe('GET /api/mcp/sessions', () => {
     const body = res.json();
     expect(Array.isArray(body.sessions)).toBe(true);
     expect(body.total).toBeGreaterThanOrEqual(1);
+    expect(body.sessions[0].provider).toBe('codex');
 
     await app.close();
   });

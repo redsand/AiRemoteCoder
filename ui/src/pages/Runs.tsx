@@ -11,6 +11,8 @@ import {
   ConfirmModal,
   useToast,
 } from '../components/ui';
+import type { McpActiveSession } from '../features/mcp/types';
+import { isMcpSessionFresh } from '../features/mcp/run-worker-options';
 
 interface RunsResponse {
   runs: Run[];
@@ -55,38 +57,6 @@ const workerTypeOptions: FilterOption[] = [
   { value: 'hands-on', label: 'Hands-On' },
 ];
 
-const ollamaIntegrations = [
-  { value: 'claude', label: 'Claude (Anthropic)' },
-  { value: 'codex', label: 'Codex (OpenAI)' },
-  { value: 'opencode', label: 'OpenCode' },
-  { value: 'droid', label: 'Droid' },
-];
-
-const revProviders = [
-  { value: 'ollama', label: 'Ollama' },
-  { value: 'claude', label: 'Claude' },
-  { value: 'gemini', label: 'Gemini' },
-];
-
-const ollamaModels = [
-  { value: 'claude-opus', label: 'Claude Opus' },
-  { value: 'claude-sonnet', label: 'Claude Sonnet' },
-  { value: 'claude-haiku', label: 'Claude Haiku' },
-  { value: 'codellama:7b', label: 'CodeLlama 7B' },
-  { value: 'codellama:13b', label: 'CodeLlama 13B' },
-  { value: 'codellama:34b', label: 'CodeLlama 34B' },
-  { value: 'deepseek-coder:6.7b', label: 'DeepSeek Coder 6.7B' },
-  { value: 'mistral:7b', label: 'Mistral 7B' },
-  { value: 'custom', label: 'Custom...' },
-];
-
-const geminiModels = [
-  { value: 'gemini-pro', label: 'Gemini Pro' },
-  { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-  { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
-  { value: 'custom', label: 'Custom...' },
-];
-
 export function Runs({ user }: Props) {
   const { addToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -94,20 +64,17 @@ export function Runs({ user }: Props) {
   // State
   const [runs, setRuns] = useState<Run[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [activeMcpSessions, setActiveMcpSessions] = useState<McpActiveSession[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
   // Create run modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createWorkerType, setCreateWorkerType] = useState('claude');
-  const [createIntegration, setCreateIntegration] = useState('claude');
-  const [createProvider, setCreateProvider] = useState('');
-  const [createModel, setCreateModel] = useState('');
-  const [createCustomModel, setCreateCustomModel] = useState('');
+  const [createHostSessionId, setCreateHostSessionId] = useState('');
+  const [createMode, setCreateMode] = useState<'agent' | 'vnc' | 'hands-on'>('agent');
   const [createCommand, setCreateCommand] = useState('');
   const [createAutonomous, setCreateAutonomous] = useState(true);
-  const [createClientId, setCreateClientId] = useState('');
   const [createLoading, setCreateLoading] = useState(false);
 
   const navigate = useNavigate();
@@ -187,10 +154,23 @@ export function Runs({ user }: Props) {
     }
   }, []);
 
+  const fetchMcpSessions = useCallback(async () => {
+    try {
+      const res = await fetch('/api/mcp/sessions');
+      if (res.ok) {
+        const data = await res.json();
+        setActiveMcpSessions(Array.isArray(data.sessions) ? data.sessions : []);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // Initial fetch
   useEffect(() => {
     fetchRuns();
     fetchClients();
+    fetchMcpSessions();
   }, [status, clientId, search, waitingApproval, workerType, claim]);
 
   // Auto-refresh
@@ -205,9 +185,20 @@ export function Runs({ user }: Props) {
   useEffect(() => {
     const interval = setInterval(() => {
       fetchClients();
+      fetchMcpSessions();
     }, 10000);
     return () => clearInterval(interval);
-  }, [fetchClients]);
+  }, [fetchClients, fetchMcpSessions]);
+
+  useEffect(() => {
+    if (activeMcpSessions.length === 0) {
+      setCreateHostSessionId('');
+      return;
+    }
+    if (!activeMcpSessions.some((session) => session.id === createHostSessionId)) {
+      setCreateHostSessionId(activeMcpSessions[0].id);
+    }
+  }, [activeMcpSessions, createHostSessionId]);
 
   // Reset filters
   const resetFilters = () => {
@@ -226,35 +217,37 @@ export function Runs({ user }: Props) {
 
   // Create new run
   const handleCreateRun = async () => {
+    const selectedHost = activeMcpSessions.find((session) => session.id === createHostSessionId);
+    if (!selectedHost) {
+      addToast('error', 'Select a connected MCP host first');
+      return;
+    }
+    const selectedHostFresh = isMcpSessionFresh(selectedHost);
+    const resolvedWorkerType = createMode === 'agent' ? selectedHost.provider : createMode;
+    if (!resolvedWorkerType) {
+      addToast('error', 'Selected host does not expose an agent provider');
+      return;
+    }
+    if ((createMode === 'vnc' || createMode === 'hands-on') && !selectedHostFresh) {
+      addToast('error', 'Selected MCP host is stale. Wait for reconnect before using VNC or Hands-On.');
+      return;
+    }
+
     setCreateLoading(true);
     try {
-      let model = createModel;
-      if (model === 'custom') {
-        model = createCustomModel;
-      }
-
       const requestBody: any = {
-        workerType: createWorkerType,
+        workerType: resolvedWorkerType,
         autonomous: createAutonomous,
+        metadata: {
+          mcpSessionId: selectedHost.id,
+          mcpProvider: selectedHost.provider ?? null,
+          mcpMode: createMode,
+          mcpConnectedUser: selectedHost.user.username,
+        },
       };
-      if (createClientId) {
-        requestBody.clientId = createClientId;
-      }
 
       if (createCommand.trim()) {
         requestBody.command = createCommand.trim();
-      }
-
-      if (model && (createWorkerType === 'ollama-launch' || createWorkerType === 'gemini' || createWorkerType === 'rev')) {
-        requestBody.model = model;
-      }
-
-      if (createWorkerType === 'ollama-launch') {
-        requestBody.integration = createIntegration;
-      }
-
-      if (createWorkerType === 'rev' && createProvider) {
-        requestBody.provider = createProvider;
       }
 
       const res = await fetch('/api/runs', {
@@ -270,14 +263,10 @@ export function Runs({ user }: Props) {
         fetchRuns();
         setShowCreateModal(false);
         // Reset form
-        setCreateWorkerType('claude');
-        setCreateIntegration('claude');
-        setCreateProvider('');
-        setCreateModel('');
-        setCreateCustomModel('');
+        setCreateHostSessionId(activeMcpSessions[0]?.id ?? '');
+        setCreateMode('agent');
         setCreateCommand('');
         setCreateAutonomous(true);
-        setCreateClientId('');
         navigate(`/runs/${data.id}`);
       } else {
         const error = await res.json();
@@ -290,11 +279,16 @@ export function Runs({ user }: Props) {
     }
   };
 
-  const supportsModelSelection = createWorkerType === 'ollama-launch' || createWorkerType === 'gemini' || createWorkerType === 'rev';
-  const supportsIntegrationSelection = createWorkerType === 'ollama-launch';
-  const supportsProviderSelection = createWorkerType === 'rev';
-  const availableModels = createWorkerType === 'ollama-launch' || createWorkerType === 'gemini' || createWorkerType === 'rev' ?
-                         (createWorkerType === 'gemini' ? geminiModels : ollamaModels) : [];
+  const selectedHost = activeMcpSessions.find((session) => session.id === createHostSessionId);
+  const selectedProviderLabel = selectedHost?.provider ? selectedHost.provider.toUpperCase() : 'Unavailable';
+  const selectedHostFresh = isMcpSessionFresh(selectedHost);
+  const canUseManualModes = Boolean(selectedHost && selectedHostFresh);
+
+  useEffect(() => {
+    if ((createMode === 'vnc' || createMode === 'hands-on') && !canUseManualModes) {
+      setCreateMode('agent');
+    }
+  }, [canUseManualModes, createMode]);
 
   // Toggle run selection
   const toggleRunSelection = (runId: string) => {
@@ -529,7 +523,7 @@ export function Runs({ user }: Props) {
               <button
                 className="btn btn-primary"
                 onClick={handleCreateRun}
-                disabled={createLoading}
+                disabled={createLoading || !createHostSessionId}
               >
                 {createLoading ? 'Creating...' : 'Create Run'}
               </button>
@@ -537,117 +531,60 @@ export function Runs({ user }: Props) {
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {/* Worker Type Selection */}
+            {/* Connected Host Selection */}
             <div>
-              <label className="form-label">Worker Type</label>
+              <label className="form-label">Connected Host (MCP Session)</label>
               <select
-                value={createWorkerType}
-                onChange={(e) => {
-                  setCreateWorkerType(e.target.value);
-                  setCreateIntegration('claude');
-                  setCreateProvider('');
-                  setCreateModel('');
-                  setCreateCustomModel('');
-                }}
+                value={createHostSessionId}
+                onChange={(e) => setCreateHostSessionId(e.target.value)}
                 className="form-input"
                 style={{ cursor: 'pointer' }}
+                disabled={activeMcpSessions.length === 0}
               >
-                <option value="claude">Claude (Anthropic)</option>
-                <option value="ollama-launch">Ollama Launch</option>
-                <option value="codex">Codex CLI</option>
-                <option value="gemini">Gemini CLI</option>
-                <option value="rev">Rev</option>
-                <option value="vnc">VNC (Remote Desktop)</option>
-                <option value="hands-on">Hands-On</option>
-              </select>
-            </div>
-
-            {/* Target AI Runner */}
-            <div>
-              <label className="form-label">Target AI Runner</label>
-              <select
-                value={createClientId}
-                onChange={(e) => setCreateClientId(e.target.value)}
-                className="form-input"
-                style={{ cursor: 'pointer' }}
-              >
-                <option value="">Any runner (first available)</option>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {client.display_name} ({client.agent_id})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Integration Selection (for Ollama Launch) */}
-            {supportsIntegrationSelection && (
-              <div>
-                <label className="form-label">IDE Integration</label>
-                <select
-                  value={createIntegration}
-                  onChange={(e) => setCreateIntegration(e.target.value)}
-                  className="form-input"
-                  style={{ cursor: 'pointer' }}
-                >
-                  {ollamaIntegrations.map((integration) => (
-                    <option key={integration.value} value={integration.value}>
-                      {integration.label}
+                {activeMcpSessions.length === 0 ? (
+                  <option value="">No connected MCP hosts</option>
+                ) : (
+                  activeMcpSessions.map((session) => (
+                    <option key={session.id} value={session.id}>
+                      {(session.provider ?? 'unknown-agent').toUpperCase()} · {session.user.username} · {session.id.slice(0, 8)}
                     </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* LLM Provider Selection (for Rev) */}
-            {supportsProviderSelection && (
-              <div>
-                <label className="form-label">LLM Provider</label>
-                <select
-                  value={createProvider}
-                  onChange={(e) => setCreateProvider(e.target.value)}
-                  className="form-input"
-                  style={{ cursor: 'pointer' }}
-                >
-                  <option value="">Select Provider</option>
-                  {revProviders.map((provider) => (
-                    <option key={provider.value} value={provider.value}>
-                      {provider.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Model Selection (for Ollama Launch/Gemini/Rev) */}
-            {supportsModelSelection && (
-              <div>
-                <label className="form-label">Model</label>
-                <select
-                  value={createModel}
-                  onChange={(e) => setCreateModel(e.target.value)}
-                  className="form-input"
-                  style={{ cursor: 'pointer' }}
-                >
-                  <option value="">Default Model</option>
-                  {availableModels.map((model) => (
-                    <option key={model.value} value={model.value}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-                {createModel === 'custom' && (
-                  <input
-                    type="text"
-                    value={createCustomModel}
-                    onChange={(e) => setCreateCustomModel(e.target.value)}
-                    placeholder="Enter custom model name..."
-                    className="form-input"
-                    style={{ marginTop: '8px' }}
-                  />
+                  ))
                 )}
-              </div>
-            )}
+              </select>
+              {activeMcpSessions.length === 0 && (
+                <div className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
+                  Connect Codex/Claude/Gemini/OpenCode/Zenflow/Rev to MCP first from the MCP page.
+                </div>
+              )}
+            </div>
+
+            {/* Run Mode Selection */}
+            <div>
+              <label className="form-label">Execution Mode</label>
+              <select
+                value={createMode}
+                onChange={(e) => setCreateMode(e.target.value as 'agent' | 'vnc' | 'hands-on')}
+                className="form-input"
+                style={{ cursor: 'pointer' }}
+                disabled={!createHostSessionId}
+              >
+                <option value="agent">AI Coding Agent ({selectedProviderLabel})</option>
+                <option value="vnc" disabled={!canUseManualModes}>VNC (Remote Desktop)</option>
+                <option value="hands-on" disabled={!canUseManualModes}>Hands-On (Command Line)</option>
+              </select>
+              {createHostSessionId && (
+                <div className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
+                  Worker type: {createMode === 'agent'
+                    ? (selectedHost?.provider ?? 'unavailable')
+                    : createMode}
+                </div>
+              )}
+              {createHostSessionId && !selectedHostFresh && (
+                <div className="text-muted" style={{ marginTop: '6px', fontSize: '12px' }}>
+                  Host heartbeat is stale. VNC and Hands-On require a fresh MCP connection.
+                </div>
+              )}
+            </div>
 
             {/* Command/Prompt */}
             <div>
@@ -686,8 +623,7 @@ export function Runs({ user }: Props) {
                 color: 'var(--text-secondary)',
               }}
             >
-              <strong>Tip:</strong> After creating the run, you'll see your credentials and the command to start
-              the ai-runner worker from your terminal. You can copy each piece individually or copy the entire command.
+              <strong>Tip:</strong> Pick a connected host first, then choose Agent/VNC/Hands-On over that same MCP connection.
             </div>
           </div>
         </Modal>

@@ -107,10 +107,61 @@ Legacy wrapper mode (deprecated) remains available during migration. See `docs/M
 
 ```bash
 export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
-codex mcp add airemotecoder --url http://localhost:3100/mcp
+mkdir -p ~/.codex
+touch ~/.codex/config.toml
+python - <<'PY'
+from pathlib import Path
+import re
+path = Path.home()/".codex"/"config.toml"
+text = path.read_text(encoding="utf-8") if path.exists() else ""
+prefix = "mcp_servers.airemotecoder"
+out, skip = [], False
+for line in text.splitlines():
+    m = re.match(r"^\s*\[([^\]]+)\]\s*(?:[#;].*)?$", line)
+    if m:
+        table = m.group(1).strip()
+        if table == prefix or table.startswith(prefix + "."):
+            skip = True
+            continue
+        skip = False
+    if not skip:
+        out.append(line)
+if out and out[-1] != "":
+    out.append("")
+out.extend([
+    "[mcp_servers.airemotecoder]",
+    "url = \"http://localhost:3100/mcp\"",
+    "bearer_token_env_var = \"AIREMOTECODER_MCP_TOKEN\"",
+    "",
+])
+path.write_text("\n".join(out), encoding="utf-8")
+PY
 ```
 
-The MCP page also provides one-shot overwrite/replace commands for Bash and PowerShell.
+The MCP page provides copy/paste one-shot Bash and PowerShell commands that replace only the `airemotecoder` MCP block and keep all other config intact.
+
+## MCP Worker Mode (Codex-first)
+
+After MCP setup, start the worker loop on the coding host:
+
+```bash
+export AIREMOTECODER_GATEWAY_URL=http://localhost:3100
+export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
+export AIREMOTECODER_PROVIDER=codex
+export AIREMOTECODER_CODEX_MODE=interactive
+npm run worker:mcp -w gateway
+```
+
+This loop claims MCP runs, polls queued commands, executes prompts via a persistent Codex interactive session, acknowledges commands, and streams events/lifecycle markers back to the gateway.
+Set `AIREMOTECODER_CODEX_MODE=exec` to use one-shot `codex exec` per prompt.
+
+For non-Codex providers, supply an explicit execution template:
+
+```bash
+export AIREMOTECODER_PROVIDER=gemini
+export AIREMOTECODER_EXEC_TEMPLATE="gemini run {input}"
+npm run worker:mcp -w gateway
+```
 
 ## Remote Access
 

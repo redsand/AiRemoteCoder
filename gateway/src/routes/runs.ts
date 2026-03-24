@@ -7,6 +7,19 @@ import { wrapperAuth, uiAuth, requireRole, logAudit, type AuthenticatedRequest }
 import { generateCapabilityToken, redactSecrets, hashToken } from '../utils/crypto.js';
 import { broadcastToRun } from '../services/websocket.js';
 import { timingSafeEqual } from 'crypto';
+import { findLatestMcpSessionByTokenId, getMcpSession } from '../mcp/session-registry.js';
+import { assertScopes, extractBearerToken, validateMcpSessionAccess, validateMcpToken } from '../mcp/auth.js';
+import type { McpScope } from '../domain/types.js';
+
+const MCP_SESSION_FRESHNESS_SECONDS = 90;
+
+function providerFromTokenLabel(label: string | undefined): string | null {
+  if (!label) return null;
+  const normalized = label.trim().toLowerCase();
+  if (!normalized.startsWith('auto:')) return null;
+  const provider = normalized.slice('auto:'.length);
+  return provider || null;
+}
 
 // Validation schemas
 const createRunSchema = z.object({
@@ -20,7 +33,7 @@ const createRunSchema = z.object({
   metadata: z.record(z.any()).optional(),
   workingDir: z.string().optional(),
   autonomous: z.boolean().optional(),
-  workerType: z.enum(['claude', 'ollama-launch', 'codex', 'gemini', 'rev', 'vnc', 'hands-on']).optional().default('claude'),
+  workerType: z.enum(['claude', 'ollama-launch', 'codex', 'gemini', 'opencode', 'zenflow', 'rev', 'vnc', 'hands-on']).optional().default('claude'),
   model: z.string().optional(),
   integration: z.enum(['claude', 'codex', 'opencode', 'droid']).optional(), // For ollama-launch
   provider: z.string().optional() // For rev
@@ -62,6 +75,52 @@ const claimRunSchema = z.object({
   agentId: z.string().min(1).max(100)
 });
 
+const mcpClaimRunSchema = z.object({
+  provider: z.string().optional(),
+});
+
+function resolveAuthorizedMcpSession(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  requiredScopes: McpScope[]
+) {
+  const authHeader = request.headers.authorization;
+  const rawToken = extractBearerToken(authHeader);
+  if (!rawToken) {
+    reply.code(401).send({ error: 'Unauthorized: valid MCP Bearer token required' });
+    return null;
+  }
+  const tokenCtx = validateMcpToken(rawToken);
+  if (!tokenCtx) {
+    reply.code(401).send({ error: 'Unauthorized: valid MCP Bearer token required' });
+    return null;
+  }
+
+  const scopeError = assertScopes(tokenCtx, requiredScopes);
+  if (scopeError) {
+    reply.code(403).send({ error: scopeError });
+    return null;
+  }
+
+  const headerSessionId = request.headers['mcp-session-id'] as string | undefined;
+  const session = headerSessionId
+    ? getMcpSession(headerSessionId)
+    : findLatestMcpSessionByTokenId(tokenCtx.tokenId);
+
+  if (!session) {
+    reply.code(404).send({ error: 'No active MCP session found for this token' });
+    return null;
+  }
+
+  const authCheck = validateMcpSessionAccess(session.authContext, authHeader);
+  if (!authCheck.ok) {
+    reply.code(authCheck.statusCode).send({ error: authCheck.message });
+    return null;
+  }
+
+  return { sessionId: session.id, session };
+}
+
 export async function runsRoutes(fastify: FastifyInstance) {
   // Create a new run (from UI or self-registration by wrapper)
   fastify.post('/api/runs', {
@@ -70,6 +129,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
     const body = createRunSchema.parse(request.body);
     const id = nanoid(12);
     const capabilityToken = generateCapabilityToken();
+    const now = Math.floor(Date.now() / 1000);
 
     // Find client by agentId if provided
     let clientId = body.clientId || null;
@@ -92,37 +152,73 @@ export async function runsRoutes(fastify: FastifyInstance) {
     };
 
     const workerType = body.workerType || 'claude';
+    const mcpSessionId = typeof body.metadata?.mcpSessionId === 'string'
+      ? body.metadata.mcpSessionId
+      : null;
 
-    db.prepare(`
-      INSERT INTO runs (id, client_id, label, command, repo_path, repo_name, tags, capability_token, metadata, worker_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      clientId,
-      body.label || null,
-      body.command || null,
-      body.repoPath || null,
-      body.repoName || null,
-      body.tags ? JSON.stringify(body.tags) : null,
-      capabilityToken,
-      JSON.stringify(metadata),
-      workerType
-    );
-
-    // Save initial run state for resume capability
-    if (body.workingDir) {
-      db.prepare(`
-        INSERT INTO run_state (run_id, working_dir, original_command)
-        VALUES (?, ?, ?)
-      `).run(id, body.workingDir, body.command || null);
+    const attachedSession = mcpSessionId ? getMcpSession(mcpSessionId) : undefined;
+    if (mcpSessionId && !attachedSession) {
+      return reply.code(409).send({ error: 'Selected MCP host is no longer connected. Refresh sessions and retry.' });
     }
+    if (attachedSession) {
+      const isAdmin = request.user?.role === 'admin';
+      if (!isAdmin && attachedSession.authContext.user.id !== request.user?.id) {
+        return reply.code(403).send({ error: 'Cannot attach run to another user\'s MCP session' });
+      }
+      if ((now - attachedSession.lastSeenAt) > MCP_SESSION_FRESHNESS_SECONDS) {
+        return reply.code(409).send({ error: 'Selected MCP host is stale. Wait for reconnect and retry.' });
+      }
+      const sessionProvider = providerFromTokenLabel(attachedSession.authContext.tokenLabel);
+      if (workerType !== 'vnc' && workerType !== 'hands-on' && sessionProvider && workerType !== sessionProvider) {
+        return reply.code(400).send({
+          error: `Worker type (${workerType}) does not match connected MCP provider (${sessionProvider})`,
+        });
+      }
+      (metadata as any).mcpAttachedAt = now;
+      (metadata as any).mcpSessionId = attachedSession.id;
+      (metadata as any).mcpProvider = sessionProvider ?? (metadata as any).mcpProvider ?? null;
+    }
+
+    const initialStatus = attachedSession ? 'running' : 'pending';
+    const claimedBy = attachedSession ? `mcp:${attachedSession.id}` : null;
+
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO runs (id, client_id, label, command, repo_path, repo_name, tags, capability_token, metadata, worker_type, status, started_at, claimed_by, claimed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        clientId,
+        body.label || null,
+        body.command || null,
+        body.repoPath || null,
+        body.repoName || null,
+        body.tags ? JSON.stringify(body.tags) : null,
+        capabilityToken,
+        JSON.stringify(metadata),
+        workerType,
+        initialStatus,
+        attachedSession ? now : null,
+        claimedBy,
+        attachedSession ? now : null
+      );
+
+      // Save initial run state for resume capability
+      if (body.workingDir) {
+        db.prepare(`
+          INSERT INTO run_state (run_id, working_dir, original_command)
+          VALUES (?, ?, ?)
+        `).run(id, body.workingDir, body.command || null);
+      }
+    })();
 
     logAudit(request.user?.id, 'run.create', 'run', id, { command: body.command, clientId, autonomous: body.autonomous }, request.ip);
 
     return {
       id,
       capabilityToken, // Only returned on creation
-      status: 'pending',
+      status: initialStatus,
+      attachedMcpSessionId: attachedSession?.id ?? null,
       autonomous: body.autonomous || false
     };
   });
@@ -351,6 +447,66 @@ export async function runsRoutes(fastify: FastifyInstance) {
     };
   });
 
+  // MCP worker: claim next pending run for this connected MCP session
+  fastify.post('/api/mcp/runs/claim', async (request, reply) => {
+    const auth = resolveAuthorizedMcpSession(request, reply, ['runs:write']);
+    if (!auth) return;
+    const { sessionId, session } = auth;
+    const body = mcpClaimRunSchema.parse(request.body ?? {});
+
+    const provider = (body.provider ?? providerFromTokenLabel(session.authContext.tokenLabel) ?? '').trim().toLowerCase();
+    if (!provider) {
+      return reply.code(400).send({ error: 'Unable to resolve provider for MCP claim' });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const claimTag = `mcp:${sessionId}`;
+
+    const claimTransaction = db.transaction(() => {
+      const run = db.prepare(`
+        SELECT id, command, metadata, worker_type, capability_token
+        FROM runs
+        WHERE status = 'pending'
+          AND waiting_approval = 0
+          AND worker_type = ?
+          AND (claimed_by IS NULL OR claimed_by = ?)
+        ORDER BY created_at ASC
+        LIMIT 1
+      `).get(provider, claimTag) as any;
+
+      if (!run) {
+        return null;
+      }
+
+      const updated = db.prepare(`
+        UPDATE runs
+        SET claimed_by = ?, claimed_at = ?, status = 'running', started_at = COALESCE(started_at, ?)
+        WHERE id = ? AND status = 'pending'
+      `).run(claimTag, now, now, run.id);
+
+      if (updated.changes === 0) {
+        return null;
+      }
+
+      return run;
+    });
+
+    const claimed = claimTransaction();
+    if (!claimed) {
+      return { run: null };
+    }
+
+    return {
+      run: {
+        id: claimed.id,
+        capabilityToken: claimed.capability_token,
+        command: claimed.command,
+        workerType: claimed.worker_type,
+        metadata: claimed.metadata ? JSON.parse(claimed.metadata) : null,
+      },
+    };
+  });
+
   // Get single run with full details
   fastify.get('/api/runs/:runId', {
     preHandler: [uiAuth]
@@ -498,13 +654,13 @@ export async function runsRoutes(fastify: FastifyInstance) {
     // Broadcast to WebSocket subscribers
     broadcastToRun(runId, {
       type: 'event',
-      eventId: result.lastInsertRowid,
+      eventId: Number(result.lastInsertRowid),
       eventType: body.type,
       data: sanitizedData,
       timestamp: Math.floor(Date.now() / 1000)
     });
 
-    return { ok: true, eventId: result.lastInsertRowid };
+    return { ok: true, eventId: Number(result.lastInsertRowid) };
   });
 
   // UI: send command to wrapper
@@ -603,13 +759,147 @@ export async function runsRoutes(fastify: FastifyInstance) {
     return { ok: true };
   });
 
+  // MCP worker: poll pending commands for a claimed run
+  fastify.get('/api/mcp/runs/:runId/commands', async (request, reply) => {
+    const auth = resolveAuthorizedMcpSession(request, reply, ['runs:read', 'sessions:write']);
+    if (!auth) return;
+    const { runId } = request.params as { runId: string };
+    const { sessionId } = auth;
+
+    const run = db.prepare('SELECT id, claimed_by FROM runs WHERE id = ?').get(runId) as {
+      id: string;
+      claimed_by: string | null;
+    } | undefined;
+    if (!run) {
+      return reply.code(404).send({ error: 'Run not found' });
+    }
+
+    const claimTag = `mcp:${sessionId}`;
+    if (run.claimed_by !== claimTag) {
+      return reply.code(403).send({ error: 'Run is not claimed by this MCP session' });
+    }
+
+    const rows = db.prepare(`
+      SELECT id, command, arguments, created_at
+      FROM commands
+      WHERE run_id = ? AND status = 'pending'
+      ORDER BY created_at ASC
+    `).all(runId);
+
+    const commands = rows.map((row: any) => {
+      if (typeof row.command === 'string' && row.command.startsWith('__INPUT__:')) {
+        return {
+          ...row,
+          command: '__INPUT__',
+          arguments: row.arguments ?? row.command.substring('__INPUT__:'.length),
+        };
+      }
+      return row;
+    });
+
+    return commands;
+  });
+
+  // MCP worker: acknowledge command delivery/execution
+  fastify.post('/api/mcp/runs/:runId/commands/:commandId/ack', async (request, reply) => {
+    const auth = resolveAuthorizedMcpSession(request, reply, ['sessions:write']);
+    if (!auth) return;
+    const { runId, commandId } = request.params as { runId: string; commandId: string };
+    const body = ackSchema.parse(request.body ?? {});
+    const { sessionId } = auth;
+
+    const run = db.prepare('SELECT id, claimed_by FROM runs WHERE id = ?').get(runId) as {
+      id: string;
+      claimed_by: string | null;
+    } | undefined;
+    if (!run) {
+      return reply.code(404).send({ error: 'Run not found' });
+    }
+
+    const claimTag = `mcp:${sessionId}`;
+    if (run.claimed_by !== claimTag) {
+      return reply.code(403).send({ error: 'Run is not claimed by this MCP session' });
+    }
+
+    db.prepare(`
+      UPDATE commands
+      SET status = 'completed', acked_at = unixepoch(), result = ?, error = ?
+      WHERE id = ? AND run_id = ?
+    `).run(body.result || null, body.error || null, commandId, runId);
+
+    broadcastToRun(runId, {
+      type: 'command_completed',
+      commandId,
+      result: body.result,
+      error: body.error,
+    });
+
+    return { ok: true };
+  });
+
+  // MCP worker: ingest run event stream
+  fastify.post('/api/mcp/runs/:runId/events', async (request, reply) => {
+    const auth = resolveAuthorizedMcpSession(request, reply, ['sessions:write']);
+    if (!auth) return;
+    const { runId } = request.params as { runId: string };
+    const body = eventSchema.parse(request.body);
+    const { sessionId } = auth;
+
+    const run = db.prepare('SELECT id, claimed_by FROM runs WHERE id = ?').get(runId) as {
+      id: string;
+      claimed_by: string | null;
+    } | undefined;
+    if (!run) {
+      return reply.code(404).send({ error: 'Run not found' });
+    }
+
+    const claimTag = `mcp:${sessionId}`;
+    if (run.claimed_by !== claimTag) {
+      return reply.code(403).send({ error: 'Run is not claimed by this MCP session' });
+    }
+
+    const sanitizedData = redactSecrets(body.data);
+    const result = db.prepare(`
+      INSERT INTO events (run_id, type, data, sequence)
+      VALUES (?, ?, ?, ?)
+    `).run(runId, body.type, sanitizedData, body.sequence || 0);
+
+    if (body.type === 'marker') {
+      try {
+        const marker = JSON.parse(body.data);
+        if (marker.event === 'started') {
+          db.prepare('UPDATE runs SET status = ?, started_at = unixepoch() WHERE id = ?')
+            .run('running', runId);
+        } else if (marker.event === 'finished') {
+          db.prepare('UPDATE runs SET status = ?, finished_at = unixepoch(), exit_code = ? WHERE id = ?')
+            .run(marker.exitCode === 0 ? 'done' : 'failed', marker.exitCode, runId);
+        }
+      } catch {
+        // ignore malformed marker payloads
+      }
+    }
+
+    broadcastToRun(runId, {
+      type: 'event',
+      eventId: Number(result.lastInsertRowid),
+      eventType: body.type,
+      data: sanitizedData,
+      timestamp: Math.floor(Date.now() / 1000),
+    });
+
+    return { ok: true, eventId: Number(result.lastInsertRowid) };
+  });
+
   // Stop run request
   fastify.post('/api/runs/:runId/stop', {
     preHandler: [uiAuth, requireRole('admin', 'operator')]
   }, async (request: AuthenticatedRequest, reply) => {
     const { runId } = request.params as { runId: string };
 
-    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(runId) as any;
+    const run = db.prepare('SELECT status, claimed_by FROM runs WHERE id = ?').get(runId) as {
+      status: string;
+      claimed_by: string | null;
+    } | undefined;
     if (!run) {
       return reply.code(404).send({ error: 'Run not found' });
     }
@@ -789,10 +1079,17 @@ export async function runsRoutes(fastify: FastifyInstance) {
     }
 
     const id = nanoid(12);
-    db.prepare(`
-      INSERT INTO commands (id, run_id, command)
-      VALUES (?, ?, ?)
-    `).run(id, runId, `__INPUT__:${inputData}`);
+    if (run.claimed_by?.startsWith('mcp:')) {
+      db.prepare(`
+        INSERT INTO commands (id, run_id, command, arguments)
+        VALUES (?, ?, ?, ?)
+      `).run(id, runId, '__INPUT__', inputData);
+    } else {
+      db.prepare(`
+        INSERT INTO commands (id, run_id, command, arguments)
+        VALUES (?, ?, ?, ?)
+      `).run(id, runId, `__INPUT__:${inputData}`, inputData);
+    }
 
     logAudit(request.user?.id, 'run.input_sent', 'run', runId, {
       escape: body.escape,

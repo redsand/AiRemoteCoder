@@ -51,6 +51,8 @@ interface ProjectTargetRecord {
 interface SetupBody {
   projectTargetId?: string;
   projectPath?: string;
+  generateNewToken?: boolean;
+  persistEnv?: boolean;
 }
 
 interface CopyPasteCommands {
@@ -127,7 +129,12 @@ function resolveProjectDirForRequest(
 // Config snippet builders per provider
 // ---------------------------------------------------------------------------
 
-function buildSnippet(provider: SupportedProvider, mcpUrl: string, token: string): {
+function buildSnippet(
+  provider: SupportedProvider,
+  mcpUrl: string,
+  token: string,
+  options: { persistEnv?: boolean } = {}
+): {
   snippet: object | string;
   filePath: string | null;
   fileFormat: 'json' | 'env' | 'text';
@@ -141,13 +148,181 @@ function buildSnippet(provider: SupportedProvider, mcpUrl: string, token: string
     snippetObject: Record<string, unknown>
   ): CopyPasteCommands => {
     const rendered = JSON.stringify(snippetObject, null, 2);
+    const normalizedPath = filePath.replace(/\\/g, '/');
+    const escapedPath = normalizedPath.replace(/'/g, "\\'");
+    const escapedPatch = rendered.replace(/'''/g, "\\'\\'\\'");
     return {
       bash: [
-        `mkdir -p "${dirname(filePath).replace(/\\/g, '/')}"\ncat > ${filePath} <<'EOF'\n${rendered}\nEOF`,
+        `mkdir -p "${dirname(normalizedPath)}"
+python - <<'PY'
+import json
+from pathlib import Path
+
+path = Path('${escapedPath}')
+patch = json.loads('''${escapedPatch}''')
+
+def merge(dst, src):
+    for key, value in src.items():
+        if isinstance(value, dict) and isinstance(dst.get(key), dict):
+            merge(dst[key], value)
+        else:
+            dst[key] = value
+
+current = {}
+if path.exists():
+    try:
+        current = json.loads(path.read_text(encoding='utf-8') or '{}')
+    except Exception:
+        current = {}
+
+merge(current, patch)
+path.write_text(json.dumps(current, indent=2) + '\\n', encoding='utf-8')
+PY`,
       ],
       powershell: [
-        `$path = "${filePath.replace(/\//g, '\\\\')}"\nNew-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null\n@'\n${rendered}\n'@ | Set-Content -Path $path -Encoding utf8`,
+        `$path = "${filePath.replace(/\//g, '\\\\')}"
+$dir = Split-Path -Parent $path
+if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+$patchJson = @'
+${rendered}
+'@
+$patch = $patchJson | ConvertFrom-Json -AsHashtable
+$current = @{}
+if (Test-Path $path) {
+  $raw = Get-Content -Raw -Path $path
+  if ($raw.Trim()) {
+    try { $current = $raw | ConvertFrom-Json -AsHashtable } catch { $current = @{} }
+  }
+}
+function Merge-Hashtable([hashtable]$dst, [hashtable]$src) {
+  foreach ($key in $src.Keys) {
+    $srcVal = $src[$key]
+    if ($dst.ContainsKey($key) -and $dst[$key] -is [hashtable] -and $srcVal -is [hashtable]) {
+      Merge-Hashtable -dst $dst[$key] -src $srcVal
+    } else {
+      $dst[$key] = $srcVal
+    }
+  }
+}
+Merge-Hashtable -dst $current -src $patch
+$current | ConvertTo-Json -Depth 100 | Set-Content -Path $path -Encoding utf8`,
       ],
+    };
+  };
+
+  const buildEnvPrefix = (envVar: string, envValue: string, persistEnv: boolean): { bash: string; powershell: string } => {
+    if (!persistEnv) {
+      return {
+        bash: `export ${envVar}="${envValue}"`,
+        powershell: `$env:${envVar}="${envValue}"`,
+      };
+    }
+    return {
+      bash: `export ${envVar}="${envValue}"
+python - <<'PY'
+from pathlib import Path
+import re
+
+path = Path.home() / ".profile"
+line = 'export ${envVar}="${envValue}"'
+text = path.read_text(encoding="utf-8") if path.exists() else ""
+lines = [entry for entry in text.splitlines() if not re.match(r'^\\s*export\\s+${envVar}=.*$', entry)]
+if lines and lines[-1] != "":
+    lines.append("")
+lines.append(line)
+path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+PY`,
+      powershell: `$env:${envVar}="${envValue}"
+[Environment]::SetEnvironmentVariable("${envVar}", "${envValue}", "User")`,
+    };
+  };
+
+  const buildCodexSnippet = (persistEnv: boolean) => {
+    const envPrefix = buildEnvPrefix('AIREMOTECODER_MCP_TOKEN', token, persistEnv);
+    const manualToml = `[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"`;
+    const bashOneShot = `${envPrefix.bash}
+mkdir -p ~/.codex
+touch ~/.codex/config.toml
+python - <<'PY'
+from pathlib import Path
+import re
+
+path = Path.home() / ".codex" / "config.toml"
+text = path.read_text(encoding="utf-8") if path.exists() else ""
+prefix = "mcp_servers.airemotecoder"
+out = []
+skip = False
+
+for line in text.splitlines():
+    m = re.match(r"^\\s*\\[([^\\]]+)\\]\\s*(?:[#;].*)?$", line)
+    if m:
+        table = m.group(1).strip()
+        if table == prefix or table.startswith(prefix + "."):
+            skip = True
+            continue
+        skip = False
+    if not skip:
+        out.append(line)
+
+if out and out[-1] != "":
+    out.append("")
+out.extend([
+    "[mcp_servers.airemotecoder]",
+    "url = \\"${mcpUrl}\\"",
+    "bearer_token_env_var = \\"AIREMOTECODER_MCP_TOKEN\\"",
+    "",
+])
+path.write_text("\\n".join(out), encoding="utf-8")
+PY`;
+    const workerBash = `export AIREMOTECODER_GATEWAY_URL="${mcpUrl}"
+export AIREMOTECODER_MCP_TOKEN="${token}"
+export AIREMOTECODER_PROVIDER="codex"
+export AIREMOTECODER_CODEX_MODE="interactive"
+npm run worker:mcp -w gateway`;
+
+    const powershellOneShot = `${envPrefix.powershell}
+$configDir = Join-Path $HOME ".codex"
+$configPath = Join-Path $configDir "config.toml"
+New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+if (!(Test-Path $configPath)) { New-Item -ItemType File -Path $configPath | Out-Null }
+$lines = Get-Content -Path $configPath
+$prefix = "mcp_servers.airemotecoder"
+$skip = $false
+$out = New-Object System.Collections.Generic.List[string]
+foreach ($line in $lines) {
+  if ($line -match '^\\s*\\[([^\\]]+)\\]\\s*(?:[#;].*)?$') {
+    $table = $matches[1].Trim()
+    if ($table -eq $prefix -or $table.StartsWith("$prefix.")) { $skip = $true; continue }
+    if ($skip) { $skip = $false }
+  }
+  if (-not $skip) { [void]$out.Add($line) }
+}
+Set-Content -Path $configPath -Value $out -Encoding utf8
+@'
+
+[mcp_servers.airemotecoder]
+url = "${mcpUrl}"
+bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
+'@ | Add-Content -Path $configPath -Encoding utf8`;
+    const workerPowerShell = `$env:AIREMOTECODER_GATEWAY_URL="${mcpUrl}"
+$env:AIREMOTECODER_MCP_TOKEN="${token}"
+$env:AIREMOTECODER_PROVIDER="codex"
+$env:AIREMOTECODER_CODEX_MODE="interactive"
+npm run worker:mcp -w gateway`;
+
+    return {
+      snippet: manualToml,
+      filePath: null as string | null,
+      fileFormat: 'env' as const,
+      instructions: persistEnv
+        ? 'Run the first one-shot command to persist token + update ~/.codex/config.toml (airemotecoder block only). Run the second command to start MCP worker mode (interactive by default). Set AIREMOTECODER_CODEX_MODE=exec if you prefer one-shot codex exec.'
+        : 'Run the first one-shot command to set token in this shell + update ~/.codex/config.toml (airemotecoder block only). Run the second command to start MCP worker mode (interactive by default). Set AIREMOTECODER_CODEX_MODE=exec if you prefer one-shot codex exec.',
+      copyPaste: {
+        bash: [bashOneShot, workerBash],
+        powershell: [powershellOneShot, workerPowerShell],
+      },
     };
   };
 
@@ -176,115 +351,7 @@ function buildSnippet(provider: SupportedProvider, mcpUrl: string, token: string
     }
 
     case 'codex': {
-      const codexSnippet = `# Preferred (Codex MCP registry command)
-codex mcp add airemotecoder --url ${mcpUrl}
-
-# Token for this setup (current shell/session)
-AIREMOTECODER_MCP_TOKEN=${token}
-
-# Bash one-shot: overwrite ~/.codex/config.toml with AiRemoteCoder only
-mkdir -p ~/.codex
-cat > ~/.codex/config.toml <<'EOF'
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-EOF
-
-# Bash one-shot: replace only the airemotecoder block, keep other MCP servers
-mkdir -p ~/.codex
-touch ~/.codex/config.toml
-awk '
-BEGIN { skip=0 }
-$0 ~ /^\\[mcp_servers\\.airemotecoder\\]/ { skip=1; next }
-$0 ~ /^\\[/ { if (skip==1) skip=0 }
-skip==0 { print }
-' ~/.codex/config.toml > ~/.codex/config.toml.tmp
-mv ~/.codex/config.toml.tmp ~/.codex/config.toml
-cat >> ~/.codex/config.toml <<'EOF'
-
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-EOF
-
-# PowerShell one-shot: overwrite $HOME\\.codex\\config.toml with AiRemoteCoder only
-$configDir = Join-Path $HOME ".codex"
-New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-@'
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-'@ | Set-Content -Path (Join-Path $configDir "config.toml") -Encoding utf8
-
-# PowerShell one-shot: replace only the airemotecoder block
-$configDir = Join-Path $HOME ".codex"
-$configPath = Join-Path $configDir "config.toml"
-New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-if (!(Test-Path $configPath)) { New-Item -ItemType File -Path $configPath | Out-Null }
-$content = Get-Content -Raw -Path $configPath
-$content = [regex]::Replace($content, "(?ms)\\n?\\[mcp_servers\\.airemotecoder\\].*?(?=\\n\\[|$)", "")
-Set-Content -Path $configPath -Value $content -Encoding utf8
-@'
-
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-'@ | Add-Content -Path $configPath -Encoding utf8`;
-      return {
-        snippet: codexSnippet,
-        filePath: null, // env var — no standard file
-        fileFormat: 'env',
-        instructions: 'Use codex mcp add if available, then set AIREMOTECODER_MCP_TOKEN. Use the Bash/PowerShell one-shot commands to overwrite or surgically replace only the airemotecoder config block.',
-        copyPaste: {
-          bash: [
-            `export AIREMOTECODER_MCP_TOKEN="${quotedToken}"\ncodex mcp add airemotecoder --url ${mcpUrl}`,
-            `mkdir -p ~/.codex
-cat > ~/.codex/config.toml <<'EOF'
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-EOF`,
-            `mkdir -p ~/.codex
-touch ~/.codex/config.toml
-awk '
-BEGIN { skip=0 }
-$0 ~ /^\\[mcp_servers\\.airemotecoder\\]/ { skip=1; next }
-$0 ~ /^\\[/ { if (skip==1) skip=0 }
-skip==0 { print }
-' ~/.codex/config.toml > ~/.codex/config.toml.tmp
-mv ~/.codex/config.toml.tmp ~/.codex/config.toml
-cat >> ~/.codex/config.toml <<'EOF'
-
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-EOF`,
-          ],
-          powershell: [
-            `$env:AIREMOTECODER_MCP_TOKEN="${quotedToken}"\ncodex mcp add airemotecoder --url ${mcpUrl}`,
-            `$configDir = Join-Path $HOME ".codex"
-New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-@'
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-'@ | Set-Content -Path (Join-Path $configDir "config.toml") -Encoding utf8`,
-            `$configDir = Join-Path $HOME ".codex"
-$configPath = Join-Path $configDir "config.toml"
-New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-if (!(Test-Path $configPath)) { New-Item -ItemType File -Path $configPath | Out-Null }
-$content = Get-Content -Raw -Path $configPath
-$content = [regex]::Replace($content, "(?ms)\\n?\\[mcp_servers\\.airemotecoder\\].*?(?=\\n\\[|$)", "")
-Set-Content -Path $configPath -Value $content -Encoding utf8
-@'
-
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-'@ | Add-Content -Path $configPath -Encoding utf8`,
-          ],
-        },
-      };
+      return buildCodexSnippet(Boolean(options.persistEnv));
     }
 
     case 'gemini': {
@@ -326,19 +393,23 @@ bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
     }
 
     case 'rev':
+      const revUrlEnv = buildEnvPrefix('AIRC_MCP_URL', mcpUrl, Boolean(options.persistEnv));
+      const revEnv = buildEnvPrefix('AIRC_MCP_TOKEN', token, Boolean(options.persistEnv));
       return {
-        snippet: `AIRC_MCP_URL=${mcpUrl}\nAIRC_MCP_TOKEN=${token}`,
+        snippet: `AIRC_MCP_URL=${mcpUrl}\nAIRC_MCP_TOKEN=<YOUR_MCP_TOKEN>`,
         filePath: null,
         fileFormat: 'env',
-        instructions: 'Export these environment variables before running rev.',
+        instructions: Boolean(options.persistEnv)
+          ? 'Run one one-shot command below to persist AIRC_MCP_TOKEN for future shells before running rev.'
+          : 'Run one one-shot command below before running rev.',
         copyPaste: {
           bash: [
-            `export AIRC_MCP_URL="${mcpUrl}"
-export AIRC_MCP_TOKEN="${token}"`,
+            `${revUrlEnv.bash}
+${revEnv.bash}`,
           ],
           powershell: [
-            `$env:AIRC_MCP_URL="${quotedUrl}"
-$env:AIRC_MCP_TOKEN="${quotedToken}"`,
+            `${revUrlEnv.powershell}
+${revEnv.powershell}`,
           ],
         },
       };
@@ -349,27 +420,40 @@ $env:AIRC_MCP_TOKEN="${quotedToken}"`,
 // Token creation helper
 // ---------------------------------------------------------------------------
 
+const setupTokenCache = new Map<string, { tokenId: string; rawToken: string }>();
+
 function getOrCreateAgentToken(
   userId: string,
-  provider: SupportedProvider
+  provider: SupportedProvider,
+  options: { generateNewToken?: boolean } = {}
 ): { tokenId: string; rawToken: string; isNew: boolean } {
   const label = `auto:${provider}`;
+  const cacheKey = `${userId}:${provider}`;
+  const cached = setupTokenCache.get(cacheKey);
+  const forceNew = Boolean(options.generateNewToken);
+
+  if (!forceNew && cached) {
+    const tokenRow = db.prepare(`
+      SELECT id, last_used_at, revoked_at, expires_at
+      FROM mcp_tokens WHERE id = ?
+    `).get(cached.tokenId) as { id: string; last_used_at: number | null; revoked_at: number | null; expires_at: number | null } | undefined;
+
+    const now = Math.floor(Date.now() / 1000);
+    const expired = Boolean(tokenRow?.expires_at && tokenRow.expires_at <= now);
+    if (tokenRow && !tokenRow.revoked_at && !expired && !tokenRow.last_used_at) {
+      return { tokenId: cached.tokenId, rawToken: cached.rawToken, isNew: false };
+    }
+  }
 
   const rawToken = nanoid(48);
   const tokenHash = createHash('sha256').update(rawToken).digest('hex');
   const tokenId = nanoid();
-
-  // Revoke previous auto-token for this provider to avoid accumulation
-  db.prepare(`
-    UPDATE mcp_tokens SET revoked_at = unixepoch()
-    WHERE user_id = ? AND label = ? AND revoked_at IS NULL
-  `).run(userId, label);
-
   db.prepare(`
     INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
     VALUES (?, ?, ?, ?, ?)
   `).run(tokenId, tokenHash, label, userId, JSON.stringify(AGENT_DEFAULT_SCOPES));
 
+  setupTokenCache.set(cacheKey, { tokenId, rawToken });
   return { tokenId, rawToken, isNew: true };
 }
 
@@ -403,11 +487,18 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
       const host = req.headers.host || `localhost:${config.port}`;
       const mcpUrl = `${proto}://${host}${config.mcpPath}`;
 
-      const { rawToken } = getOrCreateAgentToken(req.user!.id, provider as SupportedProvider);
+      const body = (req.body ?? {}) as SetupBody;
+      const persistEnv = Boolean(body.persistEnv);
+      const { rawToken, isNew } = getOrCreateAgentToken(
+        req.user!.id,
+        provider as SupportedProvider,
+        { generateNewToken: Boolean(body.generateNewToken) }
+      );
       const { snippet, filePath, fileFormat, instructions, copyPaste } = buildSnippet(
         provider as SupportedProvider,
         mcpUrl,
-        rawToken
+        rawToken,
+        { persistEnv }
       );
 
       return reply.code(200).send({
@@ -422,7 +513,10 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
         fileFormat,
         instructions,
         canAutoInstall: filePath !== null,
-        warning: 'Token shown once — it will be regenerated on next call to this endpoint.',
+        tokenReused: !isNew,
+        warning: isNew
+          ? 'Token shown once — store it securely.'
+          : 'Reusing your latest unused token for this provider. Click "Generate New Token" to rotate.',
       });
     }
   );
@@ -435,7 +529,12 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
     { preHandler: [uiAuth] },
     async (req: AuthenticatedRequest, reply) => {
       const { provider } = req.params as { provider: string };
-      const { token, projectTargetId, projectPath } = req.body as { token?: string; projectTargetId?: string; projectPath?: string };
+      const { token, projectTargetId, projectPath, persistEnv } = req.body as {
+        token?: string;
+        projectTargetId?: string;
+        projectPath?: string;
+        persistEnv?: boolean;
+      };
 
       if (!SUPPORTED_PROVIDERS.includes(provider as SupportedProvider)) {
         return reply.code(400).send({ error: `Unsupported provider: ${provider}` });
@@ -457,7 +556,8 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
       const { snippet, filePath, fileFormat, instructions, copyPaste } = buildSnippet(
         provider as SupportedProvider,
         mcpUrl,
-        token
+        token,
+        { persistEnv: Boolean(persistEnv) }
       );
 
       if (!filePath) {

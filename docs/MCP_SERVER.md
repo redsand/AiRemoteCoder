@@ -379,54 +379,117 @@ Codex examples are AiRemoteCoder-only:
 ```bash
 # shell token for this session
 export AIREMOTECODER_MCP_TOKEN="<YOUR_MCP_TOKEN>"
-codex mcp add airemotecoder --url http://localhost:3100/mcp
-```
-
-```bash
-# overwrite ~/.codex/config.toml with only AiRemoteCoder MCP
-mkdir -p ~/.codex
-cat > ~/.codex/config.toml <<'EOF'
-[mcp_servers.airemotecoder]
-url = "http://localhost:3100/mcp"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-EOF
-```
-
-```bash
 # replace only airemotecoder block; keep other entries
 mkdir -p ~/.codex
 touch ~/.codex/config.toml
-awk '
-BEGIN { skip=0 }
-$0 ~ /^\[mcp_servers\.airemotecoder\]/ { skip=1; next }
-$0 ~ /^\[/ { if (skip==1) skip=0 }
-skip==0 { print }
-' ~/.codex/config.toml > ~/.codex/config.toml.tmp
-mv ~/.codex/config.toml.tmp ~/.codex/config.toml
-cat >> ~/.codex/config.toml <<'EOF'
+python - <<'PY'
+from pathlib import Path
+import re
 
-[mcp_servers.airemotecoder]
-url = "http://localhost:3100/mcp"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-EOF
+path = Path.home() / ".codex" / "config.toml"
+text = path.read_text(encoding="utf-8") if path.exists() else ""
+prefix = "mcp_servers.airemotecoder"
+out = []
+skip = False
+
+for line in text.splitlines():
+    m = re.match(r"^\s*\[([^\]]+)\]\s*(?:[#;].*)?$", line)
+    if m:
+        table = m.group(1).strip()
+        if table == prefix or table.startswith(prefix + "."):
+            skip = True
+            continue
+        skip = False
+    if not skip:
+        out.append(line)
+
+if out and out[-1] != "":
+    out.append("")
+out.extend([
+    "[mcp_servers.airemotecoder]",
+    "url = \"http://localhost:3100/mcp\"",
+    "bearer_token_env_var = \"AIREMOTECODER_MCP_TOKEN\"",
+    "",
+])
+path.write_text("\n".join(out), encoding="utf-8")
+PY
+
+# start MCP worker loop (interactive codex mode)
+export AIREMOTECODER_GATEWAY_URL="http://localhost:3100"
+export AIREMOTECODER_PROVIDER="codex"
+export AIREMOTECODER_CODEX_MODE="interactive"
+npm run worker:mcp -w gateway
 ```
 
 ```powershell
-# shell token for this session
+# one-shot replace of airemotecoder block only
 $env:AIREMOTECODER_MCP_TOKEN="<YOUR_MCP_TOKEN>"
-codex mcp add airemotecoder --url http://localhost:3100/mcp
-```
-
-```powershell
-# overwrite $HOME\.codex\config.toml with only AiRemoteCoder MCP
 $configDir = Join-Path $HOME ".codex"
+$configPath = Join-Path $configDir "config.toml"
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+if (!(Test-Path $configPath)) { New-Item -ItemType File -Path $configPath | Out-Null }
+$lines = Get-Content -Path $configPath
+$prefix = "mcp_servers.airemotecoder"
+$skip = $false
+$out = New-Object System.Collections.Generic.List[string]
+foreach ($line in $lines) {
+  if ($line -match '^\s*\[([^\]]+)\]\s*(?:[#;].*)?$') {
+    $table = $matches[1].Trim()
+    if ($table -eq $prefix -or $table.StartsWith("$prefix.")) { $skip = $true; continue }
+    if ($skip) { $skip = $false }
+  }
+  if (-not $skip) { [void]$out.Add($line) }
+}
+Set-Content -Path $configPath -Value $out -Encoding utf8
 @'
+
 [mcp_servers.airemotecoder]
 url = "http://localhost:3100/mcp"
 bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-'@ | Set-Content -Path (Join-Path $configDir "config.toml") -Encoding utf8
+'@ | Add-Content -Path $configPath -Encoding utf8
+
+# start MCP worker loop (interactive codex mode)
+$env:AIREMOTECODER_GATEWAY_URL="http://localhost:3100"
+$env:AIREMOTECODER_PROVIDER="codex"
+$env:AIREMOTECODER_CODEX_MODE="interactive"
+npm run worker:mcp -w gateway
 ```
+
+All generated setup commands are additive/update-only and scoped to
+`airemotecoder`; they do not replace unrelated provider configuration.
+
+### MCP Worker Loop (Codex-first)
+
+Run this on the coding host after MCP token setup:
+
+```bash
+export AIREMOTECODER_GATEWAY_URL=http://localhost:3100
+export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
+export AIREMOTECODER_PROVIDER=codex
+export AIREMOTECODER_CODEX_MODE=interactive
+npm run worker:mcp -w gateway
+```
+
+Set `AIREMOTECODER_CODEX_MODE=exec` to run one-shot `codex exec` for each prompt.
+
+For non-Codex providers set:
+
+```bash
+export AIREMOTECODER_PROVIDER=<provider>
+export AIREMOTECODER_EXEC_TEMPLATE="<provider-cli> ... {input}"
+```
+
+`{input}` is required and is replaced with the queued prompt payload.
+
+Worker endpoints used:
+
+- `POST /api/mcp/runs/claim`
+- `GET /api/mcp/runs/:runId/commands`
+- `POST /api/mcp/runs/:runId/commands/:commandId/ack`
+- `POST /api/mcp/runs/:runId/events`
+
+The worker loop supports bearer-token session resolution when `mcp-session-id`
+is omitted by selecting the most recent active MCP session for that token.
 
 Quick test:
 ```bash

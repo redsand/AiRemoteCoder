@@ -7,7 +7,17 @@ const { projectRoot } = vi.hoisted(() => ({
   projectRoot: `${process.cwd()}\\.test-data\\mcp-setup-${Math.random().toString(36).slice(2)}`,
 }));
 
-const tokens: Array<{ id: string; token_hash: string; label: string; user_id: string; scopes: string }> = [];
+const tokens: Array<{
+  id: string;
+  token_hash: string;
+  label: string;
+  user_id: string;
+  scopes: string;
+  created_at?: number;
+  last_used_at?: number | null;
+  revoked_at?: number | null;
+  expires_at?: number | null;
+}> = [];
 const projectTargets: Array<{
   id: string;
   user_id: string;
@@ -50,6 +60,9 @@ vi.mock('../services/database.js', () => ({
         if (sql.includes('FROM project_targets WHERE id = ?')) {
           return projectTargets.find((entry) => entry.id === args[0]);
         }
+        if (sql.includes('FROM mcp_tokens WHERE id = ?')) {
+          return tokens.find((entry) => entry.id === args[0]);
+        }
         if (sql.includes('FROM project_targets WHERE user_id = ? AND path = ?')) {
           return projectTargets.find((entry) => entry.user_id === args[0] && entry.path === args[1]);
         }
@@ -72,6 +85,10 @@ vi.mock('../services/database.js', () => ({
             label: args[2],
             user_id: args[3],
             scopes: args[4],
+            created_at: Math.floor(Date.now() / 1000),
+            last_used_at: null,
+            revoked_at: null,
+            expires_at: null,
           });
         }
         if (sql.includes('UPDATE mcp_tokens SET revoked_at')) {
@@ -198,15 +215,88 @@ describe('mcpSetupRoutes', () => {
       installed: boolean;
       snippet: string;
       token: string;
+      instructions: string;
       copyPaste?: { bash?: string[]; powershell?: string[] };
     };
     expect(install.installed).toBe(false);
-    expect(install.snippet).toContain('AIREMOTECODER_MCP_TOKEN=');
-    expect(install.snippet).toContain(`AIREMOTECODER_MCP_TOKEN=${setup.token}`);
+    expect(install.snippet).toContain('[mcp_servers.airemotecoder]');
+    expect(install.snippet).toContain('bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"');
+    expect(install.snippet).not.toContain('python - <<');
     expect(install.copyPaste?.bash?.length ?? 0).toBeGreaterThan(0);
     expect(install.copyPaste?.powershell?.length ?? 0).toBeGreaterThan(0);
     expect(install.token).toBe(setup.token);
+    expect(install.copyPaste?.bash?.[0] ?? '').not.toContain('codex mcp add');
+    expect(install.copyPaste?.bash?.[0] ?? '').toContain('python - <<\'PY\'');
+    expect(install.copyPaste?.bash?.[1] ?? '').toContain('AIREMOTECODER_CODEX_MODE="interactive"');
+    expect(install.copyPaste?.bash?.[1] ?? '').toContain('npm run worker:mcp -w gateway');
+    expect(install.copyPaste?.powershell?.[0] ?? '').toContain('mcp_servers.airemotecoder');
+    expect(install.copyPaste?.powershell?.[0] ?? '').toContain('Set-Content -Path $configPath -Value $out -Encoding utf8');
+    expect(install.copyPaste?.powershell?.[1] ?? '').toContain('$env:AIREMOTECODER_CODEX_MODE="interactive"');
+    expect(install.copyPaste?.powershell?.[1] ?? '').toContain('npm run worker:mcp -w gateway');
+    expect(install.instructions).toContain('AIREMOTECODER_CODEX_MODE=exec');
 
+    await app.close();
+  });
+
+  it('reuses latest unused setup token unless rotate is requested', async () => {
+    const app = await buildApp();
+
+    const first = await app.inject({ method: 'POST', url: '/api/mcp/setup/codex' });
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json() as { token: string; tokenReused: boolean };
+    expect(firstBody.tokenReused).toBe(false);
+
+    const second = await app.inject({ method: 'POST', url: '/api/mcp/setup/codex' });
+    expect(second.statusCode).toBe(200);
+    const secondBody = second.json() as { token: string; tokenReused: boolean };
+    expect(secondBody.token).toBe(firstBody.token);
+    expect(secondBody.tokenReused).toBe(true);
+
+    const rotated = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/codex',
+      payload: { generateNewToken: true },
+    });
+    expect(rotated.statusCode).toBe(200);
+    const rotatedBody = rotated.json() as { token: string; tokenReused: boolean };
+    expect(rotatedBody.token).not.toBe(firstBody.token);
+    expect(rotatedBody.tokenReused).toBe(false);
+
+    await app.close();
+  });
+
+  it('rotates automatically when latest setup token has been used', async () => {
+    const app = await buildApp();
+
+    const first = await app.inject({ method: 'POST', url: '/api/mcp/setup/codex' });
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json() as { token: string };
+
+    const latestToken = tokens[tokens.length - 1] as any;
+    latestToken.last_used_at = Math.floor(Date.now() / 1000);
+
+    const second = await app.inject({ method: 'POST', url: '/api/mcp/setup/codex' });
+    expect(second.statusCode).toBe(200);
+    const secondBody = second.json() as { token: string; tokenReused: boolean };
+    expect(secondBody.token).not.toBe(firstBody.token);
+    expect(secondBody.tokenReused).toBe(false);
+
+    await app.close();
+  });
+
+  it('adds persistent env-var commands when persistEnv is enabled', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/codex',
+      payload: { persistEnv: true },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      copyPaste?: { bash?: string[]; powershell?: string[] };
+    };
+    expect(body.copyPaste?.bash?.[0] ?? '').toContain('Path.home() / ".profile"');
+    expect(body.copyPaste?.powershell?.[0] ?? '').toContain('[Environment]::SetEnvironmentVariable("AIREMOTECODER_MCP_TOKEN"');
     await app.close();
   });
 

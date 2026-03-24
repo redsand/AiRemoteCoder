@@ -1,26 +1,17 @@
 import { MCP_PROVIDERS, type McpProviderKey } from '../../features/mcp/providers';
-import type { McpConfig, McpProviderSetupState, McpSetupStatus } from '../../features/mcp/types';
+import type { McpConfig, McpProviderSetupState } from '../../features/mcp/types';
 
 interface Props {
   mcpConfig: McpConfig | null;
-  setupStatus: Record<string, McpSetupStatus>;
   providerSetup: Record<string, McpProviderSetupState>;
   installingProvider: McpProviderKey | null;
   copiedField: string | null;
-  onInstall: (providerKey: McpProviderKey) => void;
+  onInstall: (providerKey: McpProviderKey, options?: { generateNewToken?: boolean }) => void;
   onCopy: (text: string, field: string) => void;
-}
-
-function ProviderStatusBadge({ status }: { status?: McpSetupStatus }) {
-  if (!status) return <span className="provider-badge neutral">not configured</span>;
-  if (status.hasAiRemoteCoder) return <span className="provider-badge success">✓ configured</span>;
-  if (status.exists) return <span className="provider-badge warn">file exists, not configured</span>;
-  return <span className="provider-badge neutral">not configured</span>;
 }
 
 export function McpProviderGrid({
   mcpConfig,
-  setupStatus,
   providerSetup,
   installingProvider,
   copiedField,
@@ -32,13 +23,13 @@ export function McpProviderGrid({
   return (
     <div className="provider-list">
       {MCP_PROVIDERS.map((provider) => {
-        const isConfigured = setupStatus[provider.key]?.hasAiRemoteCoder;
         const isInstalling = installingProvider === provider.key;
         const setup = providerSetup[provider.key];
+        const hasGenerated = Boolean(setup);
         const enabled = enabledProviders.includes(provider.key);
 
         return (
-          <div key={provider.key} className={`provider-row ${isConfigured ? 'configured' : ''}`}>
+          <div key={provider.key} className="provider-row">
             <div className="provider-row-header">
               <div className="provider-identity">
                 <span className="provider-icon-lg">{provider.icon}</span>
@@ -49,16 +40,26 @@ export function McpProviderGrid({
                 </div>
               </div>
               <div className="provider-actions">
-                <ProviderStatusBadge status={setupStatus[provider.key]} />
                 {!enabled && <span className="provider-badge disabled">disabled in config</span>}
                 {enabled && (
-                  <button
-                    className={`btn btn-primary ${isInstalling ? 'loading' : ''} ${isConfigured ? 'btn-secondary' : ''}`}
-                    onClick={() => onInstall(provider.key)}
-                    disabled={isInstalling}
-                  >
-                    {isInstalling ? 'Generating…' : isConfigured ? '↺ Regenerate Snippet' : '⚡ Generate Snippet'}
-                  </button>
+                  <>
+                    <button
+                      className={`btn btn-primary ${isInstalling ? 'loading' : ''} ${hasGenerated ? 'btn-secondary' : ''}`}
+                      onClick={() => onInstall(provider.key, { generateNewToken: false })}
+                      disabled={isInstalling}
+                    >
+                      {isInstalling ? 'Generating…' : hasGenerated ? '↺ Refresh Commands' : '⚡ Generate Snippet'}
+                    </button>
+                    {hasGenerated && (
+                      <button
+                        className="btn btn-danger"
+                        onClick={() => onInstall(provider.key, { generateNewToken: true })}
+                        disabled={isInstalling}
+                      >
+                        Generate New Token
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -73,6 +74,11 @@ export function McpProviderGrid({
                 )}
                 {setup.error && (
                   <div className="alert alert-warning">{setup.error}</div>
+                )}
+                {setup.tokenReused && (
+                  <div className="alert alert-success install-success">
+                    Reusing latest unused token for this provider. Use "Generate New Token" to rotate.
+                  </div>
                 )}
                 {setup.copyPaste?.bash?.length ? (
                   <div className="snippet-block">

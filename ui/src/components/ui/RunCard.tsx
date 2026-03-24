@@ -95,7 +95,13 @@ export function RunCard({ run, compact = false, showClient = true, onClick }: Ru
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
   const claimText = run.claimed_by
-    ? `Claimed by ${run.claimed_by}${run.claimed_at ? ` (${formatRelativeTime(run.claimed_at)})` : ''}`
+    ? (() => {
+      const claimedAt = run.claimed_at ? ` (${formatRelativeTime(run.claimed_at)})` : '';
+      if (run.claimed_by.startsWith('mcp:')) {
+        return `MCP worker attached${claimedAt}`;
+      }
+      return `Claimed by ${run.claimed_by}${claimedAt}`;
+    })()
     : null;
 
   return (

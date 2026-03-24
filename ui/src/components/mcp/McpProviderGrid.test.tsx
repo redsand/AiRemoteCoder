@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { McpProviderGrid } from './McpProviderGrid';
-import type { McpConfig, McpProviderSetupState, McpSetupStatus } from '../../features/mcp/types';
+import type { McpConfig, McpProviderSetupState } from '../../features/mcp/types';
 
 const baseConfig: McpConfig = {
   enabled: true,
@@ -19,13 +19,11 @@ const baseConfig: McpConfig = {
 
 describe('McpProviderGrid', () => {
   it('renders every supported provider with auto-install actions', () => {
-    const setupStatus: Record<string, McpSetupStatus> = {};
     const providerSetup: Record<string, McpProviderSetupState> = {};
 
     const html = renderToStaticMarkup(
       <McpProviderGrid
         mcpConfig={baseConfig}
-        setupStatus={setupStatus}
         providerSetup={providerSetup}
         installingProvider={null}
         copiedField={null}
@@ -44,9 +42,6 @@ describe('McpProviderGrid', () => {
   });
 
   it('shows reinstall and copied state when a provider is configured', () => {
-    const setupStatus: Record<string, McpSetupStatus> = {
-      claude: { configured: true, filePath: '.claude/mcp.json', exists: true, hasAiRemoteCoder: true },
-    };
     const providerSetup: Record<string, McpProviderSetupState> = {
       claude: {
         token: 'token-123',
@@ -63,7 +58,6 @@ describe('McpProviderGrid', () => {
     const html = renderToStaticMarkup(
       <McpProviderGrid
         mcpConfig={baseConfig}
-        setupStatus={setupStatus}
         providerSetup={providerSetup}
         installingProvider={null}
         copiedField="snippet-claude"
@@ -72,7 +66,8 @@ describe('McpProviderGrid', () => {
       />
     );
 
-    expect(html).toContain('Regenerate Snippet');
+    expect(html).toContain('Refresh Commands');
+    expect(html).toContain('Generate New Token');
     expect(html).toContain('✓ Copied');
     expect(html).toContain('Token (shown once)');
     expect(html).toContain('Recommended: Bash one-shot setup');

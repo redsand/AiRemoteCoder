@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "worker:mcp": "tsx src/workers/mcp-worker-loop.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

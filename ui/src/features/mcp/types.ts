@@ -38,6 +38,7 @@ export interface McpSetupStatus {
 
 export interface McpProviderSetupState {
   token?: string;
+  tokenReused?: boolean;
   snippet?: object | string;
   copyPaste?: {
     bash?: string[];
@@ -75,6 +76,8 @@ export interface McpActiveSession {
     username: string;
     role: string;
   };
+  provider?: string | null;
+  tokenLabel?: string;
   createdAt: number;
   lastSeenAt: number;
   scopes: string[];

@@ -22,11 +22,12 @@ import { nanoid } from 'nanoid';
 import { db } from '../services/database.js';
 import { config } from '../config.js';
 import { createMcpServer } from './server.js';
-import { validateMcpToken, extractBearerToken, validateMcpSessionAccess, type McpAuthContext } from './auth.js';
+import { validateMcpToken, extractBearerToken, validateMcpSessionAccess } from './auth.js';
 import { uiAuth } from '../middleware/auth.js';
 import type { AuthenticatedRequest } from '../middleware/auth.js';
 import type { McpScope } from '../domain/types.js';
 import { ALL_MCP_SCOPES } from '../domain/types.js';
+import { getMcpSession, listMcpSessions, registerMcpSession, removeMcpSession, touchMcpSession } from './session-registry.js';
 
 const NON_ADMIN_ALLOWED_SCOPES: McpScope[] = [
   'runs:read',
@@ -55,14 +56,32 @@ const DEFAULT_AGENT_SCOPES: McpScope[] = [
   'approvals:write',
 ];
 
-// In-memory session map: sessionId → { transport, authContext }
-// For production multi-instance deployments, move this to Redis or DB.
-const sessions = new Map<string, {
-  transport: StreamableHTTPServerTransport;
-  authContext: McpAuthContext;
-  createdAt: number;
-  lastSeenAt: number;
-}>();
+function providerFromTokenLabel(label: string | undefined): string | null {
+  if (!label) return null;
+  const normalized = label.trim().toLowerCase();
+  if (!normalized.startsWith('auto:')) return null;
+  const provider = normalized.slice('auto:'.length);
+  return provider || null;
+}
+
+function normalizeScopesField(scopes: unknown): string[] {
+  if (Array.isArray(scopes)) {
+    return scopes.filter((entry): entry is string => typeof entry === 'string');
+  }
+
+  if (typeof scopes === 'string') {
+    try {
+      const parsed = JSON.parse(scopes);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((entry): entry is string => typeof entry === 'string');
+      }
+    } catch {
+      // legacy/corrupt rows: fall through to empty list
+    }
+  }
+
+  return [];
+}
 
 export async function mcpPlugin(fastify: FastifyInstance) {
   if (!config.mcpEnabled) {
@@ -92,7 +111,7 @@ export async function mcpPlugin(fastify: FastifyInstance) {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     if (sessionId) {
-      const session = sessions.get(sessionId);
+      const session = getMcpSession(sessionId);
       if (!session) {
         return reply.code(404).send({
           jsonrpc: '2.0',
@@ -108,7 +127,7 @@ export async function mcpPlugin(fastify: FastifyInstance) {
           id: null,
         });
       }
-      session.lastSeenAt = Math.floor(Date.now() / 1000);
+      touchMcpSession(sessionId);
       // Hand off to existing transport
       await session.transport.handleRequest(req.raw, reply.raw, req.body);
       return;
@@ -131,18 +150,18 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       sessionIdGenerator: () => newSessionId,
       onsessioninitialized: (sid) => {
         const now = Math.floor(Date.now() / 1000);
-        sessions.set(sid, { transport, authContext, createdAt: now, lastSeenAt: now });
+        registerMcpSession({ id: sid, transport, authContext, createdAt: now, lastSeenAt: now });
         fastify.log.info({ sessionId: sid, user: authContext.user.username }, 'MCP session initialized');
       },
     });
 
     transport.onclose = () => {
-      sessions.delete(newSessionId);
+      removeMcpSession(newSessionId);
       fastify.log.info({ sessionId: newSessionId }, 'MCP session closed');
     };
 
     // Create a fresh server per session so getAuthContext() closes over this session's auth
-    const mcpServer = createMcpServer(() => sessions.get(newSessionId)?.authContext ?? null);
+    const mcpServer = createMcpServer(() => getMcpSession(newSessionId)?.authContext ?? null);
     await mcpServer.connect(transport);
     await transport.handleRequest(req.raw, reply.raw, req.body);
   });
@@ -152,11 +171,24 @@ export async function mcpPlugin(fastify: FastifyInstance) {
   // -------------------------------------------------------------------------
   fastify.get(config.mcpPath, async (req, reply) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    const accept = String(req.headers.accept || '');
+    const secFetchDest = String(req.headers['sec-fetch-dest'] || '');
+    const isBrowserNavigation = !sessionId && (accept.includes('text/html') || secFetchDest === 'document');
+
+    // Browser navigation fallback: /mcp is also a UI route in BrowserRouter.
+    // Serve SPA shell when available instead of returning MCP protocol errors.
+    if (isBrowserNavigation) {
+      if (typeof (reply as any).sendFile === 'function') {
+        return (reply as any).sendFile('index.html');
+      }
+      return reply.redirect('/');
+    }
+
     if (!sessionId) {
       return reply.code(400).send({ error: 'Mcp-Session-Id header required for SSE stream' });
     }
 
-    const session = sessions.get(sessionId);
+    const session = getMcpSession(sessionId);
     if (!session) {
       return reply.code(404).send({ error: `Session not found: ${sessionId}` });
     }
@@ -166,7 +198,7 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       return reply.code(authCheck.statusCode).send({ error: authCheck.message });
     }
 
-    session.lastSeenAt = Math.floor(Date.now() / 1000);
+    touchMcpSession(sessionId);
     await session.transport.handleRequest(req.raw, reply.raw);
   });
 
@@ -179,7 +211,7 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'Mcp-Session-Id header required' });
     }
 
-    const session = sessions.get(sessionId);
+    const session = getMcpSession(sessionId);
     if (!session) {
       return reply.code(404).send({ error: `Session not found: ${sessionId}` });
     }
@@ -189,9 +221,9 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       return reply.code(authCheck.statusCode).send({ error: authCheck.message });
     }
 
-    session.lastSeenAt = Math.floor(Date.now() / 1000);
+    touchMcpSession(sessionId);
     await session.transport.handleRequest(req.raw, reply.raw);
-    sessions.delete(sessionId);
+    removeMcpSession(sessionId);
     fastify.log.info({ sessionId }, 'MCP session deleted');
     return reply.code(200).send({ ok: true });
   });
@@ -286,11 +318,16 @@ export async function mcpPlugin(fastify: FastifyInstance) {
     '/api/mcp/tokens',
     { preHandler: [uiAuth] },
     async (req: AuthenticatedRequest, reply) => {
-      const tokens = db.prepare(`
+      const rows = db.prepare(`
         SELECT id, label, scopes, created_at, expires_at, last_used_at, revoked_at
         FROM mcp_tokens WHERE user_id = ?
         ORDER BY created_at DESC
       `).all(req.user!.id);
+
+      const tokens = rows.map((row: any) => ({
+        ...row,
+        scopes: normalizeScopesField(row.scopes),
+      }));
 
       return reply.send({ tokens });
     }
@@ -303,13 +340,15 @@ export async function mcpPlugin(fastify: FastifyInstance) {
     '/api/mcp/sessions',
     { preHandler: [uiAuth] },
     async (req: AuthenticatedRequest, reply) => {
-      const entries = Array.from(sessions.entries()).map(([id, session]) => ({
-        id,
+      const entries = listMcpSessions().map((session) => ({
+        id: session.id,
         user: {
           id: session.authContext.user.id,
           username: session.authContext.user.username,
           role: session.authContext.user.role,
         },
+        provider: providerFromTokenLabel(session.authContext.tokenLabel),
+        tokenLabel: session.authContext.tokenLabel,
         createdAt: session.createdAt,
         lastSeenAt: session.lastSeenAt,
         scopes: session.authContext.scopes,
@@ -376,47 +415,62 @@ function buildConnectionInstructions(mcpUrl: string): Record<string, object> {
     },
     codex: {
       description: 'Codex MCP setup (AiRemoteCoder only)',
-      commands: [
-        `codex mcp add airemotecoder --url ${mcpUrl}`,
-      ],
+      commands: [],
       bash: {
-        overwriteFile: `mkdir -p ~/.codex
-cat > ~/.codex/config.toml <<'EOF'
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-EOF`,
-        replaceBlock: `mkdir -p ~/.codex
+        replaceBlock: `export AIREMOTECODER_MCP_TOKEN="<YOUR_MCP_TOKEN>"
+mkdir -p ~/.codex
 touch ~/.codex/config.toml
-awk '
-BEGIN { skip=0 }
-$0 ~ /^\\[mcp_servers\\.airemotecoder\\]/ { skip=1; next }
-$0 ~ /^\\[/ { if (skip==1) skip=0 }
-skip==0 { print }
-' ~/.codex/config.toml > ~/.codex/config.toml.tmp
-mv ~/.codex/config.toml.tmp ~/.codex/config.toml
-cat >> ~/.codex/config.toml <<'EOF'
+python - <<'PY'
+from pathlib import Path
+import re
 
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-EOF`,
+path = Path.home() / ".codex" / "config.toml"
+text = path.read_text(encoding="utf-8") if path.exists() else ""
+prefix = "mcp_servers.airemotecoder"
+out = []
+skip = False
+
+for line in text.splitlines():
+    m = re.match(r"^\\s*\\[([^\\]]+)\\]\\s*(?:[#;].*)?$", line)
+    if m:
+        table = m.group(1).strip()
+        if table == prefix or table.startswith(prefix + "."):
+            skip = True
+            continue
+        skip = False
+    if not skip:
+        out.append(line)
+
+if out and out[-1] != "":
+    out.append("")
+out.extend([
+    "[mcp_servers.airemotecoder]",
+    "url = \\"${mcpUrl}\\"",
+    "bearer_token_env_var = \\"AIREMOTECODER_MCP_TOKEN\\"",
+    "",
+])
+path.write_text("\\n".join(out), encoding="utf-8")
+PY`,
       },
       powershell: {
-        overwriteFile: `$configDir = Join-Path $HOME ".codex"
-New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-@'
-[mcp_servers.airemotecoder]
-url = "${mcpUrl}"
-bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
-'@ | Set-Content -Path (Join-Path $configDir "config.toml") -Encoding utf8`,
-        replaceBlock: `$configDir = Join-Path $HOME ".codex"
+        replaceBlock: `$env:AIREMOTECODER_MCP_TOKEN="<YOUR_MCP_TOKEN>"
+$configDir = Join-Path $HOME ".codex"
 $configPath = Join-Path $configDir "config.toml"
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 if (!(Test-Path $configPath)) { New-Item -ItemType File -Path $configPath | Out-Null }
-$content = Get-Content -Raw -Path $configPath
-$content = [regex]::Replace($content, "(?ms)\\n?\\[mcp_servers\\.airemotecoder\\].*?(?=\\n\\[|$)", "")
-Set-Content -Path $configPath -Value $content -Encoding utf8
+$lines = Get-Content -Path $configPath
+$prefix = "mcp_servers.airemotecoder"
+$skip = $false
+$out = New-Object System.Collections.Generic.List[string]
+foreach ($line in $lines) {
+  if ($line -match '^\\s*\\[([^\\]]+)\\]\\s*(?:[#;].*)?$') {
+    $table = $matches[1].Trim()
+    if ($table -eq $prefix -or $table.StartsWith("$prefix.")) { $skip = $true; continue }
+    if ($skip) { $skip = $false }
+  }
+  if (-not $skip) { [void]$out.Add($line) }
+}
+Set-Content -Path $configPath -Value $out -Encoding utf8
 @'
 
 [mcp_servers.airemotecoder]
@@ -427,7 +481,7 @@ bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
       env: {
         AIREMOTECODER_MCP_TOKEN: '<YOUR_MCP_TOKEN>',
       },
-      note: 'Set AIREMOTECODER_MCP_TOKEN in your shell/session before starting codex. Use overwriteFile for a clean reset or replaceBlock to update only the airemotecoder entry.',
+      note: 'Run one replaceBlock command (Bash or PowerShell). It updates only the airemotecoder table family and leaves all unrelated config untouched.',
     },
     gemini_cli: {
       description: 'Add to gemini settings.json',
