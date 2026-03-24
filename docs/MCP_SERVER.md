@@ -31,11 +31,13 @@ Content-Type: application/json
 
 | Scope | Grants |
 |-------|--------|
-| `runs:read` | list_runs, get_run, get_run_diff, get_policy_snapshot, get_agent_capabilities, get_vnc_status |
+| `runs:read` | list_runs, get_run, get_run_diff, get_policy_snapshot, get_agent_capabilities |
 | `runs:write` | create_run, resume_run, send_input |
 | `runs:cancel` | cancel_run |
+| `vnc:read` | get_vnc_status |
+| `vnc:control` | start_vnc_stream, stop_vnc_stream |
 | `sessions:read` | (reserved for future session-query tools) |
-| `sessions:write` | send_input, interrupt_session, start_vnc_stream, stop_vnc_stream |
+| `sessions:write` | send_input, interrupt_session |
 | `events:read` | tail_logs |
 | `artifacts:read` | list_artifacts, fetch_artifact, get_run_diff |
 | `artifacts:write` | (reserved for agent artifact upload) |
@@ -103,7 +105,7 @@ Create a new pending run. A worker will claim it.
 **Input:**
 ```json
 {
-  "worker_type": "claude",       // claude|codex|gemini|opencode|rev|hands-on|vnc
+  "worker_type": "claude",       // claude|codex|gemini|opencode|zenflow|rev|hands-on|vnc
   "label": "Fix auth bug",       // optional
   "command": "fix the login…",   // optional initial prompt
   "repo_path": "/home/…/repo",   // optional working directory
@@ -168,7 +170,7 @@ Send interrupt (Ctrl-C equivalent) to the active process.
 ### `get_vnc_status`
 Get VNC tunnel status for a VNC run.
 
-**Scope:** `runs:read`
+**Scope:** `vnc:read`
 
 **Input:** `{ "run_id": "abc" }`
 
@@ -180,7 +182,7 @@ Get VNC tunnel status for a VNC run.
 Queue VNC stream startup for a VNC run. This is a control-plane action; the
 actual pixel stream remains on the VNC websocket path.
 
-**Scope:** `sessions:write`
+**Scope:** `vnc:control`
 
 **Input:** `{ "run_id": "abc" }`
 
@@ -191,7 +193,7 @@ actual pixel stream remains on the VNC websocket path.
 ### `stop_vnc_stream`
 Close an active VNC tunnel for a VNC run.
 
-**Scope:** `sessions:write`
+**Scope:** `vnc:control`
 
 **Input:** `{ "run_id": "abc" }`
 

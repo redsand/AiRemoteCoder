@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useToast } from '../components/ui';
 import McpProviderGrid from '../components/mcp/McpProviderGrid';
 import { MCP_PROVIDERS, type McpProviderKey } from '../features/mcp/providers';
-import type { McpConfig, McpProviderSetupState, McpSetupStatus, McpToken } from '../features/mcp/types';
+import type { McpConfig, McpProjectTarget, McpProviderSetupState, McpSetupStatus, McpToken } from '../features/mcp/types';
 
 interface Props {
   user: { id: string; username: string; role: string } | null;
@@ -16,32 +16,65 @@ export function McpSettings(_props: Props) {
 
   const [mcpConfig, setMcpConfig] = useState<McpConfig | null>(null);
   const [tokens, setTokens] = useState<McpToken[]>([]);
+  const [projectTargets, setProjectTargets] = useState<McpProjectTarget[]>([]);
+  const [selectedProjectTargetId, setSelectedProjectTargetId] = useState<string>('');
+  const [customProjectPath, setCustomProjectPath] = useState('');
+  const [newTargetLabel, setNewTargetLabel] = useState('');
   const [setupStatus, setSetupStatus] = useState<Record<string, McpSetupStatus>>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'connect' | 'tokens' | 'test'>('connect');
   const [installingProvider, setInstallingProvider] = useState<McpProviderKey | null>(null);
   const [providerSetup, setProviderSetup] = useState<Record<string, McpProviderSetupState>>({});
   const [newTokenLabel, setNewTokenLabel] = useState('');
+  const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const buildTargetPayload = useCallback(() => {
+    const payload: { projectTargetId?: string; projectPath?: string } = {};
+    if (selectedProjectTargetId) {
+      payload.projectTargetId = selectedProjectTargetId;
+      return payload;
+    }
+    if (customProjectPath.trim()) {
+      payload.projectPath = customProjectPath.trim();
+    }
+    return payload;
+  }, [customProjectPath, selectedProjectTargetId]);
+
+  const buildTargetQuery = useCallback(() => {
+    if (selectedProjectTargetId) {
+      return `?projectTargetId=${encodeURIComponent(selectedProjectTargetId)}`;
+    }
+    if (customProjectPath.trim()) {
+      return `?projectPath=${encodeURIComponent(customProjectPath.trim())}`;
+    }
+    return '';
+  }, [customProjectPath, selectedProjectTargetId]);
 
   const fetchAll = useCallback(async () => {
     try {
       const [configRes, tokensRes, statusRes] = await Promise.all([
         fetch('/api/mcp/config'),
         fetch('/api/mcp/tokens'),
-        fetch('/api/mcp/setup/status'),
+        fetch(`/api/mcp/setup/status${buildTargetQuery()}`),
       ]);
-      if (configRes.ok) setMcpConfig(await configRes.json());
+      const targetsRes = await fetch('/api/mcp/project-targets');
+      if (configRes.ok) {
+        const config = (await configRes.json()) as McpConfig;
+        setMcpConfig(config);
+        setSelectedScopes((prev) => (prev.length > 0 ? prev : (config.defaultAgentScopes ?? [])));
+      }
       if (tokensRes.ok) setTokens((await tokensRes.json()).tokens ?? []);
       if (statusRes.ok) setSetupStatus((await statusRes.json()).status ?? {});
+      if (targetsRes.ok) setProjectTargets((await targetsRes.json()).targets ?? []);
     } catch {
       addToast('error', 'Failed to load MCP configuration');
     } finally {
       setLoading(false);
     }
-  }, [addToast]);
+  }, [addToast, buildTargetQuery]);
 
   useEffect(() => {
     fetchAll();
@@ -57,7 +90,12 @@ export function McpSettings(_props: Props) {
   async function setupProvider(providerKey: McpProviderKey) {
     setInstallingProvider(providerKey);
     try {
-      const setupRes = await fetch(`/api/mcp/setup/${providerKey}`, { method: 'POST' });
+      const targetPayload = buildTargetPayload();
+      const setupRes = await fetch(`/api/mcp/setup/${providerKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(targetPayload),
+      });
       if (!setupRes.ok) {
         const err = await setupRes.json();
         setProviderSetup((prev) => ({ ...prev, [providerKey]: { error: err.error } }));
@@ -70,7 +108,7 @@ export function McpSettings(_props: Props) {
         const installRes = await fetch(`/api/mcp/setup/${providerKey}/install`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: setup.token }),
+          body: JSON.stringify({ token: setup.token, ...targetPayload }),
         });
         const install = await installRes.json();
 
@@ -105,7 +143,7 @@ export function McpSettings(_props: Props) {
         }));
       }
 
-      const statusRes = await fetch('/api/mcp/setup/status');
+      const statusRes = await fetch(`/api/mcp/setup/status${buildTargetQuery()}`);
       if (statusRes.ok) setSetupStatus((await statusRes.json()).status ?? {});
       await fetchAll();
     } catch (e: any) {
@@ -113,6 +151,29 @@ export function McpSettings(_props: Props) {
     } finally {
       setInstallingProvider(null);
     }
+  }
+
+  async function saveProjectTarget() {
+    const path = customProjectPath.trim();
+    if (!path) {
+      addToast('error', 'Project path is required');
+      return;
+    }
+    const label = newTargetLabel.trim() || path.split(/[\\/]/).filter(Boolean).pop() || 'Project';
+    const res = await fetch('/api/mcp/project-targets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label, path }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      addToast('error', err.error || 'Failed to save project target');
+      return;
+    }
+    const created = await res.json();
+    await fetchAll();
+    setSelectedProjectTargetId(created.id);
+    addToast('success', 'Project target saved');
   }
 
   async function createToken() {
@@ -124,7 +185,7 @@ export function McpSettings(_props: Props) {
     const res = await fetch('/api/mcp/tokens', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label: newTokenLabel.trim() }),
+      body: JSON.stringify({ label: newTokenLabel.trim(), scopes: selectedScopes }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -136,6 +197,14 @@ export function McpSettings(_props: Props) {
       const err = await res.json();
       addToast('error', err.error || 'Failed to create token');
     }
+  }
+
+  function toggleScope(scope: string) {
+    setSelectedScopes((prev) => (
+      prev.includes(scope)
+        ? prev.filter((entry) => entry !== scope)
+        : [...prev, scope]
+    ));
   }
 
   async function revokeToken(id: string) {
@@ -233,6 +302,49 @@ export function McpSettings(_props: Props) {
 
           {activeTab === 'connect' && (
             <section className="mcp-connect-tab">
+              <div className="card" style={{ marginBottom: '12px' }}>
+                <h3>Target Project</h3>
+                <div className="form-row" style={{ marginBottom: '8px' }}>
+                  <select
+                    className="form-input"
+                    value={selectedProjectTargetId}
+                    onChange={(e) => setSelectedProjectTargetId(e.target.value)}
+                  >
+                    <option value="">Default ({mcpConfig?.url ? 'current gateway project' : 'current'})</option>
+                    {projectTargets.map((target) => (
+                      <option key={target.id} value={target.id}>
+                        {target.label} — {target.path}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Or enter absolute project path (e.g. /repos/my-app)"
+                    value={customProjectPath}
+                    onChange={(e) => {
+                      setCustomProjectPath(e.target.value);
+                      if (selectedProjectTargetId) setSelectedProjectTargetId('');
+                    }}
+                  />
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Label (optional)"
+                    value={newTargetLabel}
+                    onChange={(e) => setNewTargetLabel(e.target.value)}
+                  />
+                  <button className="btn btn-secondary" onClick={saveProjectTarget}>
+                    Save Target
+                  </button>
+                </div>
+                <p className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
+                  Auto-install applies to the selected target. This enables multi-project and multi-machine MCP setup.
+                </p>
+              </div>
+
               <p className="text-muted section-intro">
                 Auto-install is available for every supported coding environment.
                 Click a provider card to configure MCP immediately or copy the snippet manually.
@@ -282,6 +394,25 @@ export function McpSettings(_props: Props) {
                     Generate
                   </button>
                 </div>
+                {mcpConfig?.availableScopes?.length ? (
+                  <div style={{ marginTop: '12px' }}>
+                    <div className="text-muted" style={{ fontSize: '12px', marginBottom: '6px' }}>
+                      Scopes for this token
+                    </div>
+                    <div className="provider-status-grid">
+                      {mcpConfig.availableScopes.map((scope) => (
+                        <label key={scope} className="provider-status-item" style={{ justifyContent: 'space-between' }}>
+                          <span>{scope}</span>
+                          <input
+                            type="checkbox"
+                            checked={selectedScopes.includes(scope)}
+                            onChange={() => toggleScope(scope)}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <p className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
                   Tokens generated here get standard agent scopes. Use Auto-Install for per-provider setup.
                 </p>

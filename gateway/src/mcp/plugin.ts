@@ -28,6 +28,33 @@ import type { AuthenticatedRequest } from '../middleware/auth.js';
 import type { McpScope } from '../domain/types.js';
 import { ALL_MCP_SCOPES } from '../domain/types.js';
 
+const NON_ADMIN_ALLOWED_SCOPES: McpScope[] = [
+  'runs:read',
+  'runs:write',
+  'runs:cancel',
+  'vnc:read',
+  'vnc:control',
+  'sessions:read',
+  'sessions:write',
+  'events:read',
+  'artifacts:read',
+];
+
+const DEFAULT_AGENT_SCOPES: McpScope[] = [
+  'runs:read',
+  'runs:write',
+  'runs:cancel',
+  'vnc:read',
+  'vnc:control',
+  'sessions:read',
+  'sessions:write',
+  'events:read',
+  'artifacts:read',
+  'artifacts:write',
+  'approvals:read',
+  'approvals:write',
+];
+
 // In-memory session map: sessionId → { transport, authContext }
 // For production multi-instance deployments, move this to Redis or DB.
 const sessions = new Map<string, {
@@ -181,6 +208,8 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       url: mcpUrl,
       transport: 'streamable-http',
       specVersion: '2025-03-26',
+      availableScopes: ALL_MCP_SCOPES,
+      defaultAgentScopes: DEFAULT_AGENT_SCOPES,
       enabledProviders,
       legacyWrapperDeprecated: config.providers.legacyWrapper,
       connectionInstructions: buildConnectionInstructions(mcpUrl),
@@ -200,12 +229,20 @@ export async function mcpPlugin(fastify: FastifyInstance) {
         return reply.code(400).send({ error: 'label is required' });
       }
 
-      const resolvedScopes: McpScope[] = Array.isArray(scopes) ? scopes : ALL_MCP_SCOPES;
+      const requestedScopes = Array.isArray(scopes) ? scopes : DEFAULT_AGENT_SCOPES;
+      const invalidScopes = requestedScopes.filter((scope) => !ALL_MCP_SCOPES.includes(scope as McpScope));
+      if (invalidScopes.length > 0) {
+        return reply.code(400).send({
+          error: `Invalid scopes requested: ${invalidScopes.join(', ')}`,
+          allowedScopes: ALL_MCP_SCOPES,
+        });
+      }
+
+      const resolvedScopes: McpScope[] = requestedScopes as McpScope[];
 
       // Admin role can grant any scope; operator/viewer get a limited default
       if (req.user!.role !== 'admin') {
-        const allowedForNonAdmin: McpScope[] = ['runs:read', 'runs:write', 'runs:cancel', 'sessions:read', 'sessions:write', 'events:read', 'artifacts:read'];
-        const filtered = resolvedScopes.filter((s) => allowedForNonAdmin.includes(s));
+        const filtered = resolvedScopes.filter((s) => NON_ADMIN_ALLOWED_SCOPES.includes(s));
         if (filtered.length !== resolvedScopes.length) {
           return reply.code(403).send({ error: 'Only admin users may create tokens with approval or admin scopes' });
         }
@@ -301,12 +338,16 @@ function buildConnectionInstructions(mcpUrl: string): Record<string, object> {
       },
     },
     codex: {
-      description: 'Codex supports remote MCP via environment variable',
+      description: 'Codex MCP setup (CLI command preferred; env fallback supported)',
+      commands: [
+        `codex mcp add airemotecoder --url ${mcpUrl}`,
+        'codex mcp add github --url https://api.githubcopilot.com/mcp/',
+      ],
       env: {
         MCP_SERVER_URL: mcpUrl,
         MCP_SERVER_TOKEN: '<YOUR_MCP_TOKEN>',
       },
-      note: 'Pass --mcp-server flag or set env vars before running codex',
+      note: 'If your Codex build supports MCP registry commands, use codex mcp add. Use MCP_SERVER_* env vars as fallback for tokenized remote MCP.',
     },
     gemini_cli: {
       description: 'Add to gemini settings.json',

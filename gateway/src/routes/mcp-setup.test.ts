@@ -8,10 +8,21 @@ const { projectRoot } = vi.hoisted(() => ({
 }));
 
 const tokens: Array<{ id: string; token_hash: string; label: string; user_id: string; scopes: string }> = [];
+const projectTargets: Array<{
+  id: string;
+  user_id: string;
+  label: string;
+  path: string;
+  machine_id: string | null;
+  metadata: string | null;
+  created_at: number;
+  updated_at: number;
+}> = [];
 
 vi.mock('../config.js', () => ({
   config: {
     projectRoot,
+    projectRoots: [projectRoot.replace(/\\/g, '/')],
     tlsEnabled: false,
     port: 3100,
     mcpPath: '/mcp',
@@ -20,7 +31,16 @@ vi.mock('../config.js', () => ({
 
 vi.mock('../middleware/auth.js', () => ({
   uiAuth: (req: any, _reply: any, done: () => void) => {
-    req.user = { id: 'user-1', username: 'alice', role: 'admin' };
+    const cookieHeader = String(req.headers?.cookie || '');
+    if (cookieHeader.includes('session=session-user-2')) {
+      req.user = { id: 'user-2', username: 'bob', role: 'admin' };
+    } else {
+      req.user = { id: 'user-1', username: 'alice', role: 'admin' };
+    }
+    const deviceHeader = req.headers?.['x-airc-device-id'] ?? req.headers?.['x-airc-machine-id'];
+    if (typeof deviceHeader === 'string' && deviceHeader.trim()) {
+      req.deviceId = deviceHeader.trim();
+    }
     done();
   },
 }));
@@ -28,8 +48,24 @@ vi.mock('../middleware/auth.js', () => ({
 vi.mock('../services/database.js', () => ({
   db: {
     prepare: (sql: string) => ({
-      get: () => undefined,
-      all: () => [],
+      get: (...args: any[]) => {
+        if (sql.includes('FROM project_targets WHERE id = ?')) {
+          return projectTargets.find((entry) => entry.id === args[0]);
+        }
+        if (sql.includes('FROM project_targets WHERE user_id = ? AND path = ?')) {
+          return projectTargets.find((entry) => entry.user_id === args[0] && entry.path === args[1]);
+        }
+        return undefined;
+      },
+      all: (...args: any[]) => {
+        if (sql.includes('FROM project_targets') && sql.includes('WHERE user_id = ?')) {
+          return projectTargets.filter((entry) => entry.user_id === args[0]);
+        }
+        if (sql.includes('FROM project_targets')) {
+          return [...projectTargets];
+        }
+        return [];
+      },
       run: (...args: any[]) => {
         if (sql.includes('INSERT INTO mcp_tokens')) {
           tokens.push({
@@ -46,6 +82,31 @@ vi.mock('../services/database.js', () => ({
             (token as any).revoked_at = Math.floor(Date.now() / 1000);
           }
         }
+        if (sql.includes('INSERT INTO project_targets')) {
+          projectTargets.push({
+            id: args[0],
+            user_id: args[1],
+            label: args[2],
+            path: args[3],
+            machine_id: args[4],
+            metadata: args[5],
+            created_at: Math.floor(Date.now() / 1000),
+            updated_at: Math.floor(Date.now() / 1000),
+          });
+        }
+        if (sql.includes('UPDATE project_targets') && sql.includes('WHERE id = ?')) {
+          const target = projectTargets.find((entry) => entry.id === args[3]);
+          if (target) {
+            target.label = args[0];
+            target.machine_id = args[1];
+            target.metadata = args[2];
+            target.updated_at = Math.floor(Date.now() / 1000);
+          }
+        }
+        if (sql.includes('DELETE FROM project_targets WHERE id = ?')) {
+          const index = projectTargets.findIndex((entry) => entry.id === args[0]);
+          if (index >= 0) projectTargets.splice(index, 1);
+        }
       },
     }),
   },
@@ -54,6 +115,7 @@ vi.mock('../services/database.js', () => ({
 describe('mcpSetupRoutes', () => {
   beforeEach(() => {
     tokens.length = 0;
+    projectTargets.length = 0;
     mkdirSync(projectRoot, { recursive: true });
   });
 
@@ -201,6 +263,83 @@ describe('mcpSetupRoutes', () => {
     const install = installRes.json() as { installed: boolean; filePath: string };
     expect(install.installed).toBe(true);
     expect(install.filePath).toContain('.zenflow');
+
+    await app.close();
+  });
+
+  it('supports installing to a custom projectPath inside allowed roots', async () => {
+    const app = await buildApp();
+    const otherProject = join(projectRoot, 'workspace-two');
+
+    const setupRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude',
+      payload: { projectPath: otherProject },
+    });
+
+    expect(setupRes.statusCode).toBe(200);
+    const setup = setupRes.json() as { token: string };
+
+    const installRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude/install',
+      payload: { token: setup.token, projectPath: otherProject },
+    });
+
+    expect(installRes.statusCode).toBe(200);
+    const writtenPath = join(otherProject, '.claude', 'mcp.json');
+    expect(existsSync(writtenPath)).toBe(true);
+
+    await app.close();
+  });
+
+  it('rejects custom projectPath outside allowed roots', async () => {
+    const app = await buildApp();
+
+    const setupRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/claude',
+      payload: { projectPath: '/outside/root/project' },
+    });
+
+    expect(setupRes.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it('creates, lists, and deletes project targets', async () => {
+    const app = await buildApp();
+    const path = join(projectRoot, 'workspace-three');
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/project-targets',
+      payload: { label: 'Workspace Three', path, machineId: 'laptop-a' },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const created = createRes.json() as { id: string; path: string };
+    expect(created.path.replace(/\\/g, '/')).toContain('/workspace-three');
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/project-targets',
+    });
+    expect(listRes.statusCode).toBe(200);
+    const list = listRes.json() as { targets: Array<{ id: string }> };
+    expect(list.targets.some((entry) => entry.id === created.id)).toBe(true);
+
+    const deleteRes = await app.inject({
+      method: 'DELETE',
+      url: `/api/mcp/project-targets/${created.id}`,
+    });
+    expect(deleteRes.statusCode).toBe(200);
+
+    const listAfter = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/project-targets',
+    });
+    expect(listAfter.statusCode).toBe(200);
+    const listAfterBody = listAfter.json() as { targets: Array<{ id: string }> };
+    expect(listAfterBody.targets.some((entry) => entry.id === created.id)).toBe(false);
 
     await app.close();
   });

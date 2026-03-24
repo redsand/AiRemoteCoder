@@ -71,6 +71,7 @@ export type ProviderName =
   | 'codex'
   | 'gemini'
   | 'opencode'
+  | 'zenflow'
   | 'rev'
   /** @deprecated Scheduled for removal in next major release */
   | 'legacy_wrapper';
@@ -280,6 +281,8 @@ export type McpScope =
   | 'runs:read'
   | 'runs:write'
   | 'runs:cancel'
+  | 'vnc:read'
+  | 'vnc:control'
   | 'sessions:read'
   | 'sessions:write'
   | 'events:read'
@@ -293,6 +296,7 @@ export type McpScope =
 // Convenience: all scopes granted to admin tokens
 export const ALL_MCP_SCOPES: McpScope[] = [
   'runs:read', 'runs:write', 'runs:cancel',
+  'vnc:read', 'vnc:control',
   'sessions:read', 'sessions:write',
   'events:read',
   'artifacts:read', 'artifacts:write',

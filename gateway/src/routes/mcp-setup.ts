@@ -17,15 +17,17 @@ import type { FastifyInstance } from 'fastify';
 import { createHash } from 'crypto';
 import { nanoid } from 'nanoid';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { resolve, dirname } from 'path';
+import { resolve, dirname, relative, isAbsolute } from 'path';
 import { db } from '../services/database.js';
 import { uiAuth } from '../middleware/auth.js';
 import type { AuthenticatedRequest } from '../middleware/auth.js';
 import { config } from '../config.js';
+import type { McpScope } from '../domain/types.js';
 
 // All scopes a coding agent reasonably needs — conservative but functional
-const AGENT_DEFAULT_SCOPES = [
+const AGENT_DEFAULT_SCOPES: McpScope[] = [
   'runs:read', 'runs:write', 'runs:cancel',
+  'vnc:read', 'vnc:control',
   'sessions:read', 'sessions:write',
   'events:read',
   'artifacts:read', 'artifacts:write',
@@ -34,6 +36,87 @@ const AGENT_DEFAULT_SCOPES = [
 
 const SUPPORTED_PROVIDERS = ['claude', 'codex', 'gemini', 'opencode', 'rev', 'zenflow'] as const;
 type SupportedProvider = typeof SUPPORTED_PROVIDERS[number];
+
+interface ProjectTargetRecord {
+  id: string;
+  user_id: string;
+  label: string;
+  path: string;
+  machine_id: string | null;
+  metadata: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface SetupBody {
+  projectTargetId?: string;
+  projectPath?: string;
+}
+
+function normalizeProjectPath(inputPath: string): string {
+  const absolute = isAbsolute(inputPath)
+    ? inputPath
+    : resolve(config.projectRoot, inputPath);
+  return absolute.replace(/\\/g, '/');
+}
+
+function isPathWithinRoot(projectPath: string, rootPath: string): boolean {
+  const normalizedProject = normalizeProjectPath(projectPath);
+  const normalizedRoot = normalizeProjectPath(rootPath);
+  const rel = relative(normalizedRoot, normalizedProject);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function isProjectPathAllowed(projectPath: string): boolean {
+  return config.projectRoots.some((rootPath) => isPathWithinRoot(projectPath, rootPath));
+}
+
+function resolveProjectDirForRequest(
+  request: AuthenticatedRequest,
+  body: SetupBody | undefined
+): { projectDir: string; projectTargetId: string | null } | { error: string; statusCode: number } {
+  const user = request.user;
+  const requestedTargetId = body?.projectTargetId?.trim();
+  const requestedPath = body?.projectPath?.trim();
+
+  if (requestedTargetId) {
+    const target = db.prepare(`
+      SELECT id, user_id, label, path, machine_id, metadata, created_at, updated_at
+      FROM project_targets WHERE id = ?
+    `).get(requestedTargetId) as ProjectTargetRecord | undefined;
+
+    if (!target) {
+      return { error: `Project target not found: ${requestedTargetId}`, statusCode: 404 };
+    }
+
+    if (target.user_id !== user!.id && user!.role !== 'admin') {
+      return { error: 'Project target does not belong to the authenticated user', statusCode: 403 };
+    }
+    if (target.machine_id) {
+      if (!request.deviceId) {
+        return { error: 'Target requires device identity header (x-airc-device-id)', statusCode: 403 };
+      }
+      if (target.machine_id !== request.deviceId) {
+        return { error: 'Project target is bound to a different device', statusCode: 403 };
+      }
+    }
+
+    return { projectDir: target.path, projectTargetId: target.id };
+  }
+
+  if (requestedPath) {
+    const normalized = normalizeProjectPath(requestedPath);
+    if (!isProjectPathAllowed(normalized)) {
+      return {
+        error: `Requested projectPath is outside allowed roots (${config.projectRoots.join(', ')})`,
+        statusCode: 403,
+      };
+    }
+    return { projectDir: normalized, projectTargetId: null };
+  }
+
+  return { projectDir: config.projectRoot, projectTargetId: null };
+}
 
 // ---------------------------------------------------------------------------
 // Config snippet builders per provider
@@ -67,10 +150,10 @@ function buildSnippet(provider: SupportedProvider, mcpUrl: string, token: string
 
     case 'codex':
       return {
-        snippet: `MCP_SERVER_URL=${mcpUrl}\nMCP_SERVER_TOKEN=${token}`,
+        snippet: `# Preferred (Codex MCP registry command)\ncodex mcp add airemotecoder --url ${mcpUrl}\n\n# Optional example: GitHub MCP server\ncodex mcp add github --url https://api.githubcopilot.com/mcp/\n\n# Fallback (env-based remote MCP)\nMCP_SERVER_URL=${mcpUrl}\nMCP_SERVER_TOKEN=${token}`,
         filePath: null, // env var — no standard file
         fileFormat: 'env',
-        instructions: 'Export these environment variables before running codex, or add them to your .env file.',
+        instructions: 'Use codex mcp add if available in your Codex build. Otherwise export MCP_SERVER_URL and MCP_SERVER_TOKEN before running codex.',
       };
 
     case 'gemini':
@@ -163,6 +246,11 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
         });
       }
 
+      const resolved = resolveProjectDirForRequest(req, (req.body ?? {}) as SetupBody);
+      if ('error' in resolved) {
+        return reply.code(resolved.statusCode).send({ error: resolved.error });
+      }
+
       const proto = config.tlsEnabled ? 'https' : 'http';
       const host = req.headers.host || `localhost:${config.port}`;
       const mcpUrl = `${proto}://${host}${config.mcpPath}`;
@@ -177,6 +265,8 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
       return reply.code(200).send({
         provider,
         token: rawToken,
+        projectDir: resolved.projectDir,
+        projectTargetId: resolved.projectTargetId,
         mcpUrl,
         snippet,
         filePath,
@@ -196,7 +286,7 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
     { preHandler: [uiAuth] },
     async (req: AuthenticatedRequest, reply) => {
       const { provider } = req.params as { provider: string };
-      const { token } = req.body as { token?: string };
+      const { token, projectTargetId, projectPath } = req.body as { token?: string; projectTargetId?: string; projectPath?: string };
 
       if (!SUPPORTED_PROVIDERS.includes(provider as SupportedProvider)) {
         return reply.code(400).send({ error: `Unsupported provider: ${provider}` });
@@ -204,6 +294,11 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
 
       if (!token || typeof token !== 'string') {
         return reply.code(400).send({ error: 'token is required and must match the setup response token' });
+      }
+
+      const resolved = resolveProjectDirForRequest(req, { projectTargetId, projectPath });
+      if ('error' in resolved) {
+        return reply.code(resolved.statusCode).send({ error: resolved.error });
       }
 
       const proto = config.tlsEnabled ? 'https' : 'http';
@@ -228,9 +323,7 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
       }
 
       // Resolve target file path
-      const projectDir = config.projectRoot;
-
-      const targetPath = resolve(projectDir, filePath);
+      const targetPath = resolve(resolved.projectDir, filePath);
       const targetDir = dirname(targetPath);
 
       try {
@@ -256,6 +349,8 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
         return reply.code(200).send({
           provider,
           installed: true,
+          projectDir: resolved.projectDir,
+          projectTargetId: resolved.projectTargetId,
           filePath: targetPath,
           instructions,
           token,
@@ -277,7 +372,16 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
     '/api/mcp/setup/status',
     { preHandler: [uiAuth] },
     async (req: AuthenticatedRequest, reply) => {
-      const projectDir = config.projectRoot;
+      const query = req.query as { projectTargetId?: string; projectPath?: string };
+      const resolveInput: SetupBody = {
+        projectTargetId: query.projectTargetId,
+        projectPath: query.projectPath,
+      };
+      const resolved = resolveProjectDirForRequest(req, resolveInput);
+      if ('error' in resolved) {
+        return reply.code(resolved.statusCode).send({ error: resolved.error });
+      }
+      const projectDir = resolved.projectDir;
 
       const status: Record<string, {
         configured: boolean;
@@ -309,7 +413,128 @@ export async function mcpSetupRoutes(fastify: FastifyInstance) {
         status[provider] = { configured: hasAiRemoteCoder, filePath: fullPath, exists, hasAiRemoteCoder };
       }
 
-      return reply.send({ status, projectDir });
+      return reply.send({ status, projectDir, projectTargetId: resolved.projectTargetId });
+    }
+  );
+
+  fastify.get(
+    '/api/mcp/project-targets',
+    { preHandler: [uiAuth] },
+    async (req: AuthenticatedRequest, reply) => {
+      const targets = req.user!.role === 'admin'
+        ? db.prepare(`
+            SELECT id, user_id, label, path, machine_id, metadata, created_at, updated_at
+            FROM project_targets
+            ORDER BY updated_at DESC
+          `).all()
+        : db.prepare(`
+            SELECT id, user_id, label, path, machine_id, metadata, created_at, updated_at
+            FROM project_targets
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+          `).all(req.user!.id);
+
+      return reply.send({ targets });
+    }
+  );
+
+  fastify.post(
+    '/api/mcp/project-targets',
+    { preHandler: [uiAuth] },
+    async (req: AuthenticatedRequest, reply) => {
+      const { label, path, machineId, metadata } = req.body as {
+        label?: string;
+        path?: string;
+        machineId?: string | null;
+        metadata?: Record<string, unknown> | null;
+      };
+
+      if (!label || typeof label !== 'string' || !label.trim()) {
+        return reply.code(400).send({ error: 'label is required' });
+      }
+      if (!path || typeof path !== 'string' || !path.trim()) {
+        return reply.code(400).send({ error: 'path is required' });
+      }
+
+      const normalizedPath = normalizeProjectPath(path);
+      if (!isProjectPathAllowed(normalizedPath)) {
+        return reply.code(403).send({
+          error: `path is outside allowed roots (${config.projectRoots.join(', ')})`,
+        });
+      }
+
+      const resolvedMachineId = machineId ?? req.deviceId ?? null;
+
+      const existing = db.prepare(`
+        SELECT id, user_id, label, path, machine_id, metadata, created_at, updated_at
+        FROM project_targets WHERE user_id = ? AND path = ?
+      `).get(req.user!.id, normalizedPath) as ProjectTargetRecord | undefined;
+
+      if (existing) {
+        db.prepare(`
+          UPDATE project_targets
+          SET label = ?, machine_id = ?, metadata = ?, updated_at = unixepoch()
+          WHERE id = ?
+        `).run(
+          label.trim(),
+          resolvedMachineId,
+          metadata ? JSON.stringify(metadata) : null,
+          existing.id
+        );
+        return reply.send({
+          id: existing.id,
+          user_id: req.user!.id,
+          label: label.trim(),
+          path: normalizedPath,
+          machine_id: resolvedMachineId,
+          metadata: metadata ?? null,
+          updated: true,
+        });
+      }
+
+      const id = nanoid();
+      db.prepare(`
+        INSERT INTO project_targets (id, user_id, label, path, machine_id, metadata, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+      `).run(
+        id,
+        req.user!.id,
+        label.trim(),
+        normalizedPath,
+        resolvedMachineId,
+        metadata ? JSON.stringify(metadata) : null
+      );
+
+      return reply.code(201).send({
+        id,
+        user_id: req.user!.id,
+        label: label.trim(),
+        path: normalizedPath,
+        machine_id: resolvedMachineId,
+        metadata: metadata ?? null,
+        updated: false,
+      });
+    }
+  );
+
+  fastify.delete(
+    '/api/mcp/project-targets/:id',
+    { preHandler: [uiAuth] },
+    async (req: AuthenticatedRequest, reply) => {
+      const { id } = req.params as { id: string };
+      const target = db.prepare(`
+        SELECT id, user_id FROM project_targets WHERE id = ?
+      `).get(id) as { id: string; user_id: string } | undefined;
+
+      if (!target) {
+        return reply.code(404).send({ error: 'Project target not found' });
+      }
+      if (target.user_id !== req.user!.id && req.user!.role !== 'admin') {
+        return reply.code(403).send({ error: 'Cannot delete another user target' });
+      }
+
+      db.prepare('DELETE FROM project_targets WHERE id = ?').run(id);
+      return reply.send({ ok: true, id });
     }
   );
 }

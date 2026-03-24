@@ -26,7 +26,8 @@ describe('Configuration Module', () => {
       'UPLOAD_DIR',
       'API_KEY',
       'ENABLE_METRICS',
-      'METRICS_PORT'
+      'METRICS_PORT',
+      'AIRC_PROJECT_ROOTS'
     ];
     
     configVars.forEach(varName => {
@@ -90,6 +91,20 @@ describe('Configuration Module', () => {
 
     it('should have default metrics port 9090', () => {
       expect(config.metrics.port).toBe(9090);
+    });
+
+    it('should default projectRoots to include projectRoot', () => {
+      expect(Array.isArray(config.projectRoots)).toBe(true);
+      expect(config.projectRoots).toContain(config.projectRoot);
+    });
+  });
+
+  describe('Environment Variable Loading - Project Roots', () => {
+    it('should parse AIRC_PROJECT_ROOTS as comma-separated list', () => {
+      process.env.AIRC_PROJECT_ROOTS = '/repo/a,/repo/b';
+      loadConfig();
+      expect(config.projectRoots).toContain('/repo/a');
+      expect(config.projectRoots).toContain('/repo/b');
     });
   });
 

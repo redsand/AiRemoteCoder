@@ -234,6 +234,20 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_approval_requests_run_id ON approval_requests(run_id);
   CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(status);
   CREATE INDEX IF NOT EXISTS idx_approval_requests_requested_at ON approval_requests(requested_at);
+
+  -- Project targets used by MCP auto-setup for multi-repo / multi-machine installs.
+  CREATE TABLE IF NOT EXISTS project_targets (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    path TEXT NOT NULL,
+    machine_id TEXT,
+    metadata TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_targets_user_id ON project_targets(user_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_project_targets_user_path ON project_targets(user_id, path);
 `);
 
 function ensureColumn(table: string, column: string, type: string): void {

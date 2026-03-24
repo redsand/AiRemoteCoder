@@ -3,6 +3,7 @@ export interface McpConnectionInstruction {
   config?: object;
   env?: object;
   command?: string;
+  commands?: string[];
   note?: string;
 }
 
@@ -11,6 +12,8 @@ export interface McpConfig {
   url: string;
   transport: string;
   specVersion: string;
+  availableScopes: string[];
+  defaultAgentScopes: string[];
   enabledProviders: string[];
   legacyWrapperDeprecated: boolean;
   connectionInstructions: Record<string, McpConnectionInstruction>;
@@ -50,3 +53,13 @@ export interface McpProviderCardState {
   copiedField: string | null;
 }
 
+export interface McpProjectTarget {
+  id: string;
+  user_id: string;
+  label: string;
+  path: string;
+  machine_id: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at?: number;
+  updated_at?: number;
+}

@@ -162,7 +162,7 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
     {
       label: z.string().optional().describe('Human-readable label'),
       command: z.string().optional().describe('Initial command or prompt for the agent'),
-      worker_type: z.enum(['claude', 'codex', 'gemini', 'opencode', 'rev', 'hands-on', 'vnc']).default('claude')
+      worker_type: z.enum(['claude', 'codex', 'gemini', 'opencode', 'zenflow', 'rev', 'hands-on', 'vnc']).default('claude')
         .describe('Agent runtime to use'),
       repo_path: z.string().optional().describe('Working directory / repository path on the agent machine'),
       repo_name: z.string().optional().describe('Repository name (display only)'),
@@ -372,14 +372,14 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
   // -------------------------------------------------------------------------
   server.tool(
     'get_vnc_status',
-    'Get VNC tunnel and connection status for a VNC run. Scope: runs:read.',
+    'Get VNC tunnel and connection status for a VNC run. Scope: vnc:read.',
     {
       run_id: z.string().describe('Target run ID'),
     },
     async ({ run_id }) => {
       const ctx = getAuthContext();
       if (!ctx) return scopeError('Authentication required');
-      const err = assertScopes(ctx, ['runs:read']);
+      const err = assertScopes(ctx, ['vnc:read']);
       if (err) return scopeError(err);
 
       const run = db.prepare('SELECT id, worker_type FROM runs WHERE id = ?').get(run_id) as any;
@@ -406,14 +406,14 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
   // -------------------------------------------------------------------------
   server.tool(
     'start_vnc_stream',
-    'Start VNC streaming for a VNC run by enqueueing __START_VNC_STREAM__. Scope: sessions:write.',
+    'Start VNC streaming for a VNC run by enqueueing __START_VNC_STREAM__. Scope: vnc:control.',
     {
       run_id: z.string().describe('Target run ID'),
     },
     async ({ run_id }) => {
       const ctx = getAuthContext();
       if (!ctx) return scopeError('Authentication required');
-      const err = assertScopes(ctx, ['sessions:write']);
+      const err = assertScopes(ctx, ['vnc:control']);
       if (err) return scopeError(err);
 
       const run = db.prepare('SELECT id, worker_type FROM runs WHERE id = ?').get(run_id) as any;
@@ -447,14 +447,14 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
   // -------------------------------------------------------------------------
   server.tool(
     'stop_vnc_stream',
-    'Stop VNC streaming by closing the active tunnel for a run. Scope: sessions:write.',
+    'Stop VNC streaming by closing the active tunnel for a run. Scope: vnc:control.',
     {
       run_id: z.string().describe('Target run ID'),
     },
     async ({ run_id }) => {
       const ctx = getAuthContext();
       if (!ctx) return scopeError('Authentication required');
-      const err = assertScopes(ctx, ['sessions:write']);
+      const err = assertScopes(ctx, ['vnc:control']);
       if (err) return scopeError(err);
 
       const run = db.prepare('SELECT id, worker_type FROM runs WHERE id = ?').get(run_id) as any;
@@ -1003,6 +1003,20 @@ function buildCapabilityMatrix() {
       supportsStreaming: true,
       supportsModelSelection: true,
       nativeMcp: true,
+      version: '1.0.0',
+    };
+  }
+  if (config.providers.zenflow) {
+    matrix.zenflow = {
+      provider: 'zenflow',
+      supportsInteractiveInput: true,
+      supportsResume: true,
+      supportsCheckpoint: true,
+      supportsApprovalGating: true,
+      supportsToolUseEvents: true,
+      supportsStreaming: true,
+      supportsModelSelection: true,
+      nativeMcp: false,
       version: '1.0.0',
     };
   }

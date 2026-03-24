@@ -22,6 +22,7 @@ export interface AppConfig {
   port: number;
   host: string;
   projectRoot: string;
+  projectRoots: string[];
   dataDir: string;
   dbPath: string;
   artifactsDir: string;
@@ -81,6 +82,7 @@ export interface AppConfig {
     codex: boolean;
     gemini: boolean;
     opencode: boolean;
+    zenflow: boolean;
     rev: boolean;
     legacyWrapper: boolean;
   };
@@ -135,6 +137,17 @@ function parseCorsOrigin(value: string | null | undefined): CorsOrigin {
   return list.length > 0 ? list : '*';
 }
 
+function parsePathList(value: string | null | undefined, fallback: string[]): string[] {
+  const normalized = trimOrEmpty(value);
+  if (!normalized) return fallback;
+  const parsed = normalized
+    .split(',')
+    .map((entry) => trimOrEmpty(entry))
+    .filter(Boolean)
+    .map((entry) => resolvePath(entry));
+  return parsed.length > 0 ? parsed : fallback;
+}
+
 function formatWindowMs(windowMs: number): string {
   if (windowMs % 60000 === 0) return `${windowMs / 60000} minute${windowMs === 60000 ? '' : 's'}`;
   if (windowMs % 1000 === 0) return `${windowMs / 1000} second${windowMs === 1000 ? '' : 's'}`;
@@ -187,6 +200,7 @@ function buildConfig(): AppConfig {
   const mcpRateLimitMax = parseIntWithFallback(process.env.AIRC_MCP_RATE_LIMIT_MAX, 300);
   const mcpRateLimitWindow = process.env.AIRC_MCP_RATE_LIMIT_WINDOW || '1 minute';
   const approvalTimeoutSeconds = parseIntWithFallback(process.env.AIRC_APPROVAL_TIMEOUT, 300);
+  const projectRoots = parsePathList(process.env.AIRC_PROJECT_ROOTS, [projectRoot]);
   const allowlistedCommands = [
     'npm test',
     'npm run test',
@@ -215,6 +229,7 @@ function buildConfig(): AppConfig {
     port,
     host,
     projectRoot,
+    projectRoots,
     dataDir,
     dbPath,
     artifactsDir,
@@ -274,6 +289,7 @@ function buildConfig(): AppConfig {
       codex: process.env.AIRC_PROVIDER_CODEX !== 'false',
       gemini: process.env.AIRC_PROVIDER_GEMINI !== 'false',
       opencode: process.env.AIRC_PROVIDER_OPENCODE !== 'false',
+      zenflow: process.env.AIRC_PROVIDER_ZENFLOW !== 'false',
       rev: process.env.AIRC_PROVIDER_REV !== 'false',
       legacyWrapper: process.env.AIRC_LEGACY_WRAPPERS_ENABLED !== 'false',
     },

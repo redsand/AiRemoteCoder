@@ -34,7 +34,7 @@ Navigate to **MCP** in the gateway UI, or:
 curl -X POST https://your-gateway:3100/api/mcp/tokens \
   -H "Content-Type: application/json" \
   -H "Cookie: session=<your-session>" \
-  -d '{"label": "My agent", "scopes": ["runs:read","runs:write","runs:cancel","sessions:read","sessions:write","events:read","artifacts:read"]}'
+  -d '{"label": "My agent", "scopes": ["runs:read","runs:write","runs:cancel","vnc:read","vnc:control","sessions:read","sessions:write","events:read","artifacts:read"]}'
 ```
 
 Copy the returned `token` value — it is shown only once.

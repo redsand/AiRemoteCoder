@@ -156,6 +156,7 @@ in-memory on the gateway; in a multi-instance deployment, move to Redis.
 | `AIRC_PROVIDER_CODEX` | `true` | Enable Codex adapter |
 | `AIRC_PROVIDER_GEMINI` | `true` | Enable Gemini adapter |
 | `AIRC_PROVIDER_OPENCODE` | `true` | Enable OpenCode adapter |
+| `AIRC_PROVIDER_ZENFLOW` | `true` | Enable Zenflow adapter |
 | `AIRC_PROVIDER_REV` | `true` | Enable Rev adapter |
 | `AIRC_LEGACY_WRAPPERS_ENABLED` | `true` | Enable deprecated legacy wrapper compatibility |
 | `AIRC_APPROVAL_TIMEOUT` | `300` | Default approval timeout in seconds |

@@ -8,6 +8,8 @@ const baseConfig: McpConfig = {
   url: 'https://gateway.example.test/mcp',
   transport: 'streamable-http',
   specVersion: '2024-11-05',
+  availableScopes: ['runs:read', 'runs:write', 'vnc:read', 'vnc:control'],
+  defaultAgentScopes: ['runs:read', 'runs:write', 'vnc:read', 'vnc:control'],
   enabledProviders: ['claude', 'codex', 'gemini', 'opencode', 'zenflow', 'rev'],
   legacyWrapperDeprecated: true,
   connectionInstructions: {

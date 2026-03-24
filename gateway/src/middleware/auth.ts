@@ -10,6 +10,7 @@ export interface AuthenticatedRequest extends FastifyRequest {
     role: 'admin' | 'operator' | 'viewer';
     source: 'cloudflare' | 'session' | 'wrapper';
   };
+  deviceId?: string;
   runAuth?: {
     runId: string;
     capabilityToken: string;
@@ -100,6 +101,13 @@ export async function uiAuth(
   request: AuthenticatedRequest,
   reply: FastifyReply
 ): Promise<void> {
+  const rawDeviceId = ((request.headers['x-airc-device-id'] as string | undefined)
+    ?? (request.headers['x-airc-machine-id'] as string | undefined)
+    ?? '').trim();
+  if (rawDeviceId) {
+    request.deviceId = rawDeviceId.slice(0, 128);
+  }
+
   // Check Cloudflare Access headers first
   const cfEmail = request.headers['cf-access-authenticated-user-email'] as string;
   const cfJwt = request.headers['cf-access-jwt-assertion'] as string;
