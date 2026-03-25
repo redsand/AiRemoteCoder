@@ -239,8 +239,6 @@ PY`,
 
   const buildCodexSnippet = (persistEnv: boolean, gatewayBaseUrl: string) => {
     const envPrefix = buildEnvPrefix('AIREMOTECODER_MCP_TOKEN', token, persistEnv);
-    const localGatewayPath = `${config.projectRoot.replace(/\\/g, '/')}/gateway`;
-    const localGatewayPathWin = localGatewayPath.replace(/\//g, '\\\\');
     const manualToml = `[mcp_servers.airemotecoder]
 url = "${mcpUrl}"
 bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"`;
@@ -278,11 +276,7 @@ out.extend([
 ])
 path.write_text("\\n".join(out), encoding="utf-8")
 PY`;
-    const workerBash = `export AIREMOTECODER_GATEWAY_URL="${gatewayBaseUrl}"
-export AIREMOTECODER_MCP_TOKEN="${token}"
-export AIREMOTECODER_PROVIDER="codex"
-export AIREMOTECODER_CODEX_MODE="interactive"
-airc-mcp-runner || npx -y @ai-remote-coder/mcp-runner@latest || npm --prefix "${localGatewayPath}" run worker:mcp`;
+    const installRunnerBash = `npm install -g @ai-remote-coder/mcp-runner@latest`;
 
     const powershellOneShot = `${envPrefix.powershell}
 $configDir = Join-Path $HOME ".codex"
@@ -308,24 +302,18 @@ Set-Content -Path $configPath -Value $out -Encoding utf8
 url = "${mcpUrl}"
 bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
 '@ | Add-Content -Path $configPath -Encoding utf8`;
-    const workerPowerShell = `$env:AIREMOTECODER_GATEWAY_URL="${gatewayBaseUrl}"
-$env:AIREMOTECODER_MCP_TOKEN="${token}"
-$env:AIREMOTECODER_PROVIDER="codex"
-$env:AIREMOTECODER_CODEX_MODE="interactive"
-airc-mcp-runner
-if ($LASTEXITCODE -ne 0) { npx -y @ai-remote-coder/mcp-runner@latest }
-if ($LASTEXITCODE -ne 0) { npm --prefix "${localGatewayPathWin}" run worker:mcp }`;
+    const installRunnerPowerShell = `npm install -g @ai-remote-coder/mcp-runner@latest`;
 
     return {
       snippet: manualToml,
       filePath: null as string | null,
       fileFormat: 'env' as const,
       instructions: persistEnv
-        ? 'Run the first one-shot command to persist token + update ~/.codex/config.toml (airemotecoder block only). Run the second command to start MCP worker mode (interactive by default). Set AIREMOTECODER_CODEX_MODE=exec if you prefer one-shot codex exec.'
-        : 'Run the first one-shot command to set token in this shell + update ~/.codex/config.toml (airemotecoder block only). Run the second command to start MCP worker mode (interactive by default). Set AIREMOTECODER_CODEX_MODE=exec if you prefer one-shot codex exec.',
+        ? 'Run the first one-shot command to persist token + update ~/.codex/config.toml (airemotecoder block only). Run the second command once to install airc-mcp-runner globally. Start the runner when creating a run from the UI.'
+        : 'Run the first one-shot command to set token in this shell + update ~/.codex/config.toml (airemotecoder block only). Run the second command once to install airc-mcp-runner globally. Start the runner when creating a run from the UI.',
       copyPaste: {
-        bash: [bashOneShot, workerBash],
-        powershell: [powershellOneShot, workerPowerShell],
+        bash: [bashOneShot, installRunnerBash],
+        powershell: [powershellOneShot, installRunnerPowerShell],
       },
     };
   };

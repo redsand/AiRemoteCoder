@@ -229,6 +229,8 @@ describe('mcpSetupRoutes', () => {
     expect(install.copyPaste?.bash?.[0] ?? '').toContain('python - <<\'PY\'');
     expect(install.copyPaste?.bash?.[1] ?? '').toContain('AIREMOTECODER_CODEX_MODE="interactive"');
     expect(install.copyPaste?.bash?.[1] ?? '').toContain('AIREMOTECODER_GATEWAY_URL="http://localhost');
+    expect(install.copyPaste?.bash?.[1] ?? '').toContain('AIREMOTECODER_RUNNER_ID="$(hostname):$PWD"');
+    expect(install.copyPaste?.bash?.[1] ?? '').toContain('airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"');
     expect(install.copyPaste?.bash?.[1] ?? '').not.toContain('/mcp"');
     expect(install.copyPaste?.bash?.[1] ?? '').toContain('airc-mcp-runner');
     expect(install.copyPaste?.bash?.[1] ?? '').toContain('npx -y @ai-remote-coder/mcp-runner@latest');
@@ -236,6 +238,8 @@ describe('mcpSetupRoutes', () => {
     expect(install.copyPaste?.powershell?.[0] ?? '').toContain('Set-Content -Path $configPath -Value $out -Encoding utf8');
     expect(install.copyPaste?.powershell?.[1] ?? '').toContain('$env:AIREMOTECODER_CODEX_MODE="interactive"');
     expect(install.copyPaste?.powershell?.[1] ?? '').toContain('$env:AIREMOTECODER_GATEWAY_URL="http://localhost');
+    expect(install.copyPaste?.powershell?.[1] ?? '').toContain('$env:AIREMOTECODER_RUNNER_ID=');
+    expect(install.copyPaste?.powershell?.[1] ?? '').toContain('airc-mcp-runner --runner-id "$env:AIREMOTECODER_RUNNER_ID"');
     expect(install.copyPaste?.powershell?.[1] ?? '').not.toContain('/mcp"');
     expect(install.copyPaste?.powershell?.[1] ?? '').toContain('airc-mcp-runner');
     expect(install.copyPaste?.powershell?.[1] ?? '').toContain('npx -y @ai-remote-coder/mcp-runner@latest');

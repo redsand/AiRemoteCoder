@@ -743,6 +743,7 @@ describe('routes/runs', () => {
       url: '/api/mcp/runs/claim',
       headers: {
         authorization: `Bearer ${token}`,
+        'x-airc-runner-id': 'runner-a',
         'content-type': 'application/json',
       },
       payload: { provider: 'codex' },
@@ -761,7 +762,7 @@ describe('routes/runs', () => {
       claimed_by: string | null;
     };
     expect(saved.status).toBe('running');
-    expect(saved.claimed_by).toBe('mcp-token:mcp-tok-9');
+    expect(saved.claimed_by).toBe('mcp-runner:mcp-tok-9:runner-a');
   });
 
   it('polls and acks commands for token-claimed MCP runs without active session', async () => {
@@ -776,7 +777,7 @@ describe('routes/runs', () => {
 
     db.prepare(`
       INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
-      VALUES ('run-mcp-no-session-cmd', 'running', 'codex', 'cap-mcp-no-session-cmd', 'mcp-token:mcp-tok-10', unixepoch(), unixepoch())
+      VALUES ('run-mcp-no-session-cmd', 'running', 'codex', 'cap-mcp-no-session-cmd', 'mcp-runner:mcp-tok-10:runner-b', unixepoch(), unixepoch())
     `).run();
     db.prepare(`
       INSERT INTO commands (id, run_id, command, arguments, status, created_at)
@@ -788,6 +789,7 @@ describe('routes/runs', () => {
       url: '/api/mcp/runs/run-mcp-no-session-cmd/commands',
       headers: {
         authorization: `Bearer ${token}`,
+        'x-airc-runner-id': 'runner-b',
       },
     });
     expect(pollRes.statusCode).toBe(200);
@@ -799,6 +801,7 @@ describe('routes/runs', () => {
       url: '/api/mcp/runs/run-mcp-no-session-cmd/commands/cmd-mcp-no-session-cmd/ack',
       headers: {
         authorization: `Bearer ${token}`,
+        'x-airc-runner-id': 'runner-b',
         'content-type': 'application/json',
       },
       payload: { result: 'ok' },
@@ -811,5 +814,40 @@ describe('routes/runs', () => {
     };
     expect(saved.status).toBe('completed');
     expect(saved.result).toBe('ok');
+  });
+
+  it('adopts stale MCP session claims for token-runner polling on same provider', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-adopt-stale';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-11', ?, 'auto:codex', 'user-1', '["runs:read","sessions:write"]')
+    `).run(tokenHash);
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-mcp-adopt-stale', 'running', 'codex', 'cap-mcp-adopt-stale', 'mcp:stale-session-id', unixepoch() - 600, unixepoch())
+    `).run();
+    db.prepare(`
+      INSERT INTO commands (id, run_id, command, arguments, status, created_at)
+      VALUES ('cmd-mcp-adopt-stale', 'run-mcp-adopt-stale', '__INPUT__', 'adopt stale', 'pending', unixepoch())
+    `).run();
+
+    const pollRes = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/runs/run-mcp-adopt-stale/commands',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-airc-runner-id': 'runner-c',
+      },
+    });
+    expect(pollRes.statusCode).toBe(200);
+    const commands = pollRes.json() as Array<{ id: string; command: string }>;
+    expect(commands.some((entry) => entry.id === 'cmd-mcp-adopt-stale' && entry.command === '__INPUT__')).toBe(true);
+
+    const runAfter = db.prepare('SELECT claimed_by FROM runs WHERE id = ?').get('run-mcp-adopt-stale') as { claimed_by: string | null };
+    expect(runAfter.claimed_by).toBe('mcp-runner:mcp-tok-11:runner-c');
   });
 });

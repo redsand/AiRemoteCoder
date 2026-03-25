@@ -157,6 +157,7 @@ export class McpWorkerApi {
     private readonly gatewayUrl: string,
     private readonly token: string,
     private readonly provider: string,
+    private readonly runnerId: string,
   ) {}
 
   private async request(method: string, path: string, body?: unknown): Promise<any> {
@@ -165,6 +166,7 @@ export class McpWorkerApi {
       headers: {
         authorization: `Bearer ${this.token}`,
         'content-type': 'application/json',
+        'x-airc-runner-id': this.runnerId,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -230,6 +232,7 @@ export async function handleWorkerCommand(
 export interface RunnerOptions {
   gatewayUrl: string;
   token: string;
+  runnerId: string;
   provider: string;
   codexMode: 'interactive' | 'exec';
   execTemplate?: string;
@@ -252,7 +255,7 @@ function createExecutor(options: RunnerOptions): WorkerExecutor {
 }
 
 export async function runLoop(options: RunnerOptions): Promise<void> {
-  const api = new McpWorkerApi(options.gatewayUrl, options.token, options.provider);
+  const api = new McpWorkerApi(options.gatewayUrl, options.token, options.provider, options.runnerId);
   const executor = createExecutor(options);
   const pollIdleMs = options.pollIdleMs ?? 1500;
   const pollCommandsMs = options.pollCommandsMs ?? 750;

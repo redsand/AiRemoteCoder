@@ -149,7 +149,8 @@ export AIREMOTECODER_GATEWAY_URL=http://localhost:3100
 export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
 export AIREMOTECODER_PROVIDER=codex
 export AIREMOTECODER_CODEX_MODE=interactive
-npx -y @ai-remote-coder/mcp-runner@latest
+export AIREMOTECODER_RUNNER_ID="$(hostname):$PWD"
+npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
 This loop claims MCP runs, polls queued commands, executes prompts via a persistent Codex interactive session, acknowledges commands, and streams events/lifecycle markers back to the gateway.
@@ -167,7 +168,7 @@ For non-Codex providers, supply an explicit execution template:
 ```bash
 export AIREMOTECODER_PROVIDER=gemini
 export AIREMOTECODER_EXEC_TEMPLATE="gemini run {input}"
-npx -y @ai-remote-coder/mcp-runner@latest
+npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
 ## Remote Access

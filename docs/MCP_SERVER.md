@@ -418,7 +418,8 @@ PY
 export AIREMOTECODER_GATEWAY_URL="http://localhost:3100"
 export AIREMOTECODER_PROVIDER="codex"
 export AIREMOTECODER_CODEX_MODE="interactive"
-npx -y @ai-remote-coder/mcp-runner@latest
+export AIREMOTECODER_RUNNER_ID="$(hostname):$PWD"
+npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
 ```powershell
@@ -452,7 +453,8 @@ bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
 $env:AIREMOTECODER_GATEWAY_URL="http://localhost:3100"
 $env:AIREMOTECODER_PROVIDER="codex"
 $env:AIREMOTECODER_CODEX_MODE="interactive"
-npx -y @ai-remote-coder/mcp-runner@latest
+$env:AIREMOTECODER_RUNNER_ID="$env:COMPUTERNAME:$((Get-Location).Path)"
+npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$env:AIREMOTECODER_RUNNER_ID"
 ```
 
 All generated setup commands are additive/update-only and scoped to
@@ -467,7 +469,8 @@ export AIREMOTECODER_GATEWAY_URL=http://localhost:3100
 export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
 export AIREMOTECODER_PROVIDER=codex
 export AIREMOTECODER_CODEX_MODE=interactive
-npx -y @ai-remote-coder/mcp-runner@latest
+export AIREMOTECODER_RUNNER_ID="$(hostname):$PWD"
+npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
 Set `AIREMOTECODER_CODEX_MODE=exec` to run one-shot `codex exec` for each prompt.

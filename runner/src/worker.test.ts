@@ -104,6 +104,7 @@ describe('runner cli parsing', () => {
     expect(options.token).toBe('token-123');
     expect(options.provider).toBe('codex');
     expect(options.codexMode).toBe('exec');
+    expect(options.runnerId).toMatch(/^[a-f0-9]{16}$/);
   });
 
   it('normalizes /mcp gateway url to base gateway url', () => {
@@ -127,6 +128,19 @@ describe('runner cli parsing', () => {
     expect(options.token).toBe('t2');
     expect(options.provider).toBe('gemini');
     expect(options.execTemplate).toBe('gemini run {input}');
+    expect(options.runnerId).toMatch(/^[a-f0-9]{16}$/);
+  });
+
+  it('accepts explicit runner id seed and hashes it deterministically', () => {
+    const one = parseRunnerOptions(
+      ['--token', 't2', '--runner-id', 'my-runner'],
+      {},
+    );
+    const two = parseRunnerOptions(
+      ['--token', 't2', '--runner-id', 'my-runner'],
+      {},
+    );
+    expect(one.runnerId).toBe(two.runnerId);
   });
 
   it('fails when token is missing', () => {

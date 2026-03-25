@@ -107,6 +107,10 @@ function resolveAuthorizedMcpWorker(
     ? getMcpSession(headerSessionId)
     : findLatestMcpSessionByTokenId(tokenCtx.tokenId);
 
+  const runnerIdHeader = request.headers['x-airc-runner-id'];
+  const runnerId = typeof runnerIdHeader === 'string' ? runnerIdHeader.trim() : '';
+  const runnerIdValid = /^[a-zA-Z0-9._:@/-]{3,128}$/.test(runnerId);
+
   if (session) {
     const authCheck = validateMcpSessionAccess(session.authContext, authHeader);
     if (!authCheck.ok) {
@@ -114,11 +118,21 @@ function resolveAuthorizedMcpWorker(
       return null;
     }
 
-    return { sessionId: session.id, session, claimTag: `mcp:${session.id}` };
+    return { sessionId: session.id, session, claimTag: `mcp:${session.id}`, tokenContext: tokenCtx, runnerId: null as string | null };
   }
 
   // Standalone MCP runner fallback: authorize by token identity when no live MCP session exists.
-  return { sessionId: null, session: null, claimTag: `mcp-token:${tokenCtx.tokenId}` };
+  if (!runnerIdValid) {
+    reply.code(400).send({ error: 'x-airc-runner-id header is required for standalone runner mode' });
+    return null;
+  }
+  return {
+    sessionId: null,
+    session: null,
+    claimTag: `mcp-runner:${tokenCtx.tokenId}:${runnerId}`,
+    tokenContext: tokenCtx,
+    runnerId,
+  };
 }
 
 export async function runsRoutes(fastify: FastifyInstance) {
@@ -764,12 +778,32 @@ export async function runsRoutes(fastify: FastifyInstance) {
     const { runId } = request.params as { runId: string };
     const { claimTag } = auth;
 
-    const run = db.prepare('SELECT id, claimed_by FROM runs WHERE id = ?').get(runId) as {
+    const run = db.prepare('SELECT id, worker_type, claimed_by, claimed_at FROM runs WHERE id = ?').get(runId) as {
       id: string;
+      worker_type: string;
       claimed_by: string | null;
+      claimed_at: number | null;
     } | undefined;
     if (!run) {
       return reply.code(404).send({ error: 'Run not found' });
+    }
+
+    if (run.claimed_by !== claimTag && claimTag.startsWith('mcp-runner:') && run.claimed_by?.startsWith('mcp:')) {
+      const claimedSessionId = run.claimed_by.slice('mcp:'.length);
+      const claimedSession = getMcpSession(claimedSessionId);
+      const provider = providerFromTokenLabel(auth.tokenContext.tokenLabel);
+      const claimExpiredAt = Math.floor(Date.now() / 1000) - config.claimLeaseSeconds;
+      const staleClaim = !claimedSession || !run.claimed_at || run.claimed_at < claimExpiredAt;
+      if (provider && run.worker_type === provider && staleClaim) {
+        const adoption = db.prepare(`
+          UPDATE runs
+          SET claimed_by = ?, claimed_at = unixepoch()
+          WHERE id = ? AND claimed_by = ?
+        `).run(claimTag, runId, run.claimed_by);
+        if (adoption.changes > 0) {
+          run.claimed_by = claimTag;
+        }
+      }
     }
 
     if (run.claimed_by !== claimTag) {
