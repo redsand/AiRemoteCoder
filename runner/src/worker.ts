@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
 
-export type EventType = 'stdout' | 'stderr' | 'marker' | 'info' | 'error';
+export type EventType = 'stdout' | 'stderr' | 'marker' | 'info' | 'error' | 'tool_use';
 
 export interface WorkerCommand {
   id: string;
@@ -56,6 +56,18 @@ function logStreamEvent(type: EventType, data: string): void {
   if (type === 'error') {
     logRunnerError(trimmed);
     return;
+  }
+  if (type === 'tool_use') {
+    try {
+      const payload = JSON.parse(trimmed);
+      const action = payload?.phase === 'pre' ? 'Tool call started' : 'Tool call finished';
+      const suffix = typeof payload?.tool === 'string' && payload.tool.trim().length > 0 ? `: ${payload.tool.trim()}` : '';
+      logRunnerInfo(`${action}${suffix}`);
+      return;
+    } catch {
+      logRunnerInfo(trimmed);
+      return;
+    }
   }
   if (type === 'info' || type === 'marker' || type === 'stderr') {
     logRunnerInfo(trimmed);
@@ -502,6 +514,7 @@ interface ClaudeResultState {
 
 export class ClaudeCliExecutor implements WorkerExecutor {
   private cliSessionId: string | null = null;
+  private readonly toolNames = new Map<string, string>();
 
   constructor(
     private readonly options: {
@@ -575,7 +588,16 @@ export class ClaudeCliExecutor implements WorkerExecutor {
         if (part?.type === 'tool_use') {
           const toolName = typeof part.name === 'string' && part.name.trim().length > 0 ? part.name.trim() : 'tool';
           const details = summarizeClaudeToolInput(part.input);
-          void emit('info', `Claude tool started: ${toolName}${details ? ` ${details}` : ''}`);
+          const toolLabel = `${toolName}${details ? ` ${details}` : ''}`.trim();
+          if (typeof part.id === 'string' && part.id.trim().length > 0) {
+            this.toolNames.set(part.id, toolLabel);
+          }
+          void emit('tool_use', JSON.stringify({
+            phase: 'pre',
+            tool: toolLabel,
+            provider: 'claude',
+            toolId: typeof part.id === 'string' ? part.id : null,
+          }));
         }
       }
       return;
@@ -586,7 +608,15 @@ export class ClaudeCliExecutor implements WorkerExecutor {
       for (const part of content) {
         if (part?.type === 'tool_result') {
           const details = summarizeClaudeToolResultContent(part.content);
-          void emit('info', `Claude tool result: ${details || 'completed'}`);
+          const toolId = typeof part.tool_use_id === 'string' ? part.tool_use_id : '';
+          const toolLabel = (toolId && this.toolNames.get(toolId)) || 'Tool';
+          void emit('tool_use', JSON.stringify({
+            phase: 'post',
+            tool: toolLabel,
+            provider: 'claude',
+            toolId: toolId || null,
+            summary: details || 'completed',
+          }));
         }
       }
       return;
@@ -902,9 +932,11 @@ async function emitSynthesizedChangeReport(
 export function createBufferedEventSink(
   runId: string,
   api: Pick<McpWorkerApi, 'sendEvent'>,
+  options: { logLocally?: boolean } = {},
 ) {
   let bufferedType: EventType | null = null;
   let bufferedData = '';
+  const logLocally = options.logLocally ?? true;
 
   const flush = async () => {
     if (!bufferedType) return;
@@ -927,7 +959,9 @@ export function createBufferedEventSink(
     }
 
     await flush();
-    logStreamEvent(type, data);
+    if (logLocally) {
+      logStreamEvent(type, data);
+    }
     await api.sendEvent(runId, { type, data });
   };
 
@@ -973,7 +1007,7 @@ export async function handleWorkerCommand(
       await api.ackCommand(runId, command.id, undefined, 'Missing shell command');
       return false;
     }
-    const sink = createBufferedEventSink(runId, api);
+    const sink = createBufferedEventSink(runId, api, { logLocally: true });
     await executeShellCommand(shellCommand, sink.emit, effectiveSpawnFn);
     await sink.flush();
     await emitSynthesizedChangeReport(runId, provider, api, effectiveSpawnFn);
@@ -983,7 +1017,7 @@ export async function handleWorkerCommand(
   }
 
   const input = command.command === '__INPUT__' ? (command.arguments ?? '') : command.command;
-  const sink = createBufferedEventSink(runId, api);
+  const sink = createBufferedEventSink(runId, api, { logLocally: false });
   await executor.sendInput(input, sink.emit);
   await sink.flush();
   if (api.saveResumeState && executor.snapshotState) {

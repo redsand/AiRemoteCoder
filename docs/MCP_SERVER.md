@@ -503,6 +503,7 @@ For persistent install, run `npm install -g @ai-remote-coder/mcp-runner@latest` 
 Claude now has a preview native runner path through `airc-mcp-runner`, so it does not require `AIREMOTECODER_EXEC_TEMPLATE`.
 Use `AIREMOTECODER_CLAUDE_PERMISSION_MODE=bypassPermissions` for the current preview path unless you have implemented a full approval bridge.
 The helper also prints Claude status/tool/stderr activity locally so runner-side stalls are diagnosable without relying only on the web UI.
+Claude tool activity is normalized into the same started/finished tool timeline model the UI uses for Codex, and synthesized diff events continue to feed the shared **Changes** view.
 For Gemini/OpenCode/Zenflow/Rev the runner currently supports only manual `execTemplate` fallback:
 
 ```bash

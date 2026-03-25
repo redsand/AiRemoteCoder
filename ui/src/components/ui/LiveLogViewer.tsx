@@ -218,16 +218,40 @@ export function formatLogEventDisplay(event: LogEvent | DisplayEvent): Formatted
   if (event.type === 'tool_use') {
     try {
       const data = JSON.parse(event.data);
+      const summary = typeof data.summary === 'string' ? data.summary.trim() : '';
+      const isError = summary.includes('<tool_use_error>') || /\berror\b/i.test(summary);
       if (data.phase === 'pre') {
         return { content: `Tool call started: ${data.tool}`, emphasis: 'tool' };
       }
-      return { content: `Tool call finished: ${data.tool}`, emphasis: 'success' };
+      return {
+        content: `${isError ? 'Tool call failed' : 'Tool call finished'}: ${data.tool}`,
+        emphasis: isError ? 'error' : 'success',
+      };
     } catch {
       return { content: event.data, emphasis: 'tool' };
     }
   }
 
   if (event.type === 'info') {
+    if (event.data.startsWith('Executing Claude prompt')) {
+      return { content: 'Prompt delivered to Claude', emphasis: 'info' };
+    }
+    if (event.data.startsWith('Claude reasoning:')) {
+      return { content: 'Claude is reasoning', emphasis: 'info' };
+    }
+    if (event.data.startsWith('Claude status:')) {
+      return { content: event.data, emphasis: 'info' };
+    }
+    if (event.data.startsWith('Claude result:')) {
+      return { content: event.data, emphasis: 'success' };
+    }
+    if (event.data.startsWith('Claude tool started:')) {
+      const tool = event.data.slice('Claude tool started:'.length).trim();
+      return { content: `Tool call started: ${tool}`, emphasis: 'tool' };
+    }
+    if (event.data.startsWith('Claude tool result:')) {
+      return { content: 'Tool call finished', emphasis: 'success' };
+    }
     try {
       const payload = JSON.parse(event.data);
       const method = payload?.method;

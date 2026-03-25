@@ -112,6 +112,7 @@ describe('runner command handling', () => {
     expect(sendEvent).toHaveBeenCalledWith('run-exec', { type: 'stdout', data: 'On branch main\n' });
     expect(ackCommand).toHaveBeenCalledWith('run-exec', 'cmd-exec', 'ok');
   });
+
 });
 
 describe('runner executor helpers', () => {
@@ -495,12 +496,12 @@ describe('runner executor helpers', () => {
     expect(events).toEqual(expect.arrayContaining([
       { type: 'info', data: 'Claude status: waiting_for_permission' },
       { type: 'info', data: 'Claude reasoning: Considering next steps' },
-      { type: 'info', data: 'Claude tool started: Bash npm test' },
+      { type: 'tool_use', data: JSON.stringify({ phase: 'pre', tool: 'Bash npm test', provider: 'claude', toolId: 'tool-1' }) },
       { type: 'stdout', data: 'Working on it' },
-      { type: 'info', data: 'Claude tool result: Tests passed' },
+      { type: 'tool_use', data: JSON.stringify({ phase: 'post', tool: 'Bash npm test', provider: 'claude', toolId: 'tool-1', summary: 'Tests passed' }) },
     ]));
     expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Claude status: waiting_for_permission'));
-    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Claude tool started: Bash npm test'));
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Tool call started: Bash npm test'));
     infoSpy.mockRestore();
   });
 

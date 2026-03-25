@@ -203,6 +203,68 @@ describe('LiveLogViewer helpers', () => {
     expect(diffUpdated.emphasis).toBe('tool');
   });
 
+  it('formats Claude runner activity into the same readable timeline style', () => {
+    const prompt = formatLogEventDisplay({
+      id: 1,
+      type: 'info',
+      timestamp: 1,
+      data: 'Executing Claude prompt (95 chars)',
+    });
+    expect(prompt.content).toBe('Prompt delivered to Claude');
+    expect(prompt.emphasis).toBe('info');
+
+    const reasoning = formatLogEventDisplay({
+      id: 2,
+      type: 'info',
+      timestamp: 1,
+      data: 'Claude reasoning: Considering next steps',
+    });
+    expect(reasoning.content).toBe('Claude is reasoning');
+    expect(reasoning.emphasis).toBe('info');
+
+    const toolStarted = formatLogEventDisplay({
+      id: 3,
+      type: 'tool_use',
+      timestamp: 1,
+      data: JSON.stringify({ phase: 'pre', tool: 'Bash npm test', provider: 'claude', toolId: 'tool-1' }),
+    });
+    expect(toolStarted.content).toBe('Tool call started: Bash npm test');
+    expect(toolStarted.emphasis).toBe('tool');
+
+    const toolFinished = formatLogEventDisplay({
+      id: 4,
+      type: 'tool_use',
+      timestamp: 1,
+      data: JSON.stringify({ phase: 'post', tool: 'Bash npm test', provider: 'claude', toolId: 'tool-1', summary: 'Tests passed' }),
+    });
+    expect(toolFinished.content).toBe('Tool call finished: Bash npm test');
+    expect(toolFinished.emphasis).toBe('success');
+
+    const toolFailed = formatLogEventDisplay({
+      id: 4.5,
+      type: 'tool_use',
+      timestamp: 1,
+      data: JSON.stringify({
+        phase: 'post',
+        tool: 'Edit server/routes.js',
+        provider: 'claude',
+        toolId: 'tool-2',
+        summary: '<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>',
+      }),
+    });
+    expect(toolFailed.content).toBe('Tool call failed: Edit server/routes.js');
+    expect(toolFailed.emphasis).toBe('error');
+
+    const legacyToolResult = formatLogEventDisplay({
+      id: 5,
+      type: 'info',
+      timestamp: 1,
+      data: 'Claude tool result: Test Suites: 35 passed, 35 total\nTests: 551 passed, 551 total',
+    });
+    expect(legacyToolResult.content).toBe('Tool call finished');
+    expect(legacyToolResult.emphasis).toBe('success');
+  });
+
   it('counts only real error events instead of matching generic diff text', () => {
     const events: LogEvent[] = [
       {

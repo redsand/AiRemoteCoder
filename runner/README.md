@@ -48,6 +48,7 @@ For Codex, `app-server` is the primary mode.
 - `claude`: preview runner path using Claude CLI `--print --output-format stream-json`
   - Default permission mode is `bypassPermissions` for the current MVP debugging path.
   - The helper now prints Claude status/tool/stderr activity locally so a blocked turn is visible in the runner terminal.
+  - Claude tool activity is normalized onto the same timeline-style tool start/finish events used by the UI for Codex so the run experience is provider-consistent.
 - `gemini`: not production-ready in the runner yet
 - `opencode`: not production-ready in the runner yet
 - `zenflow`: not production-ready in the runner yet
