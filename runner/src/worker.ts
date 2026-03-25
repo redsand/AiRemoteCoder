@@ -476,6 +476,40 @@ export class McpWorkerApi {
   }
 }
 
+export function createBufferedEventSink(
+  runId: string,
+  api: Pick<McpWorkerApi, 'sendEvent'>,
+) {
+  let bufferedType: EventType | null = null;
+  let bufferedData = '';
+
+  const flush = async () => {
+    if (!bufferedType) return;
+    await api.sendEvent(runId, { type: bufferedType, data: bufferedData });
+    bufferedType = null;
+    bufferedData = '';
+  };
+
+  const emit = async (type: EventType, data: string) => {
+    const canBuffer = type === 'stdout' || type === 'stderr';
+    if (canBuffer) {
+      if (bufferedType === type) {
+        bufferedData += data;
+        return;
+      }
+      await flush();
+      bufferedType = type;
+      bufferedData = data;
+      return;
+    }
+
+    await flush();
+    await api.sendEvent(runId, { type, data });
+  };
+
+  return { emit, flush };
+}
+
 export async function handleWorkerCommand(
   command: WorkerCommand,
   runId: string,
@@ -501,9 +535,9 @@ export async function handleWorkerCommand(
   }
 
   const input = command.command === '__INPUT__' ? (command.arguments ?? '') : command.command;
-  await executor.sendInput(input, async (type, data) => {
-    await api.sendEvent(runId, { type, data });
-  });
+  const sink = createBufferedEventSink(runId, api);
+  await executor.sendInput(input, sink.emit);
+  await sink.flush();
   await api.ackCommand(runId, command.id, 'ok');
   return false;
 }

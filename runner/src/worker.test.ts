@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildExecInvocation,
+  createBufferedEventSink,
   CodexAppServerExecutor,
   handleWorkerCommand,
   isExpectedIdleClaimError,
@@ -11,6 +12,20 @@ import {
 import { parseRunnerOptions } from './cli.js';
 
 describe('runner command handling', () => {
+  it('buffers adjacent stdout chunks before sending events', async () => {
+    const sendEvent = vi.fn().mockResolvedValue({ ok: true });
+    const sink = createBufferedEventSink('run-1', { sendEvent } as any);
+
+    await sink.emit('stdout', 'Hel');
+    await sink.emit('stdout', 'lo');
+    await sink.emit('stdout', ' world');
+    await sink.emit('info', 'done');
+    await sink.flush();
+
+    expect(sendEvent).toHaveBeenNthCalledWith(1, 'run-1', { type: 'stdout', data: 'Hello world' });
+    expect(sendEvent).toHaveBeenNthCalledWith(2, 'run-1', { type: 'info', data: 'done' });
+  });
+
   it('maps __INPUT__ command to executor input and acks', async () => {
     const sendEvent = vi.fn().mockResolvedValue({ ok: true });
     const ackCommand = vi.fn().mockResolvedValue({ ok: true });

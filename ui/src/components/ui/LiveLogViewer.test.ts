@@ -117,5 +117,89 @@ describe('LiveLogViewer helpers', () => {
     });
     expect(rateLimits.content).toBe('Codex rate limits updated');
     expect(rateLimits.emphasis).toBe('default');
+
+    const planUpdated = formatLogEventDisplay({
+      id: 6,
+      type: 'info',
+      timestamp: 1,
+      data: JSON.stringify({
+        method: 'turn/plan/updated',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          explanation: null,
+          plan: [
+            { step: 'Inspect scene/output transition path and identify missing telemetry boundaries', status: 'completed' },
+            { step: 'Implement transition trace and render snapshot instrumentation across main and output renderers', status: 'inProgress' },
+            { step: 'Add regression harness and focused tests for intermittent black transitions', status: 'pending' },
+          ],
+        },
+      }),
+    });
+    expect(planUpdated.content).toContain('Plan updated');
+    expect(planUpdated.content).toContain('Active: Implement transition trace and render snapshot instrumentation across main and output renderers');
+    expect(planUpdated.emphasis).toBe('info');
+
+    const fileChangeStarted = formatLogEventDisplay({
+      id: 7,
+      type: 'info',
+      timestamp: 1,
+      data: JSON.stringify({
+        method: 'item/started',
+        params: {
+          item: {
+            type: 'fileChange',
+            id: 'change-1',
+            status: 'inProgress',
+            changes: [
+              {
+                path: 'C:\\Users\\TimShelton\\source\\repos\\VisualSynth\\src\\renderer\\render\\outputPayload.ts',
+                kind: { type: 'update', move_path: null },
+              },
+            ],
+          },
+        },
+      }),
+    });
+    expect(fileChangeStarted.content).toBe('Editing 1 file: src\\renderer\\render\\outputPayload.ts');
+    expect(fileChangeStarted.emphasis).toBe('tool');
+
+    const fileChangeCompleted = formatLogEventDisplay({
+      id: 8,
+      type: 'info',
+      timestamp: 1,
+      data: JSON.stringify({
+        method: 'item/completed',
+        params: {
+          item: {
+            type: 'fileChange',
+            id: 'change-1',
+            status: 'completed',
+            changes: [
+              {
+                path: 'C:\\Users\\TimShelton\\source\\repos\\VisualSynth\\src\\renderer\\render\\outputPayload.ts',
+                kind: { type: 'update', move_path: null },
+              },
+            ],
+          },
+        },
+      }),
+    });
+    expect(fileChangeCompleted.content).toBe('Updated 1 file: src\\renderer\\render\\outputPayload.ts');
+    expect(fileChangeCompleted.emphasis).toBe('success');
+
+    const diffUpdated = formatLogEventDisplay({
+      id: 9,
+      type: 'info',
+      timestamp: 1,
+      data: JSON.stringify({
+        method: 'turn/diff/updated',
+        params: {
+          diff: 'diff --git a/src/renderer/render/outputPayload.ts b/src/renderer/render/outputPayload.ts\n@@ -1 +1 @@\n-a\n+b',
+        },
+      }),
+    });
+    expect(diffUpdated.content).toBe('Diff updated for 1 file');
+    expect(diffUpdated.emphasis).toBe('tool');
   });
 });

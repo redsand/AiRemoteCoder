@@ -29,12 +29,55 @@ export interface FormattedLogEvent {
   emphasis: 'default' | 'info' | 'tool' | 'success' | 'warning' | 'error';
 }
 
+function shortenPath(rawPath: string): string {
+  const normalized = rawPath.replace(/\//g, '\\');
+  const marker = '\\source\\repos\\';
+  const markerIndex = normalized.toLowerCase().indexOf(marker);
+  if (markerIndex >= 0) {
+    const afterRepo = normalized.slice(markerIndex + marker.length);
+    const parts = afterRepo.split('\\');
+    if (parts.length > 1) return parts.slice(1).join('\\');
+  }
+  return normalized.replace(/^[A-Za-z]:\\/, '');
+}
+
 function commandExecutionLabel(item: any): string {
   const command = typeof item?.command === 'string' ? item.command.trim() : '';
   if (command) {
     return command.length > 80 ? `${command.slice(0, 77)}...` : command;
   }
   return 'commandExecution';
+}
+
+function summarizeFileChange(item: any, completed: boolean): FormattedLogEvent {
+  const changes = Array.isArray(item?.changes) ? item.changes : [];
+  const count = changes.length;
+  const firstPath = typeof changes[0]?.path === 'string' ? shortenPath(changes[0].path) : null;
+  const verb = completed ? 'Updated' : 'Editing';
+  const noun = count === 1 ? 'file' : 'files';
+  if (firstPath) {
+    return {
+      content: `${verb} ${count} ${noun}: ${firstPath}`,
+      emphasis: completed ? 'success' : 'tool',
+    };
+  }
+  return {
+    content: `${verb} ${count} ${noun}`,
+    emphasis: completed ? 'success' : 'tool',
+  };
+}
+
+function summarizeDiff(diff: string): string {
+  const matches = [...diff.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)];
+  const uniqueFiles = new Set<string>();
+  for (const match of matches) {
+    if (match[2]) uniqueFiles.add(match[2]);
+  }
+  const count = uniqueFiles.size;
+  if (count > 0) {
+    return `Diff updated for ${count} file${count === 1 ? '' : 's'}`;
+  }
+  return 'Diff updated';
 }
 
 // Color mapping for event types
@@ -168,6 +211,12 @@ export function formatLogEventDisplay(event: LogEvent | DisplayEvent): Formatted
           emphasis: item?.status === 'failed' ? 'error' : 'success',
         };
       }
+      if (method === 'item/started' && item?.type === 'fileChange') {
+        return summarizeFileChange(item, false);
+      }
+      if (method === 'item/completed' && item?.type === 'fileChange') {
+        return summarizeFileChange(item, true);
+      }
       if (method === 'item/started' && item?.type === 'reasoning') {
         return { content: 'Codex is reasoning', emphasis: 'info' };
       }
@@ -188,6 +237,25 @@ export function formatLogEventDisplay(event: LogEvent | DisplayEvent): Formatted
       }
       if (method === 'thread/started') {
         return { content: 'Codex thread started', emphasis: 'info' };
+      }
+      if (method === 'turn/plan/updated') {
+        const plan = Array.isArray(params?.plan) ? params.plan : [];
+        const activeStep = plan.find((entry: any) => entry?.status === 'inProgress');
+        const completedCount = plan.filter((entry: any) => entry?.status === 'completed').length;
+        const totalCount = plan.length;
+        const activeText = typeof activeStep?.step === 'string' && activeStep.step.trim().length > 0
+          ? ` Active: ${activeStep.step}`
+          : '';
+        return {
+          content: `Plan updated (${completedCount}/${totalCount} complete).${activeText}`,
+          emphasis: 'info',
+        };
+      }
+      if (method === 'turn/diff/updated') {
+        return {
+          content: summarizeDiff(typeof params?.diff === 'string' ? params.diff : ''),
+          emphasis: 'tool',
+        };
       }
       if (method === 'account/rateLimits/updated') {
         return { content: 'Codex rate limits updated', emphasis: 'default' };
