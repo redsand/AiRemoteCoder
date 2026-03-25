@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getMcpProvider, isProductionReadyRunnerProvider } from './providers';
+import { getMcpProvider, isProductionReadyRunnerProvider, supportsRunnerProvider } from './providers';
 
 describe('MCP provider metadata', () => {
   it('marks codex as the only production-ready runner provider', () => {
@@ -15,5 +15,12 @@ describe('MCP provider metadata', () => {
     expect(getMcpProvider('codex')?.runnerSupport).toBe('production');
     expect(getMcpProvider('gemini')?.runnerSupport).toBe('preview');
     expect(getMcpProvider('claude')?.runnerSupportNote).toContain('not production-ready');
+  });
+
+  it('allows known preview providers to be used for runner testing', () => {
+    expect(supportsRunnerProvider('codex')).toBe(true);
+    expect(supportsRunnerProvider('claude')).toBe(true);
+    expect(supportsRunnerProvider('gemini')).toBe(true);
+    expect(supportsRunnerProvider('unknown')).toBe(false);
   });
 });

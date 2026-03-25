@@ -356,14 +356,14 @@ bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
           },
         },
       };
-      const filePath = provider === 'zenflow' ? '.zenflow/mcp.json' : '.claude/mcp.json';
+      const filePath = provider === 'zenflow' ? '.zenflow/mcp.json' : '.mcp.json';
       return {
         snippet,
         filePath,
         fileFormat: 'json',
         instructions: provider === 'zenflow'
           ? 'Add to .zenflow/mcp.json in your project root. Zenflow will pick it up automatically.'
-          : 'Add to .claude/mcp.json in your project root. Claude Code will pick it up automatically.',
+          : 'Add to .mcp.json in your project root. Claude Code will pick it up automatically.',
         copyPaste: jsonCopyPaste(filePath, snippet),
       };
     }

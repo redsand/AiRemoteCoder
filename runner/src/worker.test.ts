@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildExecInvocation,
+  ClaudeCliExecutor,
   createBufferedEventSink,
   CodexAppServerExecutor,
   handleWorkerCommand,
@@ -240,6 +241,118 @@ describe('runner executor helpers', () => {
     const executor = new CodexAppServerExecutor({ spawnFn: vi.fn(() => child) as any });
 
     await expect(executor.sendInput('explode', async () => {})).rejects.toThrow('denied');
+  });
+
+  it('uses claude CLI with persistent resume semantics across inputs', async () => {
+    const spawns: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = [];
+    const stdoutChunks = [
+      [
+        JSON.stringify({ type: 'system', subtype: 'init', session_id: 'session-1' }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'first reply' }] } }),
+        JSON.stringify({ type: 'result', subtype: 'success', session_id: 'session-1' }),
+      ],
+      [
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'second reply' }] } }),
+        JSON.stringify({ type: 'result', subtype: 'success', session_id: 'session-1' }),
+      ],
+    ];
+    const spawnFn = vi.fn((command: string, args: string[], options: Record<string, unknown>) => {
+      spawns.push({ command, args, options });
+      const child = new EventEmitter() as any;
+      child.stdin = {
+        end: vi.fn(),
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      queueMicrotask(() => {
+        const chunkSet = stdoutChunks[spawns.length - 1] ?? [];
+        for (const line of chunkSet) {
+          child.stdout.emit('data', Buffer.from(`${line}\n`));
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any, cwd: 'C:/repo' });
+    const events: Array<{ type: string; data: string }> = [];
+
+    await executor.sendInput('first prompt', async (type, data) => {
+      events.push({ type, data });
+    });
+    await executor.sendInput('second prompt', async (type, data) => {
+      events.push({ type, data });
+    });
+
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    expect(spawns[0]?.command).toBe('claude');
+    expect(spawns[0]?.args).toEqual(expect.arrayContaining([
+      '--print',
+      '--output-format',
+      'stream-json',
+      '--include-partial-messages',
+      '--permission-mode',
+      'acceptEdits',
+      '--session-id',
+    ]));
+    expect(spawns[1]?.args).toEqual(expect.arrayContaining([
+      '--print',
+      '--output-format',
+      'stream-json',
+      '--include-partial-messages',
+      '--permission-mode',
+      'acceptEdits',
+      '--resume',
+      'session-1',
+    ]));
+    expect(events).toEqual([
+      { type: 'stdout', data: 'first reply' },
+      { type: 'stdout', data: 'second reply' },
+    ]);
+  });
+
+  it('writes Claude prompts to stdin on Windows-safe path', async () => {
+    const stdinEnd = vi.fn();
+    const spawnFn = vi.fn(() => {
+      const child = new EventEmitter() as any;
+      child.stdin = { end: stdinEnd };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', subtype: 'success', session_id: 'session-1' })}\n`));
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any, platform: 'win32' });
+    await executor.sendInput('Get-ChildItem $env:TEMP', async () => {});
+
+    expect(stdinEnd).toHaveBeenCalledWith('Get-ChildItem $env:TEMP');
+    expect(spawnFn.mock.calls[0]?.[1]).not.toContain('Get-ChildItem $env:TEMP');
+  });
+
+  it('surfaces Claude CLI errors from stream-json results', async () => {
+    const spawnFn = vi.fn(() => {
+      const child = new EventEmitter() as any;
+      child.stdin = { end: vi.fn() };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          is_error: true,
+          error: 'permission denied',
+        })}\n`));
+        child.emit('close', 1);
+      });
+      return child;
+    });
+
+    const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any });
+    await expect(executor.sendInput('explode', async () => {})).rejects.toThrow('permission denied');
   });
 });
 

@@ -81,3 +81,7 @@ export function getMcpProvider(providerKey: McpProviderKey) {
 export function isProductionReadyRunnerProvider(providerKey: string | null | undefined): boolean {
   return getMcpProvider((providerKey ?? '') as McpProviderKey)?.runnerSupport === 'production';
 }
+
+export function supportsRunnerProvider(providerKey: string | null | undefined): boolean {
+  return Boolean(getMcpProvider((providerKey ?? '') as McpProviderKey));
+}

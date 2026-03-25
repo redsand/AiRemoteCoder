@@ -14,7 +14,8 @@ import {
 import type { McpActiveSession } from '../features/mcp/types';
 import { isMcpSessionFresh } from '../features/mcp/run-worker-options';
 import { buildRunnerCommandSnippet } from '../features/mcp/runner-command';
-import { isProductionReadyRunnerProvider } from '../features/mcp/providers';
+import { isProductionReadyRunnerProvider, supportsRunnerProvider } from '../features/mcp/providers';
+import { getMcpHostSubtitle, getMcpHostTitle } from '../features/mcp/host-display';
 
 interface RunsResponse {
   runs: Run[];
@@ -198,13 +199,14 @@ export function Runs({ user }: Props) {
     }
     const selectedHostFresh = isMcpSessionFresh(selectedHost);
     const resolvedWorkerType = createMode === 'agent' ? selectedHost.provider : createMode;
-    const agentModeSupported = isProductionReadyRunnerProvider(selectedHost.provider);
+    const agentModeSupported = supportsRunnerProvider(selectedHost.provider);
+    const agentModeProductionReady = isProductionReadyRunnerProvider(selectedHost.provider);
     if (!resolvedWorkerType) {
       addToast('error', 'Selected host does not expose an agent provider');
       return;
     }
     if (createMode === 'agent' && !agentModeSupported) {
-      addToast('error', `${String(selectedHost.provider ?? 'This provider').toUpperCase()} runner support is preview-only. Codex is the only production-ready agent runner today.`);
+      addToast('error', `${String(selectedHost.provider ?? 'This provider').toUpperCase()} does not expose a supported runner provider.`);
       return;
     }
     if ((createMode === 'vnc' || createMode === 'hands-on') && !selectedHostFresh) {
@@ -254,6 +256,9 @@ export function Runs({ user }: Props) {
         setCreateCommand('');
         setCreateAutonomous(true);
         if (createMode === 'agent') {
+          if (!agentModeProductionReady) {
+            addToast('success', `${String(selectedHost.provider ?? 'This provider').toUpperCase()} preview runner run created`);
+          }
           const snippet = buildRunnerCommandSnippet(
             String(resolvedWorkerType || selectedHost?.provider || 'codex'),
             createHostSessionId || selectedHost?.id || 'default-runner'
@@ -278,7 +283,8 @@ export function Runs({ user }: Props) {
   const selectedProviderLabel = selectedHost?.provider ? selectedHost.provider.toUpperCase() : 'Unavailable';
   const selectedHostFresh = isMcpSessionFresh(selectedHost);
   const canUseManualModes = Boolean(selectedHost && selectedHostFresh);
-  const canUseAgentMode = Boolean(selectedHost?.provider && isProductionReadyRunnerProvider(selectedHost.provider));
+  const canUseAgentMode = Boolean(selectedHost?.provider && supportsRunnerProvider(selectedHost.provider));
+  const selectedAgentProductionReady = Boolean(selectedHost?.provider && isProductionReadyRunnerProvider(selectedHost.provider));
   const canSubmitCreateRun = Boolean(createHostSessionId) && (canUseAgentMode || canUseManualModes);
 
   const copyText = async (text: string, label: string) => {
@@ -552,11 +558,29 @@ export function Runs({ user }: Props) {
                 ) : (
                   activeMcpSessions.map((session) => (
                     <option key={session.id} value={session.id}>
-                      {(session.provider ?? 'unknown-agent').toUpperCase()} · {session.user.username} · {session.id.slice(0, 8)}
+                      {getMcpHostTitle(session)}
                     </option>
                   ))
                 )}
               </select>
+              {selectedHost && (
+                <div
+                  style={{
+                    marginTop: '10px',
+                    padding: '12px',
+                    background: 'var(--bg-tertiary)',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-color)',
+                  }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>
+                    {getMcpHostTitle(selectedHost)}
+                  </div>
+                  <div style={{ marginTop: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    {getMcpHostSubtitle(selectedHost)}
+                  </div>
+                </div>
+              )}
               {activeMcpSessions.length === 0 && (
                 <div className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
                   Connect Codex/Claude/Gemini/OpenCode/Zenflow/Rev to MCP first from the MCP page.
@@ -592,12 +616,17 @@ export function Runs({ user }: Props) {
               )}
               {createHostSessionId && !canUseAgentMode && (
                 <div className="text-muted" style={{ marginTop: '6px', fontSize: '12px' }}>
-                  Agent mode is production-ready only for Codex today. Other providers remain setup-only until native runner executors land.
+                  This host does not expose a supported runner provider for agent mode.
+                </div>
+              )}
+              {createHostSessionId && canUseAgentMode && !selectedAgentProductionReady && (
+                <div className="text-muted" style={{ marginTop: '6px', fontSize: '12px' }}>
+                  Agent mode for {selectedProviderLabel} is preview-only. You can test it, but Codex remains the only production-ready agent runner today.
                 </div>
               )}
               {createHostSessionId && !selectedHostFresh && (
                 <div className="text-muted" style={{ marginTop: '6px', fontSize: '12px' }}>
-                  Host heartbeat is stale. VNC and Hands-On require a fresh MCP connection.
+                  Host heartbeat is stale. This only blocks VNC and Hands-On; agent-mode testing can still be created.
                 </div>
               )}
             </div>
@@ -643,7 +672,7 @@ export function Runs({ user }: Props) {
             </div>
             {selectedHost && !canSubmitCreateRun && (
               <div className="text-muted" style={{ fontSize: '12px' }}>
-                This host cannot start a run yet. Wait for a fresh MCP heartbeat or choose a Codex-connected host for agent mode.
+                This host cannot start a run yet. Wait for a fresh MCP heartbeat for VNC/Hands-On or choose a host with agent support.
               </div>
             )}
           </div>

@@ -420,6 +420,160 @@ export class TemplateExecExecutor implements WorkerExecutor {
   }
 }
 
+interface ClaudeResultState {
+  ok: boolean;
+  error?: Error;
+}
+
+export class ClaudeCliExecutor implements WorkerExecutor {
+  private cliSessionId: string | null = null;
+
+  constructor(
+    private readonly options: {
+      spawnFn?: SpawnFn;
+      cwd?: string;
+      command?: string;
+      permissionMode?: string;
+      model?: string;
+      platform?: NodeJS.Platform;
+    } = {},
+  ) {}
+
+  private get spawnFn(): SpawnFn {
+    return this.options.spawnFn ?? spawn;
+  }
+
+  private get platform(): NodeJS.Platform {
+    return this.options.platform ?? process.platform;
+  }
+
+  private buildArgs(): string[] {
+    const args = [
+      '--print',
+      '--output-format',
+      'stream-json',
+      '--include-partial-messages',
+      '--permission-mode',
+      this.options.permissionMode ?? 'acceptEdits',
+    ];
+    if (this.options.model) {
+      args.push('--model', this.options.model);
+    }
+    if (this.cliSessionId) {
+      args.push('--resume', this.cliSessionId);
+    } else {
+      args.push('--session-id', `airc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+    }
+    return args;
+  }
+
+  private parseStreamJsonLine(
+    line: string,
+    emit: (type: EventType, data: string) => Promise<void>,
+    result: ClaudeResultState,
+  ): void {
+    let event: any;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      if (line.trim().length > 0) void emit('stderr', line);
+      return;
+    }
+
+    if (typeof event?.session_id === 'string' && event.session_id.trim().length > 0) {
+      this.cliSessionId = event.session_id;
+    }
+
+    if (event?.type === 'assistant') {
+      const content = Array.isArray(event.message?.content) ? event.message.content : [];
+      for (const part of content) {
+        if (part?.type === 'text' && typeof part.text === 'string' && part.text.length > 0) {
+          void emit('stdout', part.text);
+        }
+      }
+      return;
+    }
+
+    if (event?.type === 'result') {
+      if (event.is_error || event.subtype === 'error') {
+        result.ok = false;
+        result.error = new Error(String(event.error ?? 'Claude CLI reported an error'));
+      }
+      return;
+    }
+
+    if (event?.type === 'system') {
+      return;
+    }
+  }
+
+  async sendInput(input: string, emit: (type: EventType, data: string) => Promise<void>): Promise<void> {
+    const args = this.buildArgs();
+    const command = this.options.command ?? 'claude';
+    const useStdin = this.platform === 'win32';
+
+    await emit('info', `Executing Claude prompt (${input.length} chars)`);
+
+    await new Promise<void>((resolve, reject) => {
+      const child = this.spawnFn(command, useStdin ? args : [...args, input], {
+        shell: false,
+        windowsHide: true,
+        cwd: this.options.cwd ?? process.cwd(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      const result: ClaudeResultState = { ok: true };
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
+
+      child.stdout?.on('data', (chunk: Buffer | string) => {
+        stdoutBuffer += chunk.toString();
+        const lines = stdoutBuffer.split(/\r?\n/);
+        stdoutBuffer = lines.pop() ?? '';
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          this.parseStreamJsonLine(line, emit, result);
+        }
+      });
+
+      child.stderr?.on('data', (chunk: Buffer | string) => {
+        const text = chunk.toString();
+        stderrBuffer += text;
+        void emit('stderr', text);
+      });
+
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (stdoutBuffer.trim().length > 0) {
+          this.parseStreamJsonLine(stdoutBuffer.trim(), emit, result);
+          stdoutBuffer = '';
+        }
+        if (result.ok && code === 0) {
+          resolve();
+          return;
+        }
+        if (result.error) {
+          reject(result.error);
+          return;
+        }
+        const stderrText = stderrBuffer.trim();
+        reject(new Error(stderrText || `claude exited with code ${code}`));
+      });
+
+      if (useStdin) {
+        child.stdin?.end(input);
+      } else {
+        child.stdin?.end();
+      }
+    });
+  }
+
+  async interrupt(): Promise<void> {
+    return;
+  }
+}
+
 export async function executeShellCommand(
   command: string,
   emit: (type: EventType, data: string) => Promise<void>,
@@ -606,6 +760,9 @@ function createExecutor(options: RunnerOptions): WorkerExecutor {
     if (options.codexMode === 'exec') return new CodexExecExecutor();
     if (options.codexMode === 'interactive') return new PersistentCodexExecutor();
     return new CodexAppServerExecutor({ approvalPolicy: options.codexApprovalPolicy || 'never' });
+  }
+  if (options.provider === 'claude') {
+    return new ClaudeCliExecutor();
   }
   return new TemplateExecExecutor(options.execTemplate ?? '');
 }

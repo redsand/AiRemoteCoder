@@ -165,10 +165,15 @@ describe('mcpSetupRoutes', () => {
     });
 
     expect(installRes.statusCode).toBe(200);
-    const install = installRes.json() as { token: string; filePath: string };
+    const install = installRes.json() as {
+      token: string;
+      filePath: string;
+      copyPaste?: { bash?: string[]; powershell?: string[] };
+    };
     expect(install.token).toBe(setup.token);
+    expect(install.copyPaste?.powershell?.[0] ?? '').toContain("if ($value -is [string] -or $value -is [ValueType]) { return $value }");
 
-    const writtenPath = join(projectRoot, '.claude', 'mcp.json');
+    const writtenPath = join(projectRoot, '.mcp.json');
     expect(existsSync(writtenPath)).toBe(true);
     const written = JSON.parse(readFileSync(writtenPath, 'utf-8')) as any;
     expect(written.mcpServers.airemotecoder.headers.Authorization).toBe(`Bearer ${setup.token}`);
@@ -233,7 +238,6 @@ describe('mcpSetupRoutes', () => {
     expect(install.copyPaste?.powershell?.[0] ?? '').toContain('mcp_servers.airemotecoder');
     expect(install.copyPaste?.powershell?.[0] ?? '').toContain('Set-Content -Path $configPath -Value $out -Encoding utf8');
     expect(install.copyPaste?.powershell?.[0] ?? '').not.toContain('-AsHashtable');
-    expect(install.copyPaste?.powershell?.[0] ?? '').toContain("if ($value -is [string] -or $value -is [ValueType]) { return $value }");
     expect(install.copyPaste?.powershell?.[1] ?? '').toContain('npm install -g @ai-remote-coder/mcp-runner@latest');
     expect(install.copyPaste?.powershell?.[1] ?? '').not.toContain('airc-mcp-runner');
     expect(install.instructions).toContain('Start the runner when creating a run from the UI');
@@ -335,8 +339,7 @@ describe('mcpSetupRoutes', () => {
 
   it('reports configured providers from the project root', async () => {
     const app = await buildApp();
-    const configuredPath = join(projectRoot, '.claude', 'mcp.json');
-    mkdirSync(join(projectRoot, '.claude'), { recursive: true });
+    const configuredPath = join(projectRoot, '.mcp.json');
     writeFileSync(configuredPath, JSON.stringify({
       mcpServers: {
         airemotecoder: {
@@ -403,7 +406,7 @@ describe('mcpSetupRoutes', () => {
     });
 
     expect(installRes.statusCode).toBe(200);
-    const writtenPath = join(otherProject, '.claude', 'mcp.json');
+    const writtenPath = join(otherProject, '.mcp.json');
     expect(existsSync(writtenPath)).toBe(true);
 
     await app.close();
@@ -555,8 +558,8 @@ describe('mcpSetupRoutes', () => {
     });
     expect(installTwo.statusCode).toBe(200);
 
-    expect(existsSync(join(userOnePath, '.claude', 'mcp.json'))).toBe(true);
-    expect(existsSync(join(userTwoPath, '.claude', 'mcp.json'))).toBe(true);
+    expect(existsSync(join(userOnePath, '.mcp.json'))).toBe(true);
+    expect(existsSync(join(userTwoPath, '.mcp.json'))).toBe(true);
 
     await app.close();
   });

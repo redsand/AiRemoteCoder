@@ -3,6 +3,10 @@ export interface RunnerCommandSnippet {
   powershell: string;
 }
 
+function isNativeRunnerProvider(provider: string): boolean {
+  return provider === 'codex' || provider === 'claude';
+}
+
 function buildExecTemplatePlaceholder(provider: string): string {
   return `<SET_${provider.toUpperCase()}_COMMAND_WITH_{input}_PLACEHOLDER>`;
 }
@@ -17,10 +21,14 @@ export function buildRunnerCommandSnippet(
   const safeGatewayUrl = gatewayUrl.replace(/"/g, '\\"');
   const codexSpecificEnv = normalizedProvider === 'codex'
     ? 'export AIREMOTECODER_CODEX_MODE="app-server"\nexport AIREMOTECODER_CODEX_APPROVAL_POLICY="never"\n'
-    : `export AIREMOTECODER_EXEC_TEMPLATE="${buildExecTemplatePlaceholder(normalizedProvider)}"\n`;
+    : isNativeRunnerProvider(normalizedProvider)
+      ? ''
+      : `export AIREMOTECODER_EXEC_TEMPLATE="${buildExecTemplatePlaceholder(normalizedProvider)}"\n`;
   const codexSpecificPsEnv = normalizedProvider === 'codex'
     ? '$env:AIREMOTECODER_CODEX_MODE="app-server"\n$env:AIREMOTECODER_CODEX_APPROVAL_POLICY="never"\n'
-    : `$env:AIREMOTECODER_EXEC_TEMPLATE="${buildExecTemplatePlaceholder(normalizedProvider)}"\n`;
+    : isNativeRunnerProvider(normalizedProvider)
+      ? ''
+      : `$env:AIREMOTECODER_EXEC_TEMPLATE="${buildExecTemplatePlaceholder(normalizedProvider)}"\n`;
 
   return {
     bash: `export AIREMOTECODER_GATEWAY_URL="${safeGatewayUrl}"

@@ -31,4 +31,16 @@ describe('buildRunnerCommandSnippet', () => {
     expect(snippet.powershell).not.toContain('AIREMOTECODER_CODEX_MODE=');
     expect(snippet.powershell).toContain('$env:AIREMOTECODER_EXEC_TEMPLATE="<SET_GEMINI_COMMAND_WITH_{input}_PLACEHOLDER>"');
   });
+
+  it('does not require an exec template for Claude preview runner commands', () => {
+    const snippet = buildRunnerCommandSnippet('claude', 'runner-789', 'http://localhost:3100');
+
+    expect(snippet.bash).toContain('AIREMOTECODER_PROVIDER="claude"');
+    expect(snippet.bash).not.toContain('AIREMOTECODER_EXEC_TEMPLATE=');
+    expect(snippet.bash).toContain('airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"');
+
+    expect(snippet.powershell).toContain('$env:AIREMOTECODER_PROVIDER="claude"');
+    expect(snippet.powershell).not.toContain('AIREMOTECODER_EXEC_TEMPLATE=');
+    expect(snippet.powershell).toContain('airc-mcp-runner --runner-id "$env:AIREMOTECODER_RUNNER_ID"');
+  });
 });
