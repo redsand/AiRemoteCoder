@@ -3,16 +3,25 @@ export interface RunnerCommandSnippet {
   powershell: string;
 }
 
-export function buildRunnerCommandSnippet(provider: string, runnerIdSeed: string): RunnerCommandSnippet {
+export function buildRunnerCommandSnippet(
+  provider: string,
+  runnerIdSeed: string,
+  gatewayUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3100'
+): RunnerCommandSnippet {
   const normalizedProvider = (provider || 'codex').toLowerCase();
   const safeRunnerId = runnerIdSeed.replace(/"/g, '\\"');
+  const safeGatewayUrl = gatewayUrl.replace(/"/g, '\\"');
 
   return {
-    bash: `export AIREMOTECODER_PROVIDER="${normalizedProvider}"
+    bash: `export AIREMOTECODER_GATEWAY_URL="${safeGatewayUrl}"
+export AIREMOTECODER_MCP_TOKEN="<YOUR_MCP_TOKEN>"
+export AIREMOTECODER_PROVIDER="${normalizedProvider}"
 export AIREMOTECODER_CODEX_MODE="interactive"
 export AIREMOTECODER_RUNNER_ID="${safeRunnerId}"
 airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"`,
-    powershell: `$env:AIREMOTECODER_PROVIDER="${normalizedProvider}"
+    powershell: `$env:AIREMOTECODER_GATEWAY_URL="${safeGatewayUrl}"
+$env:AIREMOTECODER_MCP_TOKEN="<YOUR_MCP_TOKEN>"
+$env:AIREMOTECODER_PROVIDER="${normalizedProvider}"
 $env:AIREMOTECODER_CODEX_MODE="interactive"
 $env:AIREMOTECODER_RUNNER_ID="${safeRunnerId}"
 airc-mcp-runner --runner-id "$env:AIREMOTECODER_RUNNER_ID"`,

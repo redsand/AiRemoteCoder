@@ -816,6 +816,42 @@ describe('routes/runs', () => {
     expect(saved.result).toBe('ok');
   });
 
+  it('claims only runs targeted to matching mcpRunnerId when provided', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-target-runner';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-12', ?, 'auto:codex', 'user-1', '["runs:read","runs:write","sessions:write"]')
+    `).run(tokenHash);
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, waiting_approval, metadata, created_at)
+      VALUES ('run-mcp-target-a', 'pending', 'codex', 'cap-mcp-target-a', 0, '{"mcpRunnerId":"runner-a"}', unixepoch())
+    `).run();
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, waiting_approval, metadata, created_at)
+      VALUES ('run-mcp-target-b', 'pending', 'codex', 'cap-mcp-target-b', 0, '{"mcpRunnerId":"runner-b"}', unixepoch()+1)
+    `).run();
+
+    const claimRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/claim',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-airc-runner-id': 'runner-b',
+        'content-type': 'application/json',
+      },
+      payload: { provider: 'codex' },
+    });
+
+    expect(claimRes.statusCode).toBe(200);
+    expect(claimRes.json()).toMatchObject({
+      run: { id: 'run-mcp-target-b' },
+    });
+  });
+
   it('adopts stale MCP session claims for token-runner polling on same provider', async () => {
     db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
 

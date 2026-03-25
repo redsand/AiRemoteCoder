@@ -140,7 +140,8 @@ describe('runner cli parsing', () => {
       ['--token', 't2', '--runner-id', 'my-runner'],
       {},
     );
-    expect(one.runnerId).toBe(two.runnerId);
+    expect(one.runnerId).toBe('my-runner');
+    expect(two.runnerId).toBe('my-runner');
   });
 
   it('fails when token is missing', () => {

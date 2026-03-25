@@ -241,12 +241,19 @@ export function Runs({ user }: Props) {
       const requestBody: any = {
         workerType: resolvedWorkerType,
         autonomous: createAutonomous,
-        metadata: {
-          mcpSessionId: selectedHost.id,
-          mcpProvider: selectedHost.provider ?? null,
-          mcpMode: createMode,
-          mcpConnectedUser: selectedHost.user.username,
-        },
+        metadata: createMode === 'agent'
+          ? {
+              mcpRunnerId: selectedHost.id,
+              mcpProvider: selectedHost.provider ?? null,
+              mcpMode: createMode,
+              mcpConnectedUser: selectedHost.user.username,
+            }
+          : {
+              mcpSessionId: selectedHost.id,
+              mcpProvider: selectedHost.provider ?? null,
+              mcpMode: createMode,
+              mcpConnectedUser: selectedHost.user.username,
+            },
       };
 
       if (createCommand.trim()) {

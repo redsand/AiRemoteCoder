@@ -28,8 +28,9 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
   const token = args.get('token') ?? env.AIREMOTECODER_MCP_TOKEN ?? env.AIRC_MCP_TOKEN ?? '';
   const provider = (args.get('provider') ?? env.AIREMOTECODER_PROVIDER ?? 'codex').toLowerCase();
   const explicitRunnerId = args.get('runner-id') ?? env.AIREMOTECODER_RUNNER_ID;
-  const runnerSeed = explicitRunnerId?.trim() || `${hostname()}:${process.cwd()}`;
-  const runnerId = createHash('sha256').update(runnerSeed).digest('hex').slice(0, 16);
+  const runnerId = (explicitRunnerId?.trim() && explicitRunnerId.trim().length > 0)
+    ? explicitRunnerId.trim()
+    : createHash('sha256').update(`${hostname()}:${process.cwd()}`).digest('hex').slice(0, 16);
   const codexModeRaw = (args.get('codex-mode') ?? env.AIREMOTECODER_CODEX_MODE ?? 'interactive').toLowerCase();
   const codexMode = codexModeRaw === 'exec' ? 'exec' : 'interactive';
   const execTemplate = args.get('exec-template') ?? env.AIREMOTECODER_EXEC_TEMPLATE;

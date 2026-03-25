@@ -475,16 +475,21 @@ export async function runsRoutes(fastify: FastifyInstance) {
 
     const now = Math.floor(Date.now() / 1000);
     const claimTransaction = db.transaction(() => {
+      const targetRunnerId = auth.runnerId ?? null;
       const run = db.prepare(`
         SELECT id, command, metadata, worker_type, capability_token
         FROM runs
         WHERE status = 'pending'
           AND waiting_approval = 0
           AND worker_type = ?
+          AND (
+            json_extract(metadata, '$.mcpRunnerId') IS NULL
+            OR json_extract(metadata, '$.mcpRunnerId') = ?
+          )
           AND (claimed_by IS NULL OR claimed_by = ?)
         ORDER BY created_at ASC
         LIMIT 1
-      `).get(provider, claimTag) as any;
+      `).get(provider, targetRunnerId, claimTag) as any;
 
       if (!run) {
         return null;
