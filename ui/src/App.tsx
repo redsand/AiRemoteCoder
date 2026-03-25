@@ -6,7 +6,7 @@ import {
   Dashboard,
   Runs,
   RunDetail,
-  Clients,
+  Hosts,
   Alerts,
   Settings,
   McpSettings,
@@ -100,8 +100,9 @@ function App() {
             <Route path="/runs" element={<Runs user={user} />} />
             <Route path="/runs/:runId" element={<RunDetail user={user} />} />
 
-            {/* Clients */}
-            <Route path="/clients" element={<Clients user={user} />} />
+            {/* Hosts */}
+            <Route path="/hosts" element={<Hosts user={user} />} />
+            <Route path="/clients" element={<Navigate to="/hosts" replace />} />
 
             {/* Alerts */}
             <Route path="/alerts" element={<Alerts user={user} />} />

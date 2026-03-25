@@ -59,7 +59,6 @@ function cleanup() {
   db.prepare('DELETE FROM events').run();
   db.prepare('DELETE FROM run_state').run();
   db.prepare('DELETE FROM runs').run();
-  db.prepare('DELETE FROM clients').run();
 }
 
 function buildApp() {

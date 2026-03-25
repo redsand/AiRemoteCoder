@@ -21,28 +21,9 @@ db.pragma('foreign_keys = ON');
 
 // Initialize schema
 db.exec(`
-  -- Clients table (machines/agents connecting to gateway)
-  CREATE TABLE IF NOT EXISTS clients (
-    id TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL,
-    agent_id TEXT UNIQUE NOT NULL,
-    token_hash TEXT,
-    last_seen_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    version TEXT,
-    capabilities TEXT,
-    status TEXT NOT NULL DEFAULT 'online',
-    operator_enabled INTEGER NOT NULL DEFAULT 1,
-    metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch())
-  );
-  CREATE INDEX IF NOT EXISTS idx_clients_agent_id ON clients(agent_id);
-  CREATE INDEX IF NOT EXISTS idx_clients_status ON clients(status);
-  CREATE INDEX IF NOT EXISTS idx_clients_last_seen ON clients(last_seen_at);
-
   -- Runs table
   CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
-    client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     label TEXT,
     command TEXT,
@@ -61,7 +42,6 @@ db.exec(`
     claimed_by TEXT,
     claimed_at INTEGER
   );
-  CREATE INDEX IF NOT EXISTS idx_runs_client_id ON runs(client_id);
   CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
   CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);
   CREATE INDEX IF NOT EXISTS idx_runs_waiting_approval ON runs(waiting_approval);
@@ -85,7 +65,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
   CREATE INDEX IF NOT EXISTS idx_events_step_id ON events(step_id);
 
-  -- Commands table (UI -> wrapper)
+  -- Commands table (UI -> runner)
   CREATE TABLE IF NOT EXISTS commands (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -258,9 +238,37 @@ function ensureColumn(table: string, column: string, type: string): void {
   }
 }
 
+function hasTable(table: string): boolean {
+  const row = db.prepare(`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?
+  `).get(table) as { name: string } | undefined;
+  return Boolean(row);
+}
+
+function hasColumn(table: string, column: string): boolean {
+  if (!hasTable(table)) return false;
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return columns.some((col) => col.name === column);
+}
+
+function migrateLegacyClientSchema(): void {
+  if (hasColumn('runs', 'client_id')) {
+    db.exec('DROP INDEX IF EXISTS idx_runs_client_id');
+    db.exec('ALTER TABLE runs DROP COLUMN client_id');
+  }
+
+  if (hasTable('clients')) {
+    db.exec('DROP INDEX IF EXISTS idx_clients_agent_id');
+    db.exec('DROP INDEX IF EXISTS idx_clients_status');
+    db.exec('DROP INDEX IF EXISTS idx_clients_last_seen');
+    db.exec('DROP TABLE IF EXISTS clients');
+  }
+}
+
+migrateLegacyClientSchema();
+
 ensureColumn('runs', 'claimed_by', 'TEXT');
 ensureColumn('runs', 'claimed_at', 'INTEGER');
-ensureColumn('clients', 'token_hash', 'TEXT');
 ensureColumn('commands', 'arguments', 'TEXT');
 
 db.exec(`
@@ -342,29 +350,11 @@ export function cleanupExpiredSessions(): number {
 }
 
 // Update client status based on heartbeat
-export function updateClientStatus(): number {
+export function cleanupExpiredRunClaims(): number {
   const now = Math.floor(Date.now() / 1000);
-  const offlineThreshold = now - 60; // 60 seconds without heartbeat = offline
-  const degradedThreshold = now - 30; // 30 seconds = degraded
-
-  // Mark clients as offline
-  const offlineResult = db.prepare(
-    "UPDATE clients SET status = 'offline' WHERE last_seen_at < ? AND status != 'offline'"
-  ).run(offlineThreshold);
-
-  // Mark clients as degraded
-  db.prepare(
-    "UPDATE clients SET status = 'degraded' WHERE last_seen_at >= ? AND last_seen_at < ? AND status = 'online'"
-  ).run(offlineThreshold, degradedThreshold);
-
-  // Mark clients as online
-  db.prepare(
-    "UPDATE clients SET status = 'online' WHERE last_seen_at >= ? AND status != 'online'"
-  ).run(degradedThreshold);
-
   // Release expired run claims
   const claimCutoff = now - config.claimLeaseSeconds;
-  db.prepare(`
+  const result = db.prepare(`
     UPDATE runs
     SET claimed_by = NULL, claimed_at = NULL
     WHERE status = 'pending'
@@ -372,13 +362,13 @@ export function updateClientStatus(): number {
       AND claimed_at < ?
   `).run(claimCutoff);
 
-  return offlineResult.changes;
+  return result.changes;
 }
 
 // Run cleanup periodically
 setInterval(() => {
   cleanupExpiredNonces();
   cleanupExpiredSessions();
-  updateClientStatus();
+  cleanupExpiredRunClaims();
   expireTimedOutApprovals();
 }, 60000); // Every minute

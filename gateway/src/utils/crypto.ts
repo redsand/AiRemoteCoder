@@ -12,7 +12,7 @@ export interface SignatureComponents {
 }
 
 /**
- * Create HMAC signature for wrapper authentication
+ * Create an HMAC signature for signed internal requests.
  */
 export function createSignature(components: SignatureComponents, secret: string = config.hmacSecret): string {
   const message = [
@@ -75,7 +75,7 @@ export function generateSessionToken(): string {
 }
 
 /**
- * Hash a client token for storage
+ * Hash a bearer token for storage.
  */
 export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');

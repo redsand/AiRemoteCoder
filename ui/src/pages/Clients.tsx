@@ -6,7 +6,7 @@ interface Props {
   user: { id: string; username: string; role: string } | null;
 }
 
-export function Clients(_props: Props) {
+export function Hosts(_props: Props) {
   const { addToast } = useToast();
   const [sessions, setSessions] = useState<McpActiveSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,7 +47,7 @@ export function Clients(_props: Props) {
     <div className="clients-page">
       <div className="page-header">
         <div style={{ width: '100%' }}>
-          <h2 className="page-title">Connected MCP Runners</h2>
+          <h2 className="page-title">Connected Hosts</h2>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
             MCP hosts and the helper runner are the only supported runtime path.
           </div>
@@ -110,4 +110,4 @@ export function Clients(_props: Props) {
   );
 }
 
-export default Clients;
+export default Hosts;

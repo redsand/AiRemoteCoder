@@ -56,7 +56,6 @@ function cleanup() {
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM users').run();
   db.prepare('DELETE FROM runs').run();
-  db.prepare('DELETE FROM clients').run();
 }
 
 describe('middleware/auth', () => {

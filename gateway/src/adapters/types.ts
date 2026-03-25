@@ -5,9 +5,8 @@
  * wrapped in a class implementing ProviderAdapter. The orchestrator calls only
  * this interface — provider-specific quirks stay inside the adapter.
  *
- * Adapters replace the previous subprocess/stdio wrapper model. The legacy
- * wrapper compatibility shim is the only code path that still uses popen/pipe
- * internally, and it is marked @deprecated.
+ * Adapters replace the previous subprocess/stdio wrapper model and present
+ * normalized provider behavior to the orchestrator.
  */
 
 import type {

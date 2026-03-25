@@ -41,7 +41,7 @@ vi.mock('../config.js', () => ({
       gemini: true,
       opencode: true,
       rev: true,
-      legacyWrapper: true,
+      zenflow: true,
     },
   },
 }));

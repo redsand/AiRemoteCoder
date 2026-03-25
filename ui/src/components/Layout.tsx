@@ -18,7 +18,7 @@ const navItems: NavItem[] = [
   { path: '/', label: 'Dashboard', icon: '\uD83C\uDFE0', activeIcon: '\uD83C\uDFE0' },
   { path: '/mcp', label: 'MCP', icon: '\uD83D\uDD0C', activeIcon: '\uD83D\uDD0C' },
   { path: '/runs', label: 'Runs', icon: '\uD83D\uDCCB', activeIcon: '\uD83D\uDCCB' },
-  { path: '/clients', label: 'Clients', icon: '\uD83D\uDCBB', activeIcon: '\uD83D\uDCBB' },
+  { path: '/hosts', label: 'Hosts', icon: '\uD83D\uDCBB', activeIcon: '\uD83D\uDCBB' },
   { path: '/alerts', label: 'Alerts', icon: '\uD83D\uDD14', activeIcon: '\uD83D\uDD14' },
   { path: '/settings', label: 'Settings', icon: '\u2699\uFE0F', activeIcon: '\u2699\uFE0F' },
 ];
@@ -52,7 +52,7 @@ export function Layout({ user, onLogout, children }: LayoutProps) {
     if (path === '/') return 'Dashboard';
     if (path.startsWith('/runs/')) return 'Run Details';
     if (path === '/runs') return 'Runs';
-    if (path === '/clients') return 'Clients';
+    if (path === '/hosts') return 'Hosts';
     if (path === '/alerts') return 'Alerts';
     if (path === '/mcp') return 'MCP Control Plane';
     if (path === '/settings') return 'Settings';

@@ -18,7 +18,6 @@ interface NeedsAttention {
   counts: {
     waitingApproval: number;
     failedRuns: number;
-    disconnectedWithRuns: number;
     unacknowledgedAlerts: number;
   };
 }

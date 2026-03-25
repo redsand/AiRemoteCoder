@@ -199,11 +199,10 @@ export async function runsRoutes(fastify: FastifyInstance) {
 
     db.transaction(() => {
       db.prepare(`
-        INSERT INTO runs (id, client_id, label, command, repo_path, repo_name, tags, capability_token, metadata, worker_type, status, started_at, claimed_by, claimed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO runs (id, label, command, repo_path, repo_name, tags, capability_token, metadata, worker_type, status, started_at, claimed_by, claimed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
-        null,
         body.label || null,
         body.command || null,
         body.repoPath || null,

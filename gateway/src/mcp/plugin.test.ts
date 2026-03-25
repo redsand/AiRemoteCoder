@@ -74,7 +74,7 @@ vi.mock('../services/database.js', () => {
     expireTimedOutApprovals: vi.fn(),
     cleanupExpiredNonces: vi.fn(),
     cleanupExpiredSessions: vi.fn(),
-    updateClientStatus: vi.fn(),
+    cleanupExpiredRunClaims: vi.fn(),
   };
 });
 

@@ -60,7 +60,6 @@ function cleanup() {
   db.prepare('DELETE FROM users').run();
   db.prepare('DELETE FROM artifacts').run();
   db.prepare('DELETE FROM runs').run();
-  db.prepare('DELETE FROM clients').run();
   rmSync(join(artifactRoot, 'artifacts'), { recursive: true, force: true });
 }
 

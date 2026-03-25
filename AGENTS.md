@@ -209,7 +209,6 @@ gateway/src/
 | `AIRC_PROVIDER_ZENFLOW` | `true` | Enable Zenflow adapter |
 | `AIRC_PROVIDER_REV` | `true` | Enable Rev adapter |
 | `AIRC_APPROVAL_TIMEOUT` | `300` | Default approval timeout (seconds) |
-| `HMAC_SECRET` | auto | HMAC secret for wrapper auth |
 | `AUTH_SECRET` | auto | Session auth secret |
 | `GATEWAY_PORT` | `3100` | Gateway listen port |
 

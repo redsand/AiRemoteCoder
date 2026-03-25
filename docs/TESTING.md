@@ -1,242 +1,88 @@
-# Test Coverage Plan
+# Testing
 
-## Overview
+AiRemoteCoder follows TDD. New behavior starts with a failing test, then the
+minimum implementation, then refactor.
 
-This document outlines the comprehensive test coverage for the Connect-Back Gateway.
-
-## Running Tests
+## Core commands
 
 ```bash
-# All tests
+# All workspaces
 npm test
 
-# MCP MVP focus
+# MVP path
 npm run test:mvp
 
-# Run tests for a specific workspace
-cd gateway && npm test
-cd runner && npm test
-cd ui && npm test
+# Individual workspaces
+npm test -w gateway
+npm test -w runner
+npm test -w ui
 
-# Watch mode (if supported by workspace)
-cd gateway && npm run test:watch
-
-# Coverage (if supported by workspace)
-cd gateway && npm run test:coverage
-
-# Run tests matching a pattern
-cd gateway && npm test -- --grep "pattern"
-
-# Run with verbose output
-cd gateway && npm test -- --reporter=verbose
-cd wrapper && npm test -- --reporter=verbose
-
-# Run specific test file
-cd gateway && npm test -- src/utils/crypto.test.ts
+# Builds
+npm run build -w gateway
+npm run build -w runner
+npm run build -w ui
 ```
 
-Note: The root `npm test` command runs all tests across gateway, runner, and ui workspaces.
-For MVP validation, prefer `npm run test:mvp`.
-For workspace-specific test options (coverage, watch mode, etc.), navigate to the workspace directory and check its package.json for available scripts.
+## Coverage priorities
 
-## Test Structure
+### Gateway
 
-```
-gateway/
-├── src/
-│   ├── utils/
-│   │   └── crypto.test.ts       # Hashing, tokens, nonces, redaction
-│   ├── services/
-│   │   └── database.test.ts     # Schema, CRUD, cascades
-│   ├── middleware/
-│   │   └── auth.test.ts         # Session auth, RBAC
-│   └── routes/
-│       └── runs.test.ts         # MCP claim/poll/ack/event flow
+- MCP auth, token scope, and session access
+- MCP tool handlers
+- run creation/claim/poll/ack/event ingestion
+- approval workflow transactions
+- database helpers
+- UI auth/session routes
 
-runner/
-├── src/
-│   └── worker.test.ts           # App-server execution, polling, ack, events
-```
+### Runner
 
----
+- claim/poll/ack loop
+- provider executor lifecycle
+- Codex app-server thread/turn handling
+- error propagation and retry behavior
+- runner-id targeting
 
-## Coverage by Component
+### UI
 
-### 1. Cryptographic Functions (`gateway/src/utils/crypto.ts`)
+- MCP setup/install flows
+- provider list and runner command generation
+- MCP-first navigation and run creation affordances
 
-| Function | Test Coverage |
-|----------|--------------|
-| `createSignature()` | ✅ Consistency, all components included |
-| `verifySignature()` | ✅ Valid/invalid signatures, timing-safe |
-| `hashBody()` | ✅ Strings, buffers, consistency |
-| `generateNonce()` | ✅ Uniqueness, format (32 hex chars) |
-| `generateCapabilityToken()` | ✅ Uniqueness, format (64 hex chars) |
-| `isTimestampValid()` | ✅ Current, within skew, outside skew |
-| `redactSecrets()` | ✅ API keys, passwords, tokens, safe content |
+## Required MCP coverage
 
-**Key Test Cases:**
-- Signature changes when any input component changes
-- Timing-safe comparison prevents timing attacks
-- Clock skew within ±5 minutes accepted
-- All secret patterns properly redacted
+Every MCP change must cover:
 
-### 2. Database Schema (`gateway/src/services/database.ts`)
+- unauthenticated rejection
+- wrong-scope rejection
+- success path
+- invalid input / not-found path
 
-| Table | Test Coverage |
-|-------|--------------|
-| `runs` | ✅ Create, update status, JSON metadata |
-| `events` | ✅ Auto-increment, cascade delete, ordering |
-| `commands` | ✅ Insert, status update, ack |
-| `artifacts` | ✅ Metadata storage, path handling |
-| `nonces` | ✅ Uniqueness constraint, cleanup |
-| `users` | ✅ Unique username, password hash storage |
-| `sessions` | ✅ Expiry, cascade delete |
-| `audit_log` | ✅ Entries, ordering |
+Approval changes must also cover rollback so state transition plus command
+enqueue cannot partially apply.
 
-**Key Test Cases:**
-- Foreign key constraints enforced
-- Cascade delete removes child records
-- Index performance for common queries
-- JSON storage and retrieval
+## Test types
 
-### 3. Authentication Middleware (`gateway/src/middleware/auth.ts`)
+- `*.test.ts`: unit tests
+- `*.integration.test.ts`: full HTTP/in-memory DB integration
+- `*.e2e.test.ts`: end-to-end server behavior
 
-| Feature | Test Coverage |
-|---------|--------------|
-| UI session auth | ✅ Session lookup, expiry |
-| Cloudflare Access | ✅ Header extraction |
-| Role-based access | ✅ Admin, operator, viewer |
-
-**Key Test Cases:**
-- Role permissions enforced correctly
-- Session expiry handled
-
-### 4. Command Allowlist (`gateway/src/routes/runs.ts`)
-
-| Category | Test Coverage |
-|----------|--------------|
-| Test commands | ✅ npm/pnpm/yarn/pytest/go/cargo |
-| Git commands | ✅ diff, status, log (read-only) |
-| Blocked commands | ✅ rm, curl, git push, etc. |
-| Injection attempts | ✅ Semicolons, pipes, backticks |
-| Edge cases | ✅ Whitespace, case sensitivity |
-
-**Key Test Cases:**
-- Only exact matches or prefix+space allowed
-- Dangerous git commands blocked
-- Command injection patterns blocked
-- Special `__STOP__` command recognized
-
-### 5. MCP Runner (`runner/src/worker.ts`)
-
-| Feature | Test Coverage |
-|---------|--------------|
-| Claim/poll/ack loop | ✅ Pending run claim, command polling, acknowledgements |
-| Codex app-server | ✅ Thread reuse, turn lifecycle, failure propagation |
-| Event delivery | ✅ Structured stdout/marker/error events |
-| Error handling | ✅ HTTP errors, auth failures, timeout |
-| Runner identity | ✅ Explicit runner-id targeting |
-
-**Key Test Cases:**
-- Headers properly formatted
-- Body hash included in signature
-- Marker events structured correctly
-- Graceful error handling
-
-## Security Test Matrix
-
-| Threat | Test File | Assertions |
-|--------|-----------|------------|
-| Command injection | runs.test.ts | Metacharacters blocked |
-| Secret leakage | crypto.test.ts | Patterns redacted |
-| Privilege escalation | auth.test.ts | Role checks enforced |
-| Session hijacking | database.test.ts | Session expiry works |
-
----
-
-## Performance Considerations
-
-| Area | Test Approach |
-|------|---------------|
-| Nonce lookup | Database index test |
-| Event streaming | Sequence ordering test |
-| Log throughput | Chunk handling test |
-| Large artifacts | Size limit test |
-
----
-
-## Running Specific Tests
+## Useful focused commands
 
 ```bash
-# Run tests matching pattern
-npm test -w gateway -- --grep "crypto"
-
-# Run single test file
-npm test -w gateway -- src/utils/crypto.test.ts
-
-# Run with verbose output
-npm test -w gateway -- --reporter=verbose
-
-# Watch mode during development
-npm run test:watch -w gateway
+npx vitest run gateway/src/mcp/plugin.test.ts
+npx vitest run gateway/src/mcp/server.test.ts
+npx vitest run gateway/src/routes/runs.test.ts
+npx vitest run gateway/src/routes/mcp-setup.test.ts
+npx vitest run runner/src/worker.test.ts
 ```
 
----
+## MVP release gate
 
-## Adding New Tests
+Before calling the MCP path release-ready, run:
 
-When adding new functionality:
-
-1. **Identify the component** - gateway vs wrapper
-2. **Determine test type** - unit vs integration
-3. **Follow existing patterns** - see similar tests
-4. **Cover edge cases** - empty input, max size, invalid format
-5. **Test security implications** - injection, bypass, leakage
-
-### Test Template
-
-```typescript
-import { describe, it, expect, beforeEach } from 'vitest';
-
-describe('ComponentName', () => {
-  describe('functionName', () => {
-    it('should handle normal case', () => {
-      // Arrange
-      const input = 'valid input';
-
-      // Act
-      const result = functionName(input);
-
-      // Assert
-      expect(result).toBe('expected output');
-    });
-
-    it('should handle edge case', () => {
-      expect(() => functionName('')).toThrow();
-    });
-
-    it('should reject invalid input', () => {
-      expect(functionName('invalid')).toBe(false);
-    });
-  });
-});
+```bash
+npm run test:mvp
+npm run build
 ```
 
----
-
-## CI/CD Integration
-
-```yaml
-# MVP-first GitHub Actions workflow
-test:
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-    - run: npm ci
-    - run: npm run build:mvp
-    - run: npm run test:mvp
-
-```
+The expected MVP lane is gateway + runner + UI only.
