@@ -27,7 +27,7 @@ import { uiAuth } from '../middleware/auth.js';
 import type { AuthenticatedRequest } from '../middleware/auth.js';
 import type { McpScope } from '../domain/types.js';
 import { ALL_MCP_SCOPES } from '../domain/types.js';
-import { getMcpSession, listMcpSessions, registerMcpSession, removeMcpSession, touchMcpSession } from './session-registry.js';
+import { getMcpSession, listMcpRunnerHosts, listMcpSessions, registerMcpSession, removeMcpSession, touchMcpSession } from './session-registry.js';
 
 const NON_ADMIN_ALLOWED_SCOPES: McpScope[] = [
   'runs:read',
@@ -150,7 +150,16 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       sessionIdGenerator: () => newSessionId,
       onsessioninitialized: (sid) => {
         const now = Math.floor(Date.now() / 1000);
-        registerMcpSession({ id: sid, transport, authContext, createdAt: now, lastSeenAt: now });
+        const clientInfo = body?.params?.clientInfo as Record<string, unknown> | undefined;
+        const projectDir = typeof clientInfo?.cwd === 'string' ? clientInfo.cwd : null;
+        registerMcpSession({
+          id: sid,
+          transport,
+          authContext,
+          createdAt: now,
+          lastSeenAt: now,
+          projectDir,
+        });
         fastify.log.info({ sessionId: sid, user: authContext.user.username }, 'MCP session initialized');
       },
     });
@@ -339,8 +348,9 @@ export async function mcpPlugin(fastify: FastifyInstance) {
     '/api/mcp/sessions',
     { preHandler: [uiAuth] },
     async (req: AuthenticatedRequest, reply) => {
-      const entries = listMcpSessions().map((session) => ({
+      const sessionEntries = listMcpSessions().map((session) => ({
         id: session.id,
+        kind: 'session',
         user: {
           id: session.authContext.user.id,
           username: session.authContext.user.username,
@@ -351,7 +361,30 @@ export async function mcpPlugin(fastify: FastifyInstance) {
         createdAt: session.createdAt,
         lastSeenAt: session.lastSeenAt,
         scopes: session.authContext.scopes,
+        projectDir: session.projectDir ?? null,
+        projectName: session.projectName ?? null,
+        runnerId: null,
       }));
+
+      const runnerEntries = listMcpRunnerHosts().map((runner) => ({
+        id: runner.id,
+        kind: 'runner',
+        user: {
+          id: runner.user.id,
+          username: runner.user.username,
+          role: runner.user.role,
+        },
+        provider: runner.provider,
+        tokenLabel: null,
+        createdAt: runner.createdAt,
+        lastSeenAt: runner.lastSeenAt,
+        scopes: runner.scopes,
+        projectDir: runner.projectDir,
+        projectName: runner.projectName,
+        runnerId: runner.runnerId,
+      }));
+
+      const entries = [...runnerEntries, ...sessionEntries];
 
       const visible = req.user?.role === 'admin'
         ? entries

@@ -420,6 +420,31 @@ export class TemplateExecExecutor implements WorkerExecutor {
   }
 }
 
+export async function executeShellCommand(
+  command: string,
+  emit: (type: EventType, data: string) => Promise<void>,
+  spawnFn: SpawnFn = spawn,
+): Promise<void> {
+  await emit('info', `Executing local command: ${command}`);
+  await new Promise<void>((resolve, reject) => {
+    const child = spawnFn(command, [], {
+      shell: true,
+      windowsHide: true,
+    });
+    child.stdout?.on('data', (chunk: Buffer) => {
+      void emit('stdout', chunk.toString());
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      void emit('stderr', chunk.toString());
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`local command exited with code ${code}`));
+    });
+  });
+}
+
 export function buildExecInvocation(template: string, input: string): { command: string; args: string[] } {
   const trimmed = template.trim();
   if (!trimmed) throw new Error('AIREMOTECODER_EXEC_TEMPLATE is required for this provider');
@@ -446,6 +471,7 @@ export class McpWorkerApi {
         authorization: `Bearer ${this.token}`,
         'content-type': 'application/json',
         'x-airc-runner-id': this.runnerId,
+        'x-airc-project-dir': process.cwd(),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -515,6 +541,7 @@ export async function handleWorkerCommand(
   runId: string,
   api: Pick<McpWorkerApi, 'ackCommand' | 'sendEvent'>,
   executor: WorkerExecutor,
+  spawnFn: SpawnFn = spawn,
 ): Promise<boolean> {
   if (command.command === '__STOP__') {
     await api.sendEvent(runId, { type: 'marker', data: JSON.stringify({ event: 'finished', exitCode: 0 }) });
@@ -531,6 +558,19 @@ export async function handleWorkerCommand(
   if (command.command === '__START_VNC_STREAM__') {
     await api.sendEvent(runId, { type: 'info', data: 'VNC stream start command delivered to MCP worker' });
     await api.ackCommand(runId, command.id, 'vnc-start-ack');
+    return false;
+  }
+
+  if (command.command === '__EXEC__') {
+    const shellCommand = (command.arguments ?? '').trim();
+    if (!shellCommand) {
+      await api.ackCommand(runId, command.id, undefined, 'Missing shell command');
+      return false;
+    }
+    const sink = createBufferedEventSink(runId, api);
+    await executeShellCommand(shellCommand, sink.emit, spawnFn);
+    await sink.flush();
+    await api.ackCommand(runId, command.id, 'ok');
     return false;
   }
 

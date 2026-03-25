@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { extractEventChangeDetails } from '../../features/runs/changes';
 
 export interface LogEvent {
   id: number;
@@ -27,6 +28,43 @@ export interface DisplayEvent {
 export interface FormattedLogEvent {
   content: string;
   emphasis: 'default' | 'info' | 'tool' | 'success' | 'warning' | 'error';
+  details?: {
+    files: string[];
+    diff: string | null;
+  } | null;
+}
+
+function parseInfoPayload(data: string): any | null {
+  try {
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+
+export function isErrorEvent(event: LogEvent | DisplayEvent): boolean {
+  if (event.type === 'stderr' || event.type === 'error') return true;
+  if (event.type !== 'info') return false;
+
+  const payload = parseInfoPayload(event.data);
+  const method = payload?.method;
+  const params = payload?.params ?? {};
+  const item = params?.item ?? {};
+
+  if (method === 'turn/completed') {
+    return params?.turn?.status === 'failed';
+  }
+  if (method === 'thread/status/changed') {
+    return params?.status?.type === 'errored';
+  }
+  if (method === 'item/completed' && item?.type === 'commandExecution') {
+    return item?.status === 'failed';
+  }
+  return false;
+}
+
+export function countErrorEvents(events: Array<LogEvent | DisplayEvent>): number {
+  return events.filter((event) => isErrorEvent(event)).length;
 }
 
 function shortenPath(rawPath: string): string {
@@ -52,32 +90,37 @@ function commandExecutionLabel(item: any): string {
 function summarizeFileChange(item: any, completed: boolean): FormattedLogEvent {
   const changes = Array.isArray(item?.changes) ? item.changes : [];
   const count = changes.length;
-  const firstPath = typeof changes[0]?.path === 'string' ? shortenPath(changes[0].path) : null;
+  const files = changes
+    .map((change: any) => (typeof change?.path === 'string' ? shortenPath(change.path) : null))
+    .filter((value: string | null): value is string => Boolean(value));
+  const firstPath = files[0] ?? null;
   const verb = completed ? 'Updated' : 'Editing';
   const noun = count === 1 ? 'file' : 'files';
   if (firstPath) {
     return {
       content: `${verb} ${count} ${noun}: ${firstPath}`,
       emphasis: completed ? 'success' : 'tool',
+      details: count > 1 ? { files, diff: null } : null,
     };
   }
   return {
     content: `${verb} ${count} ${noun}`,
     emphasis: completed ? 'success' : 'tool',
+    details: count > 1 ? { files, diff: null } : null,
   };
 }
 
-function summarizeDiff(diff: string): string {
-  const matches = [...diff.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)];
-  const uniqueFiles = new Set<string>();
-  for (const match of matches) {
-    if (match[2]) uniqueFiles.add(match[2]);
-  }
-  const count = uniqueFiles.size;
-  if (count > 0) {
-    return `Diff updated for ${count} file${count === 1 ? '' : 's'}`;
-  }
-  return 'Diff updated';
+function summarizeDiff(diff: string): FormattedLogEvent {
+  const details = extractEventChangeDetails({
+    type: 'info',
+    data: JSON.stringify({ method: 'turn/diff/updated', params: { diff } }),
+  } as LogEvent);
+  const count = details?.files.length ?? 0;
+  return {
+    content: count > 0 ? `Diff updated for ${count} file${count === 1 ? '' : 's'}` : 'Diff updated',
+    emphasis: 'tool',
+    details,
+  };
 }
 
 // Color mapping for event types
@@ -252,10 +295,7 @@ export function formatLogEventDisplay(event: LogEvent | DisplayEvent): Formatted
         };
       }
       if (method === 'turn/diff/updated') {
-        return {
-          content: summarizeDiff(typeof params?.diff === 'string' ? params.diff : ''),
-          emphasis: 'tool',
-        };
+        return summarizeDiff(typeof params?.diff === 'string' ? params.diff : '');
       }
       if (method === 'account/rateLimits/updated') {
         return { content: 'Codex rate limits updated', emphasis: 'default' };
@@ -268,7 +308,7 @@ export function formatLogEventDisplay(event: LogEvent | DisplayEvent): Formatted
     }
   }
 
-  if (event.type === 'stderr' || event.type === 'error' || /error|failed/i.test(event.data)) {
+  if (isErrorEvent(event)) {
     return { content: event.data, emphasis: 'error' };
   }
 
@@ -347,9 +387,7 @@ export function LiveLogViewer({
     }
   };
 
-  const errorCount = filteredEvents.filter(e =>
-    e.type === 'stderr' || e.type === 'error' || /error|failed|exception/i.test(e.data)
-  ).length;
+  const errorCount = countErrorEvents(filteredEvents);
 
   return (
     <div
@@ -471,7 +509,7 @@ export function LiveLogViewer({
 }
 
 interface LogLineProps {
-  event: LogEvent;
+  event: LogEvent | DisplayEvent;
   searchTerm?: string;
 }
 
@@ -536,7 +574,36 @@ function LogLine({ event, searchTerm }: LogLineProps) {
         wordBreak: 'break-word',
       }}
     >
-      {content}
+      {formatted.details && (formatted.details.files.length > 1 || formatted.details.diff) ? (
+        <details>
+          <summary style={{ cursor: 'pointer', listStyle: 'auto' }}>{content}</summary>
+          <div style={{ marginTop: '8px', paddingLeft: '12px', color: 'var(--text-secondary)' }}>
+            {formatted.details.files.length > 0 && (
+              <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                {formatted.details.files.map((file) => (
+                  <li key={file} style={{ marginBottom: '4px' }}>{file}</li>
+                ))}
+              </ul>
+            )}
+            {formatted.details.diff && (
+              <pre
+                style={{
+                  marginTop: '8px',
+                  padding: '8px',
+                  background: 'var(--bg-secondary)',
+                  borderRadius: '6px',
+                  overflowX: 'auto',
+                  fontSize: '12px',
+                }}
+              >
+                {formatted.details.diff}
+              </pre>
+            )}
+          </div>
+        </details>
+      ) : (
+        content
+      )}
     </div>
   );
 }

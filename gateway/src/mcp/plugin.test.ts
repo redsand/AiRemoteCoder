@@ -485,6 +485,40 @@ describe('GET /api/mcp/sessions', () => {
 
     await app.close();
   });
+
+  it('includes runner host directory and project name when reported by helper', async () => {
+    const { clearMcpSessionsForTests, upsertMcpRunnerHost } = await import('./session-registry.js');
+    clearMcpSessionsForTests();
+    upsertMcpRunnerHost({
+      tokenId: 'tok-1',
+      runnerId: 'runner-visual',
+      provider: 'codex',
+      user: { id: 'user-1', username: 'admin', role: 'admin', source: 'mcp_token' },
+      scopes: ['runs:read', 'runs:write'],
+      createdAt: 100,
+      lastSeenAt: 101,
+      projectDir: 'C:\\Users\\TimShelton\\source\\repos\\VisualSynth',
+    });
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/sessions',
+      cookies: { session: 'valid-session' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'runner',
+        provider: 'codex',
+        projectName: 'VisualSynth',
+        projectDir: 'C:\\Users\\TimShelton\\source\\repos\\VisualSynth',
+        runnerId: 'runner-visual',
+      }),
+    ]));
+    await app.close();
+  });
 });
 
 // ---------------------------------------------------------------------------

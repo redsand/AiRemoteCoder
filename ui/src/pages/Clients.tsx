@@ -38,6 +38,8 @@ export function Hosts(_props: Props) {
     return sessions.filter((session) => (
       session.id.toLowerCase().includes(term)
       || (session.provider ?? '').toLowerCase().includes(term)
+      || (session.projectName ?? '').toLowerCase().includes(term)
+      || (session.projectDir ?? '').toLowerCase().includes(term)
       || session.user.username.toLowerCase().includes(term)
       || session.user.role.toLowerCase().includes(term)
     ));
@@ -62,7 +64,7 @@ export function Hosts(_props: Props) {
           <input
             type="text"
             className="form-input"
-            placeholder="Search by provider, user, role, or session id..."
+            placeholder="Search by provider, project, path, user, role, or session id..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -88,14 +90,19 @@ export function Hosts(_props: Props) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                 <div>
                   <div style={{ fontWeight: 600 }}>
-                    {(session.provider ?? 'unknown').toUpperCase()} runner
+                    {(session.provider ?? 'unknown').toUpperCase()} {session.kind === 'runner' ? 'helper' : 'session'}
                   </div>
                   <div className="text-muted" style={{ fontSize: '12px' }}>
-                    session {session.id}
+                    {session.projectName ? `${session.projectName} • ` : ''}{session.kind ?? 'session'} {session.id}
                   </div>
                 </div>
                 <span className="badge-green">connected</span>
               </div>
+              {session.projectDir && (
+                <div style={{ marginTop: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  Directory: <span style={{ fontFamily: 'var(--font-mono, monospace)' }}>{session.projectDir}</span>
+                </div>
+              )}
               <div style={{ marginTop: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
                 User: {session.user.username} ({session.user.role})
               </div>

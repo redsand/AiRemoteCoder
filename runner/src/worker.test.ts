@@ -77,6 +77,39 @@ describe('runner command handling', () => {
     expect(sendInput).not.toHaveBeenCalled();
     expect(ackCommand).toHaveBeenCalledWith('run-vnc', 'cmd-vnc', 'vnc-start-ack');
   });
+
+  it('executes __EXEC__ commands locally instead of sending them to the provider executor', async () => {
+    const sendEvent = vi.fn().mockResolvedValue({ ok: true });
+    const ackCommand = vi.fn().mockResolvedValue({ ok: true });
+    const sendInput = vi.fn().mockResolvedValue(undefined);
+    const interrupt = vi.fn().mockResolvedValue(undefined);
+    const child = new EventEmitter() as any;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.on = child.addListener.bind(child);
+    const spawnFn = vi.fn(() => child);
+
+    const pending = handleWorkerCommand(
+      { id: 'cmd-exec', command: '__EXEC__', arguments: 'git status' },
+      'run-exec',
+      { sendEvent, ackCommand } as any,
+      { sendInput, interrupt },
+      spawnFn as any,
+    );
+
+    child.stdout.emit('data', Buffer.from('On branch main\n'));
+    child.emit('close', 0);
+
+    const stop = await pending;
+    expect(stop).toBe(false);
+    expect(sendInput).not.toHaveBeenCalled();
+    expect(spawnFn).toHaveBeenCalledWith('git status', [], expect.objectContaining({
+      shell: true,
+      windowsHide: true,
+    }));
+    expect(sendEvent).toHaveBeenCalledWith('run-exec', { type: 'stdout', data: 'On branch main\n' });
+    expect(ackCommand).toHaveBeenCalledWith('run-exec', 'cmd-exec', 'ok');
+  });
 });
 
 describe('runner executor helpers', () => {

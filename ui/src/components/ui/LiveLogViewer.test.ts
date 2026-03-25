@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { condenseLogEvents, formatLogEventDisplay, type LogEvent } from './LiveLogViewer';
+import { condenseLogEvents, countErrorEvents, formatLogEventDisplay, type LogEvent } from './LiveLogViewer';
 
 describe('LiveLogViewer helpers', () => {
   it('condenses adjacent stdout token fragments into readable lines', () => {
@@ -201,5 +201,40 @@ describe('LiveLogViewer helpers', () => {
     });
     expect(diffUpdated.content).toBe('Diff updated for 1 file');
     expect(diffUpdated.emphasis).toBe('tool');
+  });
+
+  it('counts only real error events instead of matching generic diff text', () => {
+    const events: LogEvent[] = [
+      {
+        id: 1,
+        type: 'info',
+        timestamp: 1,
+        data: JSON.stringify({
+          method: 'turn/diff/updated',
+          params: {
+            diff: 'diff --git a/file.ts b/file.ts\n+ failedTransition: true',
+          },
+        }),
+      },
+      {
+        id: 2,
+        type: 'info',
+        timestamp: 2,
+        data: JSON.stringify({
+          method: 'item/completed',
+          params: {
+            item: {
+              type: 'commandExecution',
+              id: 'call-1',
+              status: 'failed',
+              command: 'npm test',
+            },
+          },
+        }),
+      },
+      { id: 3, type: 'stderr', data: 'real stderr', timestamp: 3 },
+    ];
+
+    expect(countErrorEvents(condenseLogEvents(events))).toBe(2);
   });
 });

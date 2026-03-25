@@ -504,6 +504,35 @@ describe('routes/runs', () => {
     expect(commands.some((entry) => entry.command === '__INPUT__' && entry.arguments === 'hello from ui')).toBe(true);
   });
 
+  it('queues UI commands for MCP-claimed runs as __EXEC__ with arguments', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-mcp-command', 'running', 'codex', 'cap-mcp-command', 'mcp-runner:mcp-tok-4:runner-a', unixepoch(), unixepoch())
+    `).run();
+
+    const commandRes = await app.inject({
+      method: 'POST',
+      url: '/api/runs/run-mcp-command/command',
+      headers: adminSessionHeaders('session-1'),
+      payload: { command: 'git status' },
+    });
+    expect(commandRes.statusCode).toBe(200);
+
+    const command = db.prepare(`
+      SELECT command, arguments
+      FROM commands
+      WHERE run_id = 'run-mcp-command'
+      ORDER BY created_at DESC, rowid DESC
+      LIMIT 1
+    `).get() as { command: string; arguments: string | null };
+
+    expect(command.command).toBe('__EXEC__');
+    expect(command.arguments).toBe('git status');
+  });
+
   it('exposes VNC start command through MCP poll when queued from VNC route', async () => {
     db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
 

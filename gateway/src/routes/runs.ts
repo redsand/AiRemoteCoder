@@ -6,7 +6,7 @@ import { config } from '../config.js';
 import { uiAuth, requireRole, logAudit, type AuthenticatedRequest } from '../middleware/auth.js';
 import { generateCapabilityToken, redactSecrets } from '../utils/crypto.js';
 import { broadcastToRun } from '../services/websocket.js';
-import { findLatestMcpSessionByTokenId, getMcpSession } from '../mcp/session-registry.js';
+import { findLatestMcpSessionByTokenId, getMcpSession, upsertMcpRunnerHost } from '../mcp/session-registry.js';
 import { assertScopes, extractBearerToken, validateMcpSessionAccess, validateMcpToken } from '../mcp/auth.js';
 import type { McpScope } from '../domain/types.js';
 
@@ -106,6 +106,19 @@ function resolveAuthorizedMcpWorker(
 
   // Explicit runner identity takes precedence over ambient MCP session presence.
   if (runnerIdValid) {
+    const projectDirHeader = request.headers['x-airc-project-dir'];
+    const projectDir = typeof projectDirHeader === 'string' && projectDirHeader.trim().length > 0
+      ? projectDirHeader.trim()
+      : null;
+    upsertMcpRunnerHost({
+      tokenId: tokenCtx.tokenId,
+      runnerId,
+      provider: providerFromTokenLabel(tokenCtx.tokenLabel),
+      user: tokenCtx.user,
+      scopes: tokenCtx.scopes,
+      lastSeenAt: Math.floor(Date.now() / 1000),
+      projectDir,
+    });
     return {
       sessionId: null,
       session: null,
@@ -466,7 +479,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
 
     // Get commands/audit trail
     const commands = db.prepare(`
-      SELECT id, command, status, created_at, acked_at, result, error
+      SELECT id, command, arguments, status, created_at, acked_at, result, error
       FROM commands WHERE run_id = ?
       ORDER BY created_at DESC
     `).all(runId);
@@ -506,7 +519,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
     }
 
     const commands = db.prepare(`
-      SELECT id, command, status, created_at, acked_at, result, error
+      SELECT id, command, arguments, status, created_at, acked_at, result, error
       FROM commands WHERE run_id = ?
       ORDER BY created_at DESC
     `).all(runId);
@@ -581,9 +594,9 @@ export async function runsRoutes(fastify: FastifyInstance) {
 
     const id = nanoid(12);
     db.prepare(`
-      INSERT INTO commands (id, run_id, command)
-      VALUES (?, ?, ?)
-    `).run(id, runId, body.command);
+      INSERT INTO commands (id, run_id, command, arguments)
+      VALUES (?, ?, ?, ?)
+    `).run(id, runId, '__EXEC__', body.command);
 
     logAudit(request.user?.id, 'command.sent', 'run', runId, { commandId: id, command: body.command }, request.ip);
 

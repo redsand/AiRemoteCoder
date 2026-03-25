@@ -1,3 +1,4 @@
+import { basename } from 'path';
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { McpAuthContext } from './auth.js';
 
@@ -7,11 +8,36 @@ export interface McpSessionEntry {
   authContext: McpAuthContext;
   createdAt: number;
   lastSeenAt: number;
+  projectDir?: string | null;
+  projectName?: string | null;
+}
+
+export interface McpRunnerHostEntry {
+  id: string;
+  tokenId: string;
+  runnerId: string;
+  provider: string | null;
+  user: McpAuthContext['user'];
+  scopes: string[];
+  createdAt: number;
+  lastSeenAt: number;
+  projectDir: string | null;
+  projectName: string | null;
 }
 
 const sessions = new Map<string, McpSessionEntry>();
+const runnerHosts = new Map<string, McpRunnerHostEntry>();
+
+function projectNameFromDir(projectDir: string | null | undefined): string | null {
+  if (!projectDir) return null;
+  const trimmed = projectDir.trim().replace(/[\\/]+$/, '');
+  if (!trimmed) return null;
+  const name = basename(trimmed);
+  return name || null;
+}
 
 export function registerMcpSession(entry: McpSessionEntry): void {
+  entry.projectName = entry.projectName ?? projectNameFromDir(entry.projectDir);
   sessions.set(entry.id, entry);
 }
 
@@ -43,4 +69,31 @@ export function findLatestMcpSessionByTokenId(tokenId: string): McpSessionEntry 
 
 export function clearMcpSessionsForTests(): void {
   sessions.clear();
+  runnerHosts.clear();
+}
+
+export function upsertMcpRunnerHost(
+  entry: Omit<McpRunnerHostEntry, 'id' | 'createdAt' | 'projectName'> & { id?: string; createdAt?: number },
+): McpRunnerHostEntry {
+  const key = entry.id ?? `${entry.tokenId}:${entry.runnerId}`;
+  const now = Math.floor(Date.now() / 1000);
+  const existing = runnerHosts.get(key);
+  const next: McpRunnerHostEntry = {
+    id: key,
+    tokenId: entry.tokenId,
+    runnerId: entry.runnerId,
+    provider: entry.provider,
+    user: entry.user,
+    scopes: entry.scopes,
+    createdAt: existing?.createdAt ?? entry.createdAt ?? now,
+    lastSeenAt: entry.lastSeenAt ?? now,
+    projectDir: entry.projectDir ?? null,
+    projectName: projectNameFromDir(entry.projectDir ?? null),
+  };
+  runnerHosts.set(key, next);
+  return next;
+}
+
+export function listMcpRunnerHosts(): McpRunnerHostEntry[] {
+  return Array.from(runnerHosts.values());
 }

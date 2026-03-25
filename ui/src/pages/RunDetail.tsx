@@ -12,6 +12,7 @@ import {
 import { VncViewer } from '../components/VncViewer';
 import { useVncConnection } from '../hooks/useVncConnection';
 import { summarizeRunActivity } from '../features/runs/activity';
+import { buildRunChangeReport } from '../features/runs/changes';
 
 interface Run {
   id: string;
@@ -75,7 +76,7 @@ const ALLOWED_COMMANDS = [
   'pwd',
 ];
 
-type Tab = 'log' | 'timeline' | 'artifacts' | 'commands' | 'vnc';
+type Tab = 'log' | 'timeline' | 'changes' | 'artifacts' | 'commands' | 'vnc';
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -162,6 +163,7 @@ export function RunDetail({ user }: Props) {
     autoStart: false
   });
   const isPending = run?.status === 'pending';
+  const changedFiles = buildRunChangeReport(events);
 
   // Fetch run details
   const fetchRun = useCallback(async () => {
@@ -912,6 +914,15 @@ export function RunDetail({ user }: Props) {
           Timeline
         </button>
         <button
+          className={`tab ${activeTab === 'changes' ? 'tab-active' : ''}`}
+          onClick={() => setActiveTab('changes')}
+        >
+          Changes
+          {changedFiles.length > 0 && (
+            <span className="tab-badge">{changedFiles.length}</span>
+          )}
+        </button>
+        <button
           className={`tab ${activeTab === 'artifacts' ? 'tab-active' : ''}`}
           onClick={() => setActiveTab('artifacts')}
         >
@@ -950,6 +961,10 @@ export function RunDetail({ user }: Props) {
 
         {activeTab === 'timeline' && (
           <TimelineView events={events} />
+        )}
+
+        {activeTab === 'changes' && (
+          <ChangesView events={events} />
         )}
 
         {activeTab === 'artifacts' && (
@@ -1142,6 +1157,19 @@ export function RunDetail({ user }: Props) {
   );
 }
 
+function renderCommandLabel(command: Command): string {
+  if (command.command === '__EXEC__' && command.result !== undefined) {
+    return command.result ? command.result : (command.error ? command.command : (command.command));
+  }
+  if (command.command === '__EXEC__') {
+    return command.command;
+  }
+  if (command.command === '__INPUT__') {
+    return command.result ?? command.command;
+  }
+  return command.command;
+}
+
 // Timeline View
 function TimelineView({ events }: { events: LogEvent[] }) {
   // Group events by step_id or time buckets
@@ -1328,7 +1356,9 @@ function CommandsList({ commands }: { commands: Command[] }) {
       {commands.map((cmd) => (
         <div key={cmd.id} className="command-item">
           <div className="command-header">
-            <code className="command-text">{cmd.command}</code>
+            <code className="command-text">
+              {cmd.command === '__EXEC__' ? (cmd.result ?? cmd.error ?? cmd.command) : cmd.command}
+            </code>
             <StatusPill
               status={cmd.status === 'completed' ? 'done' : 'pending'}
               size="sm"
@@ -1348,6 +1378,122 @@ function CommandsList({ commands }: { commands: Command[] }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+function ChangesView({ events }: { events: LogEvent[] }) {
+  const files = buildRunChangeReport(events);
+  const [selectedPath, setSelectedPath] = useState<string | null>(files[0]?.path ?? null);
+
+  useEffect(() => {
+    if (!files.some((entry) => entry.path === selectedPath)) {
+      setSelectedPath(files[0]?.path ?? null);
+    }
+  }, [files, selectedPath]);
+
+  if (files.length === 0) {
+    return (
+      <div className="empty-state-small">
+        No file changes captured yet.
+      </div>
+    );
+  }
+
+  const selected = files.find((entry) => entry.path === selectedPath) ?? files[0];
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '280px minmax(0, 1fr)',
+        gap: '12px',
+        minHeight: '480px',
+      }}
+    >
+      <div
+        style={{
+          border: '1px solid var(--border-color)',
+          borderRadius: '8px',
+          overflow: 'hidden',
+          background: 'var(--bg-secondary)',
+        }}
+      >
+        {files.map((file) => (
+          <button
+            key={file.path}
+            onClick={() => setSelectedPath(file.path)}
+            style={{
+              width: '100%',
+              textAlign: 'left',
+              padding: '10px 12px',
+              border: 'none',
+              borderBottom: '1px solid var(--border-color)',
+              background: file.path === selected.path ? 'rgba(88, 166, 255, 0.12)' : 'transparent',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              fontFamily: 'monospace',
+              fontSize: '12px',
+            }}
+          >
+            <div>{file.path}</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Updated {new Date(file.updatedAt * 1000).toLocaleTimeString()}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div
+        style={{
+          border: '1px solid var(--border-color)',
+          borderRadius: '8px',
+          overflow: 'auto',
+          background: 'var(--bg-primary)',
+        }}
+      >
+        <div style={{ padding: '12px', borderBottom: '1px solid var(--border-color)', fontWeight: 600 }}>
+          {selected.path}
+        </div>
+        {selected.diff ? (
+          <pre
+            style={{
+              margin: 0,
+              padding: '12px',
+              fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
+              fontSize: '12px',
+              lineHeight: '1.5',
+              overflowX: 'auto',
+            }}
+          >
+            {selected.diff.split('\n').map((line, index) => (
+              <div
+                key={`${selected.path}-${index}`}
+                style={{
+                  color: line.startsWith('+') && !line.startsWith('+++')
+                    ? 'var(--accent-green)'
+                    : line.startsWith('-') && !line.startsWith('---')
+                      ? 'var(--accent-red)'
+                      : line.startsWith('@@')
+                        ? 'var(--accent-purple)'
+                        : 'var(--text-primary)',
+                  background: line.startsWith('+') && !line.startsWith('+++')
+                    ? 'rgba(59, 185, 80, 0.08)'
+                    : line.startsWith('-') && !line.startsWith('---')
+                      ? 'rgba(248, 81, 73, 0.08)'
+                      : 'transparent',
+                }}
+              >
+                {line || ' '}
+              </div>
+            ))}
+          </pre>
+        ) : (
+          <div style={{ padding: '16px', color: 'var(--text-muted)' }}>
+            Diff not available yet for this file.
+          </div>
+        )}
+      </div>
     </div>
   );
 }

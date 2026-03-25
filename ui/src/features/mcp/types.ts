@@ -70,6 +70,7 @@ export interface McpProjectTarget {
 
 export interface McpActiveSession {
   id: string;
+  kind?: 'session' | 'runner';
   user: {
     id: string;
     username: string;
@@ -80,4 +81,7 @@ export interface McpActiveSession {
   createdAt: number;
   lastSeenAt: number;
   scopes: string[];
+  projectDir?: string | null;
+  projectName?: string | null;
+  runnerId?: string | null;
 }
