@@ -11,6 +11,7 @@ import {
 } from '../components/ui';
 import { VncViewer } from '../components/VncViewer';
 import { useVncConnection } from '../hooks/useVncConnection';
+import { summarizeRunActivity } from '../features/runs/activity';
 
 interface Run {
   id: string;
@@ -478,6 +479,17 @@ export function RunDetail({ user }: Props) {
   }
 
   const displayTitle = run.label || run.command?.slice(0, 60) || `Run ${run.id}`;
+  const pendingCommandCount = run.commands.filter((command) => command.status !== 'completed').length;
+  const activity = summarizeRunActivity(run.status, events, pendingCommandCount);
+  const activityTone = activity.tone === 'error'
+    ? { border: 'var(--accent-red)', bg: 'rgba(248, 81, 73, 0.12)', text: 'var(--accent-red)' }
+    : activity.tone === 'success'
+      ? { border: 'var(--accent-green)', bg: 'rgba(59, 185, 80, 0.12)', text: 'var(--accent-green)' }
+      : activity.tone === 'warning'
+        ? { border: 'var(--accent-yellow)', bg: 'rgba(210, 153, 34, 0.12)', text: 'var(--accent-yellow)' }
+        : activity.tone === 'info'
+          ? { border: 'var(--accent-blue)', bg: 'rgba(47, 129, 247, 0.12)', text: 'var(--accent-blue)' }
+          : { border: 'var(--border-color)', bg: 'var(--bg-secondary)', text: 'var(--text-primary)' };
 
   return (
     <div className="run-detail">
@@ -757,6 +769,40 @@ export function RunDetail({ user }: Props) {
           </a>
         </div>
       )}
+
+      <div
+        style={{
+          padding: '14px 16px',
+          background: activityTone.bg,
+          border: `1px solid ${activityTone.border}`,
+          borderRadius: '8px',
+          marginBottom: '16px',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: activityTone.text }}>
+              Current Activity
+            </div>
+            <div style={{ fontSize: '16px', fontWeight: 600, marginTop: '4px' }}>
+              {activity.title}
+            </div>
+            <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+              {activity.detail}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            <div style={{ minWidth: '120px' }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Pending Commands</div>
+              <div style={{ fontSize: '18px', fontWeight: 700 }}>{pendingCommandCount}</div>
+            </div>
+            <div style={{ minWidth: '160px' }}>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Last Event</div>
+              <div style={{ fontSize: '13px', fontWeight: 600 }}>{events.length > 0 ? formatTime(events[events.length - 1].timestamp) : 'No events yet'}</div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Prompt Waiting Banner */}
       {promptWaiting && (

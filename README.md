@@ -75,7 +75,8 @@ AiRemoteCoder is now **MCP-first**:
 - **MCP Control Plane (Primary)**: Provider-neutral JSON-RPC control over HTTP/SSE
 - **Secure Human Channel (Primary)**: Existing UI + `/api/*` + WebSocket for approvals, status, artifacts
 - **Real-time Monitoring**: Stream normalized run/session events to your phone/browser
-- **Multi-Agent Support**: Claude, Codex, Gemini, OpenCode, Zenflow, Rev, VNC, and hands-on
+- **Multi-Provider MCP Setup**: Claude, Codex, Gemini, OpenCode, Zenflow, and Rev can connect to the gateway MCP server
+- **Codex Runner MVP**: `airc-mcp-runner` is production-ready for Codex today; other runner transports remain planned/preview
 - **Command Execution**: Run allowlisted commands (tests, git operations) from the UI
 - **Secure Authentication**: Scoped MCP tokens, session auth, optional TOTP 2FA, Cloudflare Access
 - **Connect-Back Only**: Agents initiate outbound connections — no inbound ports required
@@ -98,7 +99,7 @@ Then:
 2. Complete auth/setup
 3. Go to **MCP** page
 4. Generate provider setup commands/snippets for your project
-5. Run your coding agent (Claude/Codex/Gemini/OpenCode/Zenflow/Rev) in that project
+5. Run your coding agent in that project
 6. Create and control runs from the UI
 
 ## MCP Setup (Codex example)
@@ -138,7 +139,7 @@ PY
 
 The MCP page provides copy/paste one-shot Bash and PowerShell commands that replace only the `airemotecoder` MCP block and keep all other config intact.
 
-## MCP Worker Mode (Codex-first)
+## MCP Worker Mode (Codex-first, production path)
 
 After MCP setup, start the worker loop on the coding host (from any project directory):
 
@@ -147,27 +148,31 @@ export AIREMOTECODER_GATEWAY_URL=http://localhost:3100
 export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
 export AIREMOTECODER_PROVIDER=codex
 export AIREMOTECODER_CODEX_MODE=app-server
+export AIREMOTECODER_CODEX_APPROVAL_POLICY=never
 export AIREMOTECODER_RUNNER_ID="$(hostname):$PWD"
 npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
 This loop claims MCP runs, polls queued commands, executes prompts via `codex app-server`, acknowledges commands, and streams structured events/lifecycle markers back to the gateway.
+`AIREMOTECODER_CODEX_APPROVAL_POLICY=never` keeps the current MVP path deterministic; otherwise Codex may pause waiting for an approval reply the runner does not yet broker through the UI.
 Set `AIREMOTECODER_CODEX_MODE=exec` to use one-shot `codex exec` per prompt. `interactive` remains legacy fallback only.
 
 Optional global install:
 
 ```bash
 npm install -g @ai-remote-coder/mcp-runner@latest
-airc-mcp-runner
+airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
-For non-Codex providers, supply an explicit execution template:
+Non-Codex providers are not production-ready runner targets yet. The current helper only offers manual `execTemplate` fallback for them:
 
 ```bash
 export AIREMOTECODER_PROVIDER=gemini
 export AIREMOTECODER_EXEC_TEMPLATE="gemini run {input}"
-npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
+airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
+
+Do not treat that path as equivalent to the Codex app-server transport. Claude, Gemini, OpenCode, Zenflow, and Rev still need native runner executors before they should be considered reliable production runner targets.
 
 ## Remote Access
 

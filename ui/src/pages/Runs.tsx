@@ -14,6 +14,7 @@ import {
 import type { McpActiveSession } from '../features/mcp/types';
 import { isMcpSessionFresh } from '../features/mcp/run-worker-options';
 import { buildRunnerCommandSnippet } from '../features/mcp/runner-command';
+import { isProductionReadyRunnerProvider } from '../features/mcp/providers';
 
 interface RunsResponse {
   runs: Run[];
@@ -197,8 +198,13 @@ export function Runs({ user }: Props) {
     }
     const selectedHostFresh = isMcpSessionFresh(selectedHost);
     const resolvedWorkerType = createMode === 'agent' ? selectedHost.provider : createMode;
+    const agentModeSupported = isProductionReadyRunnerProvider(selectedHost.provider);
     if (!resolvedWorkerType) {
       addToast('error', 'Selected host does not expose an agent provider');
+      return;
+    }
+    if (createMode === 'agent' && !agentModeSupported) {
+      addToast('error', `${String(selectedHost.provider ?? 'This provider').toUpperCase()} runner support is preview-only. Codex is the only production-ready agent runner today.`);
       return;
     }
     if ((createMode === 'vnc' || createMode === 'hands-on') && !selectedHostFresh) {
@@ -272,6 +278,8 @@ export function Runs({ user }: Props) {
   const selectedProviderLabel = selectedHost?.provider ? selectedHost.provider.toUpperCase() : 'Unavailable';
   const selectedHostFresh = isMcpSessionFresh(selectedHost);
   const canUseManualModes = Boolean(selectedHost && selectedHostFresh);
+  const canUseAgentMode = Boolean(selectedHost?.provider && isProductionReadyRunnerProvider(selectedHost.provider));
+  const canSubmitCreateRun = Boolean(createHostSessionId) && (canUseAgentMode || canUseManualModes);
 
   const copyText = async (text: string, label: string) => {
     try {
@@ -283,10 +291,16 @@ export function Runs({ user }: Props) {
   };
 
   useEffect(() => {
-    if ((createMode === 'vnc' || createMode === 'hands-on') && !canUseManualModes) {
+    if (createMode === 'agent' && !canUseAgentMode) {
+      if (canUseManualModes) {
+        setCreateMode('vnc');
+      }
+      return;
+    }
+    if ((createMode === 'vnc' || createMode === 'hands-on') && !canUseManualModes && canUseAgentMode) {
       setCreateMode('agent');
     }
-  }, [canUseManualModes, createMode]);
+  }, [canUseAgentMode, canUseManualModes, createMode]);
 
   // Toggle run selection
   const toggleRunSelection = (runId: string) => {
@@ -515,7 +529,7 @@ export function Runs({ user }: Props) {
               <button
                 className="btn btn-primary"
                 onClick={handleCreateRun}
-                disabled={createLoading || !createHostSessionId}
+                disabled={createLoading || !canSubmitCreateRun}
               >
                 {createLoading ? 'Creating...' : 'Create Run'}
               </button>
@@ -548,6 +562,11 @@ export function Runs({ user }: Props) {
                   Connect Codex/Claude/Gemini/OpenCode/Zenflow/Rev to MCP first from the MCP page.
                 </div>
               )}
+              {selectedHost && !canUseAgentMode && (
+                <div className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
+                  {selectedProviderLabel} is connected for MCP, but agent-runner support is still preview/manual-only. Use Codex for production agent runs today.
+                </div>
+              )}
             </div>
 
             {/* Run Mode Selection */}
@@ -560,7 +579,7 @@ export function Runs({ user }: Props) {
                 style={{ cursor: 'pointer' }}
                 disabled={!createHostSessionId}
               >
-                <option value="agent">AI Coding Agent ({selectedProviderLabel})</option>
+                <option value="agent" disabled={!canUseAgentMode}>AI Coding Agent ({selectedProviderLabel})</option>
                 <option value="vnc" disabled={!canUseManualModes}>VNC (Remote Desktop)</option>
                 <option value="hands-on" disabled={!canUseManualModes}>Hands-On (Command Line)</option>
               </select>
@@ -569,6 +588,11 @@ export function Runs({ user }: Props) {
                   Worker type: {createMode === 'agent'
                     ? (selectedHost?.provider ?? 'unavailable')
                     : createMode}
+                </div>
+              )}
+              {createHostSessionId && !canUseAgentMode && (
+                <div className="text-muted" style={{ marginTop: '6px', fontSize: '12px' }}>
+                  Agent mode is production-ready only for Codex today. Other providers remain setup-only until native runner executors land.
                 </div>
               )}
               {createHostSessionId && !selectedHostFresh && (
@@ -617,6 +641,11 @@ export function Runs({ user }: Props) {
             >
               <strong>Tip:</strong> Pick a connected host first, then choose Agent/VNC/Hands-On over that same MCP connection.
             </div>
+            {selectedHost && !canSubmitCreateRun && (
+              <div className="text-muted" style={{ fontSize: '12px' }}>
+                This host cannot start a run yet. Wait for a fresh MCP heartbeat or choose a Codex-connected host for agent mode.
+              </div>
+            )}
           </div>
         </Modal>
       )}

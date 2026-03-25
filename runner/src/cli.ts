@@ -37,6 +37,10 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
     : codexModeRaw === 'interactive'
       ? 'interactive'
       : 'app-server';
+  const codexApprovalPolicy = (args.get('codex-approval-policy')
+    ?? env.AIREMOTECODER_CODEX_APPROVAL_POLICY
+    ?? env.CODEX_APPROVAL_POLICY
+    ?? 'never').trim().toLowerCase();
   const execTemplate = args.get('exec-template') ?? env.AIREMOTECODER_EXEC_TEMPLATE;
   if (!token) {
     throw new Error('Missing MCP token. Set AIREMOTECODER_MCP_TOKEN (or pass --token).');
@@ -48,6 +52,7 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
     runnerId,
     provider,
     codexMode,
+    codexApprovalPolicy,
     execTemplate,
   };
 }

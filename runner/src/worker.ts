@@ -339,7 +339,7 @@ export class CodexAppServerExecutor implements WorkerExecutor {
         const startResult = await this.request('thread/start', {
           cwd: this.options.cwd ?? process.cwd(),
           ...(this.options.model ? { model: this.options.model } : {}),
-          ...(this.options.approvalPolicy ? { approvalPolicy: this.options.approvalPolicy } : {}),
+          approvalPolicy: this.options.approvalPolicy ?? 'never',
         });
         const threadId = startResult?.thread?.id;
         if (typeof threadId !== 'string' || threadId.trim().length === 0) {
@@ -514,6 +514,7 @@ export interface RunnerOptions {
   runnerId: string;
   provider: string;
   codexMode: 'app-server' | 'interactive' | 'exec';
+  codexApprovalPolicy: string;
   execTemplate?: string;
   pollIdleMs?: number;
   pollCommandsMs?: number;
@@ -530,7 +531,7 @@ function createExecutor(options: RunnerOptions): WorkerExecutor {
   if (options.provider === 'codex') {
     if (options.codexMode === 'exec') return new CodexExecExecutor();
     if (options.codexMode === 'interactive') return new PersistentCodexExecutor();
-    return new CodexAppServerExecutor();
+    return new CodexAppServerExecutor({ approvalPolicy: options.codexApprovalPolicy || 'never' });
   }
   return new TemplateExecExecutor(options.execTemplate ?? '');
 }

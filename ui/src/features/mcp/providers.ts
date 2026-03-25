@@ -5,6 +5,8 @@ export interface McpProviderDefinition {
   description: string;
   configFile: string;
   docsKey: string;
+  runnerSupport: 'production' | 'preview';
+  runnerSupportNote: string;
 }
 
 export const MCP_PROVIDERS: McpProviderDefinition[] = [
@@ -15,6 +17,8 @@ export const MCP_PROVIDERS: McpProviderDefinition[] = [
     description: "Anthropic's Claude Code CLI and IDE extension",
     configFile: '.claude/mcp.json',
     docsKey: 'claude_code',
+    runnerSupport: 'preview',
+    runnerSupportNote: 'Runner pairing is not production-ready yet. Use MCP setup now; native Claude runner transport is planned next.',
   },
   {
     key: 'codex',
@@ -23,6 +27,8 @@ export const MCP_PROVIDERS: McpProviderDefinition[] = [
     description: 'OpenAI Codex CLI agent',
     configFile: 'Environment variables',
     docsKey: 'codex',
+    runnerSupport: 'production',
+    runnerSupportNote: 'Production-ready runner path. Uses airc-mcp-runner with codex app-server by default.',
   },
   {
     key: 'gemini',
@@ -31,6 +37,8 @@ export const MCP_PROVIDERS: McpProviderDefinition[] = [
     description: 'Google Gemini CLI coding agent',
     configFile: '.gemini/settings.json',
     docsKey: 'gemini_cli',
+    runnerSupport: 'preview',
+    runnerSupportNote: 'Runner pairing is not production-ready yet. Current support is manual exec-template fallback only.',
   },
   {
     key: 'opencode',
@@ -39,6 +47,8 @@ export const MCP_PROVIDERS: McpProviderDefinition[] = [
     description: 'OpenCode agent (native MCP support)',
     configFile: 'opencode.json',
     docsKey: 'opencode',
+    runnerSupport: 'preview',
+    runnerSupportNote: 'Runner pairing is not production-ready yet. Current support is manual exec-template fallback only.',
   },
   {
     key: 'zenflow',
@@ -47,6 +57,8 @@ export const MCP_PROVIDERS: McpProviderDefinition[] = [
     description: 'Zenflow coding environment',
     configFile: '.zenflow/mcp.json',
     docsKey: 'claude_code',
+    runnerSupport: 'preview',
+    runnerSupportNote: 'Runner pairing is not production-ready yet. Current support is manual exec-template fallback only.',
   },
   {
     key: 'rev',
@@ -55,6 +67,8 @@ export const MCP_PROVIDERS: McpProviderDefinition[] = [
     description: 'Rev AI coding agent',
     configFile: 'Environment variables',
     docsKey: 'rev',
+    runnerSupport: 'preview',
+    runnerSupportNote: 'Runner pairing is not production-ready yet. Current support is manual exec-template fallback only.',
   },
 ];
 
@@ -64,3 +78,6 @@ export function getMcpProvider(providerKey: McpProviderKey) {
   return MCP_PROVIDERS.find((provider) => provider.key === providerKey);
 }
 
+export function isProductionReadyRunnerProvider(providerKey: string | null | undefined): boolean {
+  return getMcpProvider((providerKey ?? '') as McpProviderKey)?.runnerSupport === 'production';
+}

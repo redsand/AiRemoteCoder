@@ -81,6 +81,8 @@ Required environment in the generated command:
 
 Provider-specific mode variables may also be included.
 
+Today, only Codex is a production-ready runner target. Other providers may still connect to MCP and use setup flows, but the helper does not yet provide native persistent executors for them.
+
 ## Operational checks
 
 ```bash

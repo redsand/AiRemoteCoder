@@ -37,10 +37,17 @@ export function McpProviderGrid({
                   <div className="provider-name">{provider.label}</div>
                   <div className="provider-desc text-muted">{provider.description}</div>
                   <div className="provider-file text-muted"><code>{provider.configFile}</code></div>
+                  <div className="provider-file text-muted">{provider.runnerSupportNote}</div>
                 </div>
               </div>
               <div className="provider-actions">
                 {!enabled && <span className="provider-badge disabled">disabled in config</span>}
+                {enabled && provider.runnerSupport === 'production' && (
+                  <span className="provider-badge enabled">runner ready</span>
+                )}
+                {enabled && provider.runnerSupport === 'preview' && (
+                  <span className="provider-badge disabled">runner preview</span>
+                )}
                 {enabled && (
                   <>
                     <button

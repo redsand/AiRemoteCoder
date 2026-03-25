@@ -37,6 +37,8 @@ describe('McpProviderGrid', () => {
     expect(html).toContain('OpenCode');
     expect(html).toContain('Zenflow');
     expect(html).toContain('Rev');
+    expect(html).toContain('runner ready');
+    expect((html.match(/runner preview/g) || []).length).toBe(5);
     expect((html.match(/Generate Snippet/g) || []).length).toBe(6);
   });
 

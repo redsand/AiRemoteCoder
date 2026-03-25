@@ -16,6 +16,27 @@ interface LiveLogViewerProps {
   searchTerm?: string;
 }
 
+export interface DisplayEvent {
+  id: number;
+  type: LogEvent['type'];
+  data: string;
+  timestamp: number;
+  step_id?: string;
+}
+
+export interface FormattedLogEvent {
+  content: string;
+  emphasis: 'default' | 'info' | 'tool' | 'success' | 'warning' | 'error';
+}
+
+function commandExecutionLabel(item: any): string {
+  const command = typeof item?.command === 'string' ? item.command.trim() : '';
+  if (command) {
+    return command.length > 80 ? `${command.slice(0, 77)}...` : command;
+  }
+  return 'commandExecution';
+}
+
 // Color mapping for event types
 const typeColors: Record<string, string> = {
   stdout: 'var(--text-primary)',
@@ -29,6 +50,163 @@ const typeColors: Record<string, string> = {
   tool_use: 'var(--accent-blue)',
 };
 
+function sanitizeContent(text: string): string {
+  return text
+    .replace(/\r/g, '')
+    .replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, '');
+}
+
+export function condenseLogEvents(events: LogEvent[]): DisplayEvent[] {
+  const condensed: DisplayEvent[] = [];
+  let buffer: DisplayEvent | null = null;
+  let lineOffset = 0;
+
+  const flushBuffer = () => {
+    if (!buffer) return;
+    const lines = sanitizeContent(buffer.data).split('\n').filter((line) => line !== '');
+    if (lines.length === 0) {
+      buffer = null;
+      return;
+    }
+    lines.forEach((line, index) => {
+      condensed.push({
+        ...buffer!,
+        id: buffer!.id + (index * 0.001),
+        data: line,
+      });
+    });
+    buffer = null;
+  };
+
+  for (const event of events) {
+    if (event.type === 'stdout' || event.type === 'stderr') {
+      if (buffer && buffer.type === event.type) {
+        buffer.data += sanitizeContent(event.data);
+      } else {
+        flushBuffer();
+        buffer = { ...event, data: sanitizeContent(event.data) };
+      }
+      continue;
+    }
+
+    flushBuffer();
+    condensed.push({ ...event, data: sanitizeContent(event.data), id: event.id + (lineOffset * 0.001) });
+    lineOffset += 1;
+  }
+
+  flushBuffer();
+  return condensed;
+}
+
+export function formatLogEventDisplay(event: LogEvent | DisplayEvent): FormattedLogEvent {
+  if (event.type === 'marker') {
+    try {
+      const data = JSON.parse(event.data);
+      return {
+        content: `▶ ${data.event?.toUpperCase() || event.data}`,
+        emphasis: data.event === 'finished' ? 'success' : 'info',
+      };
+    } catch {
+      return { content: `▶ ${event.data}`, emphasis: 'info' };
+    }
+  }
+
+  if (event.type === 'assist') {
+    try {
+      const data = JSON.parse(event.data);
+      return { content: `Assist session: ${data.url || event.data}`, emphasis: 'success' };
+    } catch {
+      return { content: `Assist session: ${event.data}`, emphasis: 'success' };
+    }
+  }
+
+  if (event.type === 'tool_use') {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.phase === 'pre') {
+        return { content: `Tool call started: ${data.tool}`, emphasis: 'tool' };
+      }
+      return { content: `Tool call finished: ${data.tool}`, emphasis: 'success' };
+    } catch {
+      return { content: event.data, emphasis: 'tool' };
+    }
+  }
+
+  if (event.type === 'info') {
+    try {
+      const payload = JSON.parse(event.data);
+      const method = payload?.method;
+      const params = payload?.params ?? {};
+      const item = params?.item ?? {};
+      if (method === 'turn/started') {
+        return { content: 'Codex turn started', emphasis: 'info' };
+      }
+      if (method === 'turn/completed') {
+        return {
+          content: params?.turn?.status === 'failed' ? 'Codex turn failed' : 'Codex turn completed',
+          emphasis: params?.turn?.status === 'failed' ? 'error' : 'success',
+        };
+      }
+      if (method === 'thread/status/changed') {
+        const statusType = params?.status?.type;
+        if (typeof statusType === 'string' && statusType.length > 0) {
+          return {
+            content: `Codex thread ${statusType}`,
+            emphasis: statusType === 'errored' ? 'error' : 'info',
+          };
+        }
+        return { content: 'Codex thread status changed', emphasis: 'info' };
+      }
+      if (method === 'item/started' && item?.type === 'commandExecution') {
+        return { content: `Tool call started: ${commandExecutionLabel(item)}`, emphasis: 'tool' };
+      }
+      if (method === 'item/completed' && item?.type === 'commandExecution') {
+        return {
+          content: item?.status === 'failed'
+            ? `Tool call failed: ${commandExecutionLabel(item)}`
+            : `Tool call finished: ${commandExecutionLabel(item)}`,
+          emphasis: item?.status === 'failed' ? 'error' : 'success',
+        };
+      }
+      if (method === 'item/started' && item?.type === 'reasoning') {
+        return { content: 'Codex is reasoning', emphasis: 'info' };
+      }
+      if (method === 'item/started' && item?.type === 'userMessage') {
+        return { content: 'Prompt delivered to Codex', emphasis: 'info' };
+      }
+      if (method === 'item/completed' && item?.type === 'reasoning') {
+        return { content: 'Codex reasoning step finished', emphasis: 'default' };
+      }
+      if (method === 'item/completed' && item?.type === 'userMessage') {
+        return { content: 'Prompt accepted by Codex', emphasis: 'success' };
+      }
+      if (method === 'item/started' && item?.type === 'agentMessage') {
+        return { content: 'Codex is composing a response', emphasis: 'info' };
+      }
+      if (method === 'item/completed' && item?.type === 'agentMessage') {
+        return { content: 'Codex response segment finished', emphasis: 'success' };
+      }
+      if (method === 'thread/started') {
+        return { content: 'Codex thread started', emphasis: 'info' };
+      }
+      if (method === 'account/rateLimits/updated') {
+        return { content: 'Codex rate limits updated', emphasis: 'default' };
+      }
+      if (method === 'thread/tokenUsage/updated') {
+        return { content: 'Codex token usage updated', emphasis: 'default' };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  if (event.type === 'stderr' || event.type === 'error' || /error|failed/i.test(event.data)) {
+    return { content: event.data, emphasis: 'error' };
+  }
+
+  return { content: event.data, emphasis: 'default' };
+}
+
 export function LiveLogViewer({
   events,
   autoScroll = true,
@@ -40,26 +218,7 @@ export function LiveLogViewer({
   const contentRef = useRef<HTMLDivElement>(null);
   const [localAutoScroll, setLocalAutoScroll] = useState(autoScroll);
   const [copyFeedback, setCopyFeedback] = useState(false);
-
-  // Sanitize content - remove control characters and carriage returns
-  const sanitizeContent = (text: string): string => {
-    return text
-      .replace(/\r/g, '') // Remove carriage returns
-      .replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, ''); // Remove other control chars
-  };
-
-  // Split multi-line stdout/stderr events into individual lines
-  const processedEvents = events.flatMap((event) => {
-    if (event.type === 'stdout' || event.type === 'stderr') {
-      const lines = sanitizeContent(event.data).split('\n').filter(line => line !== '');
-      return lines.map((line, idx) => ({
-        ...event,
-        data: line,
-        id: event.id + idx * 0.1, // Keep related events grouped
-      }));
-    }
-    return [{ ...event, data: sanitizeContent(event.data) }];
-  });
+  const processedEvents = condenseLogEvents(events);
 
   // Filter by search term
   const filteredEvents = searchTerm
@@ -249,50 +408,18 @@ interface LogLineProps {
 }
 
 function LogLine({ event, searchTerm }: LogLineProps) {
-  const isToolUse = event.type === 'tool_use';
-  let toolColor = typeColors[event.type] || 'var(--text-primary)';
-
-  // tool_use: post-phase uses green to distinguish from pre-phase blue
-  if (isToolUse) {
-    try {
-      const d = JSON.parse(event.data);
-      if (d.phase === 'post') toolColor = 'var(--accent-green)';
-    } catch { /* keep default */ }
-  }
-
-  const color = isToolUse ? toolColor : (typeColors[event.type] || 'var(--text-primary)');
-  const isMarker = event.type === 'marker';
-  const isAssist = event.type === 'assist';
-  const isError = event.type === 'stderr' || event.type === 'error' || /error|failed/i.test(event.data);
-
-  let content = event.data;
-
-  if (isMarker) {
-    try {
-      const data = JSON.parse(event.data);
-      content = `▶ ${data.event?.toUpperCase() || event.data}`;
-    } catch {
-      content = `▶ ${event.data}`;
-    }
-  } else if (isAssist) {
-    try {
-      const data = JSON.parse(event.data);
-      content = `🔗 Assist: ${data.url || event.data}`;
-    } catch {
-      content = `🔗 ${event.data}`;
-    }
-  } else if (isToolUse) {
-    try {
-      const data = JSON.parse(event.data);
-      if (data.phase === 'pre') {
-        content = `⚙ [${data.tool}] ← ${data.input || ''}`;
-      } else {
-        content = `✓ [${data.tool}] → ${data.output || data.input || ''}`;
-      }
-    } catch {
-      content = event.data;
-    }
-  }
+  const formatted = formatLogEventDisplay(event);
+  const content = formatted.content;
+  const isError = formatted.emphasis === 'error';
+  const color = formatted.emphasis === 'success'
+    ? 'var(--accent-green)'
+    : formatted.emphasis === 'tool'
+      ? 'var(--accent-blue)'
+      : formatted.emphasis === 'info'
+        ? 'var(--accent-purple)'
+        : formatted.emphasis === 'warning'
+          ? 'var(--accent-yellow)'
+          : (typeColors[event.type] || 'var(--text-primary)');
 
   // Highlight search term
   if (searchTerm && content.toLowerCase().includes(searchTerm.toLowerCase())) {
@@ -302,12 +429,12 @@ function LogLine({ event, searchTerm }: LogLineProps) {
     return (
       <div
         style={{
-          padding: '4px 8px',
-          color,
-          fontWeight: isMarker || isAssist || isToolUse ? 600 : 400,
-          background: isError ? 'rgba(248, 81, 73, 0.05)' : undefined,
-          marginBottom: '2px',
-        }}
+        padding: '4px 8px',
+        color,
+        fontWeight: formatted.emphasis === 'info' || formatted.emphasis === 'tool' || formatted.emphasis === 'success' ? 600 : 400,
+        background: isError ? 'rgba(248, 81, 73, 0.05)' : undefined,
+        marginBottom: '2px',
+      }}
       >
         {parts.map((part, idx) =>
           part.toLowerCase() === searchTerm.toLowerCase() ? (
@@ -334,7 +461,7 @@ function LogLine({ event, searchTerm }: LogLineProps) {
       style={{
         padding: '4px 8px',
         color,
-        fontWeight: isMarker || isAssist ? 600 : 400,
+        fontWeight: formatted.emphasis === 'info' || formatted.emphasis === 'tool' || formatted.emphasis === 'success' ? 600 : 400,
         background: isError ? 'rgba(248, 81, 73, 0.05)' : undefined,
         marginBottom: '2px',
         whiteSpace: 'pre-wrap',

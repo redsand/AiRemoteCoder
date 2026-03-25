@@ -152,6 +152,8 @@ describe('runner executor helpers', () => {
       'turn/start',
       'turn/start',
     ]);
+    const threadStart = JSON.parse(writes[2].trim());
+    expect(threadStart.params.approvalPolicy).toBe('never');
     expect(events).toEqual([
       { type: 'stdout', data: 'reply:first prompt' },
       { type: 'stdout', data: 'reply:second prompt' },
@@ -204,6 +206,7 @@ describe('runner cli parsing', () => {
     expect(options.token).toBe('token-123');
     expect(options.provider).toBe('codex');
     expect(options.codexMode).toBe('app-server');
+    expect(options.codexApprovalPolicy).toBe('never');
     expect(options.runnerId).toMatch(/^[a-f0-9]{16}$/);
   });
 
@@ -218,7 +221,7 @@ describe('runner cli parsing', () => {
 
   it('allows argv to override env', () => {
     const options = parseRunnerOptions(
-      ['--gateway-url', 'http://other:3100', '--token', 't2', '--provider', 'gemini', '--exec-template', 'gemini run {input}'],
+      ['--gateway-url', 'http://other:3100', '--token', 't2', '--provider', 'gemini', '--exec-template', 'gemini run {input}', '--codex-approval-policy', 'on-request'],
       {
         AIREMOTECODER_GATEWAY_URL: 'http://gw:3100',
         AIREMOTECODER_MCP_TOKEN: 'token-123',
@@ -228,6 +231,7 @@ describe('runner cli parsing', () => {
     expect(options.token).toBe('t2');
     expect(options.provider).toBe('gemini');
     expect(options.execTemplate).toBe('gemini run {input}');
+    expect(options.codexApprovalPolicy).toBe('on-request');
     expect(options.runnerId).toMatch(/^[a-f0-9]{16}$/);
   });
 
@@ -286,6 +290,7 @@ describe('runner loop integration', () => {
       runnerId: 'runner-1',
       provider: 'codex',
       codexMode: 'app-server',
+      codexApprovalPolicy: 'never',
     }, { api: api as any, executor: executor as any });
 
     expect(result).toEqual({ claimedRunId: 'run-1', stopRun: true });

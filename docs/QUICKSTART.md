@@ -8,7 +8,7 @@ for durable execution on each host/project.
 - Node.js 20+
 - npm
 - A supported local coding environment
-  - Codex is the primary supported path
+  - Codex is the only production-ready runner path today
 
 ## Start the app locally
 
@@ -31,6 +31,7 @@ Default URLs:
 3. Open the MCP page.
 4. Generate an MCP token.
 5. Copy the provider setup snippet for your coding environment.
+6. If you want production runner execution, use Codex first.
 
 ## Codex setup
 

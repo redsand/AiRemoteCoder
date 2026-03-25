@@ -22,6 +22,7 @@ import { healthRoutes } from './routes/health.js';
 import { vncRoutes } from './routes/vnc.js';
 import { mcpPlugin } from './mcp/plugin.js';
 import { mcpSetupRoutes } from './routes/mcp-setup.js';
+import { shouldBypassRateLimit } from './services/rate-limit.js';
 
 // Validate configuration
 validateConfig();
@@ -87,12 +88,7 @@ await fastify.register(fastifyRateLimit, {
   max: config.rateLimit.max,
   timeWindow: config.rateLimit.timeWindow,
   allowList: (request: FastifyRequest) => {
-    const url = request.raw.url || '';
-    if (url.startsWith('/ws/vnc/')) return true;
-    if (/^\/api\/runs\/[^/]+\/vnc/.test(url)) return true;
-    // MCP has its own rate limit applied inside mcpPlugin
-    if (url === config.mcpPath || url.startsWith(config.mcpPath + '?')) return true;
-    return false;
+    return shouldBypassRateLimit(request.raw.url, config.mcpPath);
   },
   keyGenerator: (request) => {
     // Use CF header if behind Cloudflare

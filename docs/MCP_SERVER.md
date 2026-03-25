@@ -418,6 +418,7 @@ PY
 export AIREMOTECODER_GATEWAY_URL="http://localhost:3100"
 export AIREMOTECODER_PROVIDER="codex"
 export AIREMOTECODER_CODEX_MODE="app-server"
+export AIREMOTECODER_CODEX_APPROVAL_POLICY="never"
 export AIREMOTECODER_RUNNER_ID="$(hostname):$PWD"
 npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
@@ -453,6 +454,7 @@ bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
 $env:AIREMOTECODER_GATEWAY_URL="http://localhost:3100"
 $env:AIREMOTECODER_PROVIDER="codex"
 $env:AIREMOTECODER_CODEX_MODE="app-server"
+$env:AIREMOTECODER_CODEX_APPROVAL_POLICY="never"
 $env:AIREMOTECODER_RUNNER_ID="$env:COMPUTERNAME:$((Get-Location).Path)"
 npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$env:AIREMOTECODER_RUNNER_ID"
 ```
@@ -469,14 +471,16 @@ export AIREMOTECODER_GATEWAY_URL=http://localhost:3100
 export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
 export AIREMOTECODER_PROVIDER=codex
 export AIREMOTECODER_CODEX_MODE=app-server
+export AIREMOTECODER_CODEX_APPROVAL_POLICY=never
 export AIREMOTECODER_RUNNER_ID="$(hostname):$PWD"
 npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
 `app-server` is the primary Codex transport. Set `AIREMOTECODER_CODEX_MODE=exec` to run one-shot `codex exec` for each prompt. `interactive` remains legacy fallback only.
+Set `AIREMOTECODER_CODEX_APPROVAL_POLICY=never` for the current MVP path so turns do not block on app-server approval requests that are not yet bridged back into the UI.
 For persistent install, run `npm install -g @ai-remote-coder/mcp-runner@latest` and start with `airc-mcp-runner`.
 
-For non-Codex providers set:
+For non-Codex providers the runner currently supports only manual `execTemplate` fallback:
 
 ```bash
 export AIREMOTECODER_PROVIDER=<provider>
@@ -484,6 +488,7 @@ export AIREMOTECODER_EXEC_TEMPLATE="<provider-cli> ... {input}"
 ```
 
 `{input}` is required and is replaced with the queued prompt payload.
+This is not equivalent to the Codex app-server path and should not be treated as production-ready runner support yet.
 
 Worker endpoints used:
 
