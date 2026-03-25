@@ -237,7 +237,7 @@ PY`,
     };
   };
 
-  const buildCodexSnippet = (persistEnv: boolean, gatewayBaseUrl: string) => {
+  const buildCodexSnippet = (persistEnv: boolean) => {
     const envPrefix = buildEnvPrefix('AIREMOTECODER_MCP_TOKEN', token, persistEnv);
     const manualToml = `[mcp_servers.airemotecoder]
 url = "${mcpUrl}"
@@ -343,7 +343,7 @@ bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
     }
 
     case 'codex': {
-      return buildCodexSnippet(Boolean(options.persistEnv), mcpUrl.replace(/\/mcp\/?$/, ''));
+      return buildCodexSnippet(Boolean(options.persistEnv));
     }
 
     case 'gemini': {
