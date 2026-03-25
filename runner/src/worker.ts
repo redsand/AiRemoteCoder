@@ -556,8 +556,10 @@ export class ClaudeCliExecutor implements WorkerExecutor {
   async sendInput(input: string, emit: (type: EventType, data: string) => Promise<void>): Promise<void> {
     const args = this.buildArgs();
     const command = this.options.command ?? 'claude';
+    const sessionFlag = this.cliSessionId ? `resume=${this.cliSessionId}` : 'session=new';
 
     await emit('info', `Executing Claude prompt (${input.length} chars)`);
+    logRunnerInfo(`launching Claude (${sessionFlag}, permissionMode=${this.options.permissionMode ?? 'acceptEdits'})`);
 
     await new Promise<void>((resolve, reject) => {
       const child = this.spawnFn(command, [...args, '--', input], {
@@ -570,8 +572,20 @@ export class ClaudeCliExecutor implements WorkerExecutor {
       const result: ClaudeResultState = { ok: true };
       let stdoutBuffer = '';
       let stderrBuffer = '';
+      let sawOutput = false;
+      let lastActivityAt = Date.now();
+      const inactivityTimer = setInterval(() => {
+        const idleMs = Date.now() - lastActivityAt;
+        if (idleMs >= 10000) {
+          logRunnerInfo(`Claude turn still waiting after ${Math.floor(idleMs / 1000)}s with no output`);
+          lastActivityAt = Date.now();
+        }
+      }, 5000);
+      const clearWatchdog = () => clearInterval(inactivityTimer);
 
       child.stdout?.on('data', (chunk: Buffer | string) => {
+        sawOutput = true;
+        lastActivityAt = Date.now();
         stdoutBuffer += chunk.toString();
         const lines = stdoutBuffer.split(/\r?\n/);
         stdoutBuffer = lines.pop() ?? '';
@@ -584,25 +598,38 @@ export class ClaudeCliExecutor implements WorkerExecutor {
 
       child.stderr?.on('data', (chunk: Buffer | string) => {
         const text = chunk.toString();
+        sawOutput = true;
+        lastActivityAt = Date.now();
         stderrBuffer += text;
+        logRunnerInfo(`Claude stderr: ${text.trim()}`);
         void emit('stderr', text);
       });
 
-      child.on('error', reject);
+      child.on('error', (err) => {
+        clearWatchdog();
+        reject(err);
+      });
       child.on('close', (code) => {
+        clearWatchdog();
         if (stdoutBuffer.trim().length > 0) {
           this.parseStreamJsonLine(stdoutBuffer.trim(), emit, result);
           stdoutBuffer = '';
         }
+        if (!sawOutput) {
+          logRunnerInfo('Claude exited without any stdout/stderr output');
+        }
         if (result.ok && code === 0) {
+          logRunnerInfo('Claude turn completed successfully');
           resolve();
           return;
         }
         if (result.error) {
+          logRunnerError(`Claude turn failed: ${result.error.message}`);
           reject(result.error);
           return;
         }
         const stderrText = stderrBuffer.trim();
+        logRunnerError(`Claude exited with code ${code}${stderrText ? `: ${stderrText}` : ''}`);
         reject(new Error(stderrText || `claude exited with code ${code}`));
       });
 

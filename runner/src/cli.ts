@@ -59,6 +59,10 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
 
 async function main(): Promise<void> {
   const options = parseRunnerOptions(process.argv.slice(2), process.env);
+  // eslint-disable-next-line no-console
+  console.info(
+    `[airc-mcp-runner] starting provider=${options.provider} runnerId=${options.runnerId} cwd=${process.cwd()} gateway=${options.gatewayUrl}`,
+  );
   await runLoop(options);
 }
 

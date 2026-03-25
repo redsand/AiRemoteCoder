@@ -395,6 +395,32 @@ describe('runner executor helpers', () => {
     expect(executor.snapshotState?.()).toEqual({ cliSessionId: 'session-restored' });
   });
 
+  it('logs Claude launch metadata and completion to the terminal', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const spawnFn = vi.fn(() => {
+      const child = new EventEmitter() as any;
+      child.stdin = { end: vi.fn() };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          session_id: 'session-ok',
+        })}\n`));
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any });
+    await executor.sendInput('hello', async () => {});
+
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('launching Claude'));
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Claude turn completed successfully'));
+    infoSpy.mockRestore();
+  });
+
   it('collects git diff and changed files for synthesized change reporting', async () => {
     const spawnFn = vi.fn((command: string, args: string[]) => {
       const child = new EventEmitter() as any;
