@@ -2,9 +2,11 @@ import { EventEmitter } from 'events';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildExecInvocation,
+  CodexAppServerExecutor,
   handleWorkerCommand,
   isExpectedIdleClaimError,
   PersistentCodexExecutor,
+  runLoopOnce,
 } from './worker.js';
 import { parseRunnerOptions } from './cli.js';
 
@@ -90,6 +92,105 @@ describe('runner executor helpers', () => {
     expect(stdinWrite).toHaveBeenCalledWith('first\n');
     expect(stdinWrite).toHaveBeenCalledWith('second\n');
   });
+
+  it('uses codex app-server to maintain a conversational thread across inputs', async () => {
+    const writes: string[] = [];
+    const child = new EventEmitter() as any;
+    child.stdin = {
+      write: vi.fn((chunk: string) => {
+        writes.push(chunk);
+        const messages = chunk
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line));
+        for (const message of messages) {
+          if (message.method === 'initialize') {
+            child.stdout.emit('data', Buffer.from(`${JSON.stringify({ id: message.id, result: {} })}\n`));
+          } else if (message.method === 'thread/start') {
+            child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+              id: message.id,
+              result: { thread: { id: 'thread-1' } },
+            })}\n`));
+          } else if (message.method === 'turn/start') {
+            const turnId = `turn-${message.id}`;
+            child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+              id: message.id,
+              result: { turn: { id: turnId } },
+            })}\n`));
+            child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+              method: 'item/agentMessage/delta',
+              params: { turnId, delta: `reply:${message.params.input[0].text}` },
+            })}\n`));
+            child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+              method: 'turn/completed',
+              params: { turn: { id: turnId, status: 'completed', result: 'ok' } },
+            })}\n`));
+          }
+        }
+      }),
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+
+    const spawnFn = vi.fn(() => child);
+    const executor = new CodexAppServerExecutor({ spawnFn: spawnFn as any });
+    const events: Array<{ type: string; data: string }> = [];
+
+    await executor.sendInput('first prompt', async (type, data) => {
+      events.push({ type, data });
+    });
+    await executor.sendInput('second prompt', async (type, data) => {
+      events.push({ type, data });
+    });
+
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(writes.map((line) => JSON.parse(line.trim()).method)).toEqual([
+      'initialize',
+      'initialized',
+      'thread/start',
+      'turn/start',
+      'turn/start',
+    ]);
+    expect(events).toEqual([
+      { type: 'stdout', data: 'reply:first prompt' },
+      { type: 'stdout', data: 'reply:second prompt' },
+    ]);
+  });
+
+  it('surfaces codex app-server turn failures', async () => {
+    const child = new EventEmitter() as any;
+    child.stdin = {
+      write: vi.fn((chunk: string) => {
+        const message = JSON.parse(chunk.trim());
+        if (message.method === 'initialize') {
+          child.stdout.emit('data', Buffer.from(`${JSON.stringify({ id: message.id, result: {} })}\n`));
+        } else if (message.method === 'thread/start') {
+          child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+            id: message.id,
+            result: { thread: { id: 'thread-1' } },
+          })}\n`));
+        } else if (message.method === 'turn/start') {
+          const turnId = `turn-${message.id}`;
+          child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+            id: message.id,
+            result: { turn: { id: turnId } },
+          })}\n`));
+          child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+            method: 'turn/completed',
+            params: { turn: { id: turnId, status: 'failed', error: { message: 'denied' } } },
+          })}\n`));
+        }
+      }),
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+
+    const executor = new CodexAppServerExecutor({ spawnFn: vi.fn(() => child) as any });
+
+    await expect(executor.sendInput('explode', async () => {})).rejects.toThrow('denied');
+  });
 });
 
 describe('runner cli parsing', () => {
@@ -98,12 +199,11 @@ describe('runner cli parsing', () => {
       AIREMOTECODER_GATEWAY_URL: 'http://gw:3100',
       AIREMOTECODER_MCP_TOKEN: 'token-123',
       AIREMOTECODER_PROVIDER: 'codex',
-      AIREMOTECODER_CODEX_MODE: 'exec',
     });
     expect(options.gatewayUrl).toBe('http://gw:3100');
     expect(options.token).toBe('token-123');
     expect(options.provider).toBe('codex');
-    expect(options.codexMode).toBe('exec');
+    expect(options.codexMode).toBe('app-server');
     expect(options.runnerId).toMatch(/^[a-f0-9]{16}$/);
   });
 
@@ -156,5 +256,47 @@ describe('runner error classification', () => {
 
   it('does not suppress unrelated errors', () => {
     expect(isExpectedIdleClaimError(new Error('POST /api/mcp/runs/claim failed (500): boom'))).toBe(false);
+  });
+});
+
+describe('runner loop integration', () => {
+  it('claims a run, emits started, processes commands, and stops cleanly', async () => {
+    const api = {
+      claimRun: vi.fn().mockResolvedValue({
+        run: { id: 'run-1', command: 'bootstrap task', workerType: 'codex' },
+      }),
+      pollCommands: vi.fn().mockResolvedValue([
+        { id: 'cmd-1', command: '__INPUT__', arguments: 'follow up' },
+        { id: 'cmd-stop', command: '__STOP__' },
+      ]),
+      ackCommand: vi.fn().mockResolvedValue({ ok: true }),
+      sendEvent: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const executor = {
+      sendInput: vi.fn(async (input: string, emit: (type: string, data: string) => Promise<void>) => {
+        await emit('stdout', `done:${input}`);
+      }),
+      interrupt: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await runLoopOnce({
+      gatewayUrl: 'http://localhost:3100',
+      token: 'token-1',
+      runnerId: 'runner-1',
+      provider: 'codex',
+      codexMode: 'app-server',
+    }, { api: api as any, executor: executor as any });
+
+    expect(result).toEqual({ claimedRunId: 'run-1', stopRun: true });
+    expect(executor.sendInput).toHaveBeenNthCalledWith(1, 'bootstrap task', expect.any(Function));
+    expect(executor.sendInput).toHaveBeenNthCalledWith(2, 'follow up', expect.any(Function));
+    expect(api.sendEvent).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ type: 'marker', data: expect.stringContaining('"started"') }),
+    );
+    expect(api.ackCommand).toHaveBeenCalledWith('run-1', 'cmd-1', 'ok');
+    expect(api.ackCommand).toHaveBeenCalledWith('run-1', 'cmd-stop', 'stopped');
+    expect(executor.shutdown).toHaveBeenCalledTimes(1);
   });
 });

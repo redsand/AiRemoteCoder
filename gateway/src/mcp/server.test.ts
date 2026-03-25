@@ -109,7 +109,7 @@ vi.mock('../config.js', () => ({
     approvalTimeoutSeconds: 300,
     maxArtifactSize: 52428800,
     providers: {
-      claude: true, codex: true, gemini: true, opencode: true, rev: true, legacyWrapper: false,
+      claude: true, codex: true, gemini: true, opencode: true, zenflow: true, rev: true,
     },
   },
 }));
@@ -266,11 +266,11 @@ describe('MCP tool: get_agent_capabilities', () => {
     expect(data.enabledProviders).toContain('claude');
   });
 
-  it('legacy_wrapper is absent when disabled', async () => {
+  it('returns only supported MCP providers', async () => {
     const result = await callTool('get_agent_capabilities', {}, adminCtx());
     const data = JSON.parse(result.content[0].text);
-    // config mock has legacyWrapper: false
-    expect(data.capabilities.legacy_wrapper).toBeUndefined();
+    expect(data.capabilities.unsupported_provider).toBeUndefined();
+    expect(data.enabledProviders).toContain('zenflow');
   });
 });
 

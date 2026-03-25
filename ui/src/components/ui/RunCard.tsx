@@ -8,9 +8,6 @@ export interface Run {
   command?: string | null;
   repo_name?: string | null;
   repo_path?: string | null;
-  client_id?: string | null;
-  client_name?: string | null;
-  client_status?: string | null;
   created_at: number;
   started_at?: number | null;
   finished_at?: number | null;
@@ -30,7 +27,6 @@ export interface Run {
 interface RunCardProps {
   run: Run;
   compact?: boolean;
-  showClient?: boolean;
   onClick?: () => void;
 }
 
@@ -80,7 +76,7 @@ function getWorkerColor(workerType: string | null): string {
   return colors[workerType || 'claude'] || '#6B7280';
 }
 
-export function RunCard({ run, compact = false, showClient = true, onClick }: RunCardProps) {
+export function RunCard({ run, compact = false, onClick }: RunCardProps) {
   const navigate = useNavigate();
   const handleClick = onClick || (() => navigate(`/runs/${run.id}`));
 
@@ -223,12 +219,6 @@ export function RunCard({ run, compact = false, showClient = true, onClick }: Ru
                 alignItems: 'center',
               }}
             >
-              {showClient && run.client_name && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <span style={{ fontSize: '10px' }}>\uD83D\uDCBB</span>
-                  {run.client_name}
-                </span>
-              )}
               {run.repo_name && (
                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <span style={{ fontSize: '10px' }}>\uD83D\uDCC1</span>
@@ -282,7 +272,7 @@ export function RunCard({ run, compact = false, showClient = true, onClick }: Ru
 }
 
 // List variant for tables
-export function RunRow({ run, showClient = true, onClick }: RunCardProps) {
+export function RunRow({ run, onClick }: RunCardProps) {
   const navigate = useNavigate();
   const handleClick = onClick || (() => navigate(`/runs/${run.id}`));
 
@@ -306,9 +296,6 @@ export function RunRow({ run, showClient = true, onClick }: RunCardProps) {
       <td style={{ padding: '10px 12px', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {run.label || run.command?.slice(0, 40) || '-'}
       </td>
-      {showClient && (
-        <td style={{ padding: '10px 12px' }}>{run.client_name || '-'}</td>
-      )}
       <td style={{ padding: '10px 12px', fontSize: '12px', color: 'var(--text-secondary)' }}>
         {formatRelativeTime(run.created_at)}
       </td>

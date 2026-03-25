@@ -15,7 +15,6 @@ export interface McpConfig {
   availableScopes: string[];
   defaultAgentScopes: string[];
   enabledProviders: string[];
-  legacyWrapperDeprecated: boolean;
   connectionInstructions: Record<string, McpConnectionInstruction>;
 }
 

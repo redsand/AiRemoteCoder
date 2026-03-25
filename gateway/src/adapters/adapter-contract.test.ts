@@ -4,8 +4,7 @@
  * Every ProviderAdapter implementation must pass these tests.
  * Add new adapters to the `adapters` array as they are implemented.
  *
- * The LegacyWrapperAdapter is included here (marked deprecated) so its
- * contract compliance is verified until removal.
+ * Add adapters here as they become the production implementation.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -27,11 +26,7 @@ vi.mock('../services/database.js', () => ({
 // ---------------------------------------------------------------------------
 
 async function getAdapters(): Promise<Array<{ name: string; adapter: ProviderAdapter }>> {
-  const { LegacyWrapperAdapter } = await import('./legacy-wrapper.js');
-  return [
-    { name: 'LegacyWrapperAdapter (deprecated)', adapter: new LegacyWrapperAdapter() },
-    // Future: { name: 'ClaudeAdapter', adapter: new ClaudeAdapter() },
-  ];
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -41,6 +36,10 @@ async function getAdapters(): Promise<Array<{ name: string; adapter: ProviderAda
 describe('ProviderAdapter contract', async () => {
   const adapters = await getAdapters();
 
+  it('has no legacy adapter implementations registered', () => {
+    expect(adapters).toHaveLength(0);
+  });
+
   for (const { name, adapter } of adapters) {
     describe(name, () => {
       it('has a non-empty provider name', () => {
@@ -49,7 +48,7 @@ describe('ProviderAdapter contract', async () => {
       });
 
       it('provider is a known ProviderName', () => {
-        const known: ProviderName[] = ['claude', 'codex', 'gemini', 'opencode', 'rev', 'legacy_wrapper'];
+        const known: ProviderName[] = ['claude', 'codex', 'gemini', 'opencode', 'zenflow', 'rev'];
         expect(known).toContain(adapter.provider);
       });
 

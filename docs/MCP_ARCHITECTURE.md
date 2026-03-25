@@ -14,8 +14,8 @@ but it is inherently fragile:
 - Every provider requires bespoke buffer-parsing logic
 
 The MCP control plane replaces this fragile substrate with a structured,
-provider-neutral protocol while preserving all existing functionality during
-the transition.
+provider-neutral protocol. AiRemoteCoder no longer supports the old wrapper
+control path.
 
 ---
 
@@ -27,7 +27,7 @@ the transition.
 │                                                                     │
 │  ┌─────────────────────────┐   ┌──────────────────────────────────┐ │
 │  │    HUMAN INTERFACE      │   │      MCP CONTROL PLANE           │ │
-│  │    (unchanged)          │   │      (new, additive)             │ │
+│  │    (unchanged)          │   │      (primary)                   │ │
 │  │                         │   │                                  │ │
 │  │  React UI  (HTTPS)      │   │  POST /mcp                       │ │
 │  │  WebSocket /ws          │   │  GET  /mcp  (SSE)                │ │
@@ -48,12 +48,6 @@ the transition.
 │   │  │ Claude │ │ Codex  │ │ Gemini │ │ OpenCode │ │  Rev  │   │   │
 │   │  │ Adapter│ │ Adapter│ │ Adapter│ │ Adapter  │ │Adapter│   │   │
 │   │  └────────┘ └────────┘ └────────┘ └──────────┘ └───────┘   │   │
-│   │                                                             │   │
-│   │  ┌─────────────────────────────────────────────────────┐   │   │
-│   │  │  LegacyWrapperAdapter  (@deprecated)                │   │   │
-│   │  │  Compatibility shim for existing subprocess wrappers│   │   │
-│   │  │  ⚠  Scheduled for removal in next major release     │   │   │
-│   │  └─────────────────────────────────────────────────────┘   │   │
 │   └─────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
@@ -81,7 +75,6 @@ the transition.
 | Existing secure channel is the canonical human-facing interface | The React UI + WebSocket path remains unchanged; it is not replaced by chat platforms |
 | Gateway is the state authority | Orchestrator owns run/session state; adapters are stateless execution engines |
 | Provider quirks stay inside adapters | No Claude-specific or Codex-specific logic leaks into the orchestrator or MCP tools |
-| Additive migration | Legacy wrappers continue to work until the adapter layer is proven; no big-bang rewrite |
 | Replay-safe | Every important transition is written to the event log before it takes effect |
 
 ---
@@ -117,14 +110,14 @@ in-memory on the gateway; in a multi-instance deployment, move to Redis.
 
 ```
 1. Agent calls MCP tool create_run  →  Run record inserted (pending)
-2. Legacy wrapper claims run  →  Run status = running  (or native adapter starts)
-3. Agent output → POST /api/ingest/event  →  Event log  →  WebSocket  →  UI
+2. `airc-mcp-runner` claims run  →  Run status = running
+3. Runner streams structured events  →  Event log  →  WebSocket  →  UI
 4. Human sends command from phone  →  POST /api/runs/:id/commands
-5. Wrapper polls + executes command
+5. Runner polls + executes command
 6. Agent calls create_approval_request  →  Run status = waiting_approval
-7. Human approves from UI  →  PUT /api/mcp/approvals/:id  or  POST approve_action
+7. Human approves from UI  →  POST approve_action / deny_action
 8. Approval resolved  →  Run resumes
-9. Run finishes  →  Artifacts uploaded  →  Events broadcast  →  UI notified
+9. Run finishes  →  Artifacts recorded  →  Events broadcast  →  UI notified
 ```
 
 ---
@@ -139,9 +132,8 @@ in-memory on the gateway; in a multi-instance deployment, move to Redis.
 | `gateway/src/domain/types.ts` | Canonical entity types shared across all layers |
 | `gateway/src/adapters/types.ts` | ProviderAdapter interface |
 | `gateway/src/adapters/registry.ts` | Adapter registry |
-| `gateway/src/adapters/legacy-wrapper.ts` | Deprecated compatibility shim |
 | `gateway/src/services/database.ts` | Schema including new mcp_tokens + approval_requests tables |
-| `gateway/src/config.ts` | Feature flags: AIRC_MCP_ENABLED, AIRC_PROVIDER_*, AIRC_LEGACY_WRAPPERS_ENABLED |
+| `gateway/src/config.ts` | Feature flags: AIRC_MCP_ENABLED, AIRC_PROVIDER_* |
 
 ---
 
@@ -159,7 +151,6 @@ in-memory on the gateway; in a multi-instance deployment, move to Redis.
 | `AIRC_PROVIDER_OPENCODE` | `true` | Enable OpenCode adapter |
 | `AIRC_PROVIDER_ZENFLOW` | `true` | Enable Zenflow adapter |
 | `AIRC_PROVIDER_REV` | `true` | Enable Rev adapter |
-| `AIRC_LEGACY_WRAPPERS_ENABLED` | `true` | Enable deprecated legacy wrapper compatibility |
 | `AIRC_APPROVAL_TIMEOUT` | `300` | Default approval timeout in seconds |
 
 ---
@@ -180,14 +171,11 @@ See `docs/SECURITY.md` for the full threat model.
 
 ---
 
-## Migration from legacy wrappers
+## Runtime model
 
-See `docs/MIGRATION_FROM_LEGACY.md` for the full migration guide.
-
-Short version:
-1. Deploy this release — everything still works
-2. Generate an MCP token via the UI (`/mcp` page)
-3. Configure your agent runtime to connect to `/mcp`
-4. Validate that the native MCP path works for your use case
-5. Set `AIRC_LEGACY_WRAPPERS_ENABLED=false` once migration is complete
-6. Legacy wrapper code will be removed in the next major release
+AiRemoteCoder now supports one execution model:
+1. Generate MCP setup from the UI
+2. Configure your coding agent to connect to `/mcp`
+3. Install `airc-mcp-runner`
+4. Start `airc-mcp-runner --runner-id <host-project-id>` in the target project
+5. Create runs from the UI and let the helper claim them

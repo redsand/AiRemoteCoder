@@ -49,7 +49,7 @@ export function Clients(_props: Props) {
         <div style={{ width: '100%' }}>
           <h2 className="page-title">Connected MCP Runners</h2>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-            MCP hosts are the primary runtime. Legacy ai-runner workflow is being removed.
+            MCP hosts and the helper runner are the only supported runtime path.
           </div>
           <div style={{ marginTop: '10px', display: 'flex', gap: '12px', fontSize: '13px', color: 'var(--text-secondary)' }}>
             <span style={{ color: 'var(--accent-green)' }}>● {sessions.length} active sessions</span>
@@ -111,4 +111,3 @@ export function Clients(_props: Props) {
 }
 
 export default Clients;
-

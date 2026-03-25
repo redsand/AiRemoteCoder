@@ -1,4 +1,3 @@
-import { useNavigate } from 'react-router-dom';
 import { StatusPill, ConnectionStatus } from './StatusPill';
 
 export interface Client {
@@ -35,8 +34,7 @@ function formatRelativeTime(timestamp: number): string {
 }
 
 export function ClientCard({ client, compact = false, onClick }: ClientCardProps) {
-  const navigate = useNavigate();
-  const handleClick = onClick || (() => navigate(`/clients/${client.id}`));
+  const handleClick = onClick || (() => {});
 
   return (
     <div
@@ -209,8 +207,7 @@ export function ClientCard({ client, compact = false, onClick }: ClientCardProps
 
 // List variant for tables
 export function ClientRow({ client, onClick }: ClientCardProps) {
-  const navigate = useNavigate();
-  const handleClick = onClick || (() => navigate(`/clients/${client.id}`));
+  const handleClick = onClick || (() => {});
 
   return (
     <tr

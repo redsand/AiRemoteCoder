@@ -39,7 +39,7 @@ vi.mock('../config.js', () => ({
       gemini: true,
       opencode: true,
       rev: true,
-      legacyWrapper: true,
+      zenflow: true,
     },
   },
 }));
@@ -51,7 +51,6 @@ function cleanup() {
   db.prepare('DELETE FROM artifacts').run();
   db.prepare('DELETE FROM events').run();
   db.prepare('DELETE FROM runs').run();
-  db.prepare('DELETE FROM clients').run();
   db.prepare('DELETE FROM alerts').run();
 }
 
@@ -71,7 +70,6 @@ describe('routes/dashboard', () => {
     await app.ready();
     db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
     db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
-    db.prepare(`INSERT INTO clients (id, display_name, agent_id, status, last_seen_at) VALUES ('client-1', 'Agent One', 'agent-1', 'offline', ?)`).run(Math.floor(Date.now() / 1000) - 120);
   });
 
   afterEach(async () => {
@@ -79,13 +77,13 @@ describe('routes/dashboard', () => {
     cleanup();
   });
 
-  it('summarizes runs, alerts, and disconnected clients that need attention', async () => {
+  it('summarizes runs and alerts that need attention', async () => {
     db.prepare(`
-      INSERT INTO runs (id, client_id, status, label, command, capability_token, waiting_approval, created_at, finished_at, error_message, worker_type)
+      INSERT INTO runs (id, status, label, command, capability_token, waiting_approval, created_at, finished_at, error_message, worker_type)
       VALUES
-      ('run-1', 'client-1', 'waiting_approval', 'Awaiting approval', 'npm test', 'cap-1', 1, ?, NULL, NULL, 'claude'),
-      ('run-2', 'client-1', 'failed', 'Failed run', 'npm test', 'cap-2', 0, ?, ?, 'boom', 'claude'),
-      ('run-3', 'client-1', 'running', 'Active run', 'npm test', 'cap-3', 0, ?, NULL, NULL, 'claude')
+      ('run-1', 'pending', 'Awaiting approval', 'npm test', 'cap-1', 1, ?, NULL, NULL, 'claude'),
+      ('run-2', 'failed', 'Failed run', 'npm test', 'cap-2', 0, ?, ?, 'boom', 'claude'),
+      ('run-3', 'running', 'Active run', 'npm test', 'cap-3', 0, ?, NULL, NULL, 'claude')
     `).run(
       Math.floor(Date.now() / 1000) - 1000,
       Math.floor(Date.now() / 1000) - 2000,
@@ -107,20 +105,18 @@ describe('routes/dashboard', () => {
     const body = res.json() as {
       waitingApproval: any[];
       failedRuns: any[];
-      disconnectedWithRuns: any[];
       unacknowledgedAlerts: any[];
-      counts: { waitingApproval: number; failedRuns: number; disconnectedWithRuns: number; unacknowledgedAlerts: number };
+      counts: { waitingApproval: number; failedRuns: number; unacknowledgedAlerts: number };
     };
     expect(body.counts.waitingApproval).toBe(1);
     expect(body.counts.failedRuns).toBe(1);
-    expect(body.counts.disconnectedWithRuns).toBe(1);
     expect(body.counts.unacknowledgedAlerts).toBe(1);
   });
 
   it('returns active runs and recent activity', async () => {
     db.prepare(`
-      INSERT INTO runs (id, client_id, status, label, command, capability_token, waiting_approval, created_at, started_at, worker_type)
-      VALUES ('run-1', 'client-1', 'running', 'Active run', 'npm test', 'cap-1', 0, ?, ?, 'claude')
+      INSERT INTO runs (id, status, label, command, capability_token, waiting_approval, created_at, started_at, worker_type)
+      VALUES ('run-1', 'running', 'Active run', 'npm test', 'cap-1', 0, ?, ?, 'claude')
     `).run(Math.floor(Date.now() / 1000) - 60, Math.floor(Date.now() / 1000) - 30);
     db.prepare(`
       INSERT INTO commands (id, run_id, command, status, created_at, acked_at)
@@ -154,8 +150,8 @@ describe('routes/dashboard', () => {
 
   it('returns overall dashboard stats', async () => {
     db.prepare(`
-      INSERT INTO runs (id, client_id, status, label, command, capability_token, worker_type)
-      VALUES ('run-1', 'client-1', 'done', 'Done run', 'npm test', 'cap-1', 'claude')
+      INSERT INTO runs (id, status, label, command, capability_token, worker_type)
+      VALUES ('run-1', 'done', 'Done run', 'npm test', 'cap-1', 'claude')
     `).run();
     db.prepare(`
       INSERT INTO events (run_id, type, data, timestamp, sequence)
@@ -171,7 +167,6 @@ describe('routes/dashboard', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       runs: expect.objectContaining({ total: 1, done: 1 }),
-      clients: expect.objectContaining({ total: 1, offline: 1 }),
       alerts: expect.objectContaining({ unacknowledged: 0 }),
     });
   });

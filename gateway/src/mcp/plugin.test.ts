@@ -92,7 +92,7 @@ vi.mock('../config.js', () => ({
     mcpRateLimit: { max: 300, timeWindow: '1 minute' },
     tlsEnabled: false,
     port: 3100,
-    providers: { claude: true, codex: true, gemini: true, opencode: true, rev: true, legacyWrapper: false },
+    providers: { claude: true, codex: true, gemini: true, opencode: true, zenflow: true, rev: true },
     allowlistedCommands: [],
     approvalTimeoutSeconds: 300,
     maxArtifactSize: 52428800,
@@ -186,12 +186,12 @@ describe('GET /api/mcp/config', () => {
     await app.close();
   });
 
-  it('marks legacy_wrapper as deprecated when enabled', async () => {
+  it('returns only MCP-native providers in enabledProviders', async () => {
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/api/mcp/config' });
     const body = res.json();
-    // legacyWrapper is false in mock config so it should not appear
-    expect(body.enabledProviders).not.toContain('legacy_wrapper');
+    expect(body.enabledProviders).toEqual(expect.arrayContaining(['claude', 'codex', 'gemini', 'opencode', 'zenflow', 'rev']));
+    expect(body).not.toHaveProperty('legacyWrapperDeprecated');
     await app.close();
   });
 });

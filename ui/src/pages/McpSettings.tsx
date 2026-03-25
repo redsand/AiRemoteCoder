@@ -258,7 +258,7 @@ export function McpSettings(_props: Props) {
           <h1>🔌 MCP Control Plane</h1>
           <p>
             Connect your AI coding agents to AiRemoteCoder in seconds.
-            MCP is now the primary control path; the legacy wrapper flow is only compatibility support.
+            MCP plus the helper runner is now the only supported control path.
           </p>
         </div>
         <div className="mcp-hero-stats">
@@ -288,12 +288,6 @@ export function McpSettings(_props: Props) {
       {!mcpConfig?.enabled && (
         <div className="alert alert-warning">
           MCP is disabled. Set <code>AIRC_MCP_ENABLED=true</code> and restart the gateway.
-        </div>
-      )}
-
-      {mcpConfig?.legacyWrapperDeprecated && (
-        <div className="alert alert-warning">
-          <strong>Legacy wrapper mode is deprecated</strong> and will be removed after MCP migration confidence is high.
         </div>
       )}
 

@@ -19,9 +19,6 @@ interface Run {
   command: string | null;
   repo_path: string | null;
   repo_name: string | null;
-  client_id: string | null;
-  client_name: string | null;
-  client_status: string | null;
   waiting_approval: number;
   created_at: number;
   started_at: number | null;
@@ -711,12 +708,6 @@ export function RunDetail({ user }: Props) {
           <span>
             <strong>ID:</strong> <code>{run.id}</code>
           </span>
-          {run.client_name && (
-            <span>
-              <strong>Client:</strong>{' '}
-              <Link to={`/clients/${run.client_id}`}>{run.client_name}</Link>
-            </span>
-          )}
           {run.repo_name && (
             <span>
               <strong>Repo:</strong> {run.repo_name}

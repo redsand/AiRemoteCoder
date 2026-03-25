@@ -239,7 +239,7 @@ export async function mcpPlugin(fastify: FastifyInstance) {
     const mcpUrl = `${proto}://${host}${config.mcpPath}`;
 
     const enabledProviders = Object.entries(config.providers)
-      .filter(([key, val]) => val && key !== 'legacyWrapper')
+      .filter(([, val]) => val)
       .map(([key]) => key);
 
     return reply.send({
@@ -250,7 +250,6 @@ export async function mcpPlugin(fastify: FastifyInstance) {
       availableScopes: ALL_MCP_SCOPES,
       defaultAgentScopes: DEFAULT_AGENT_SCOPES,
       enabledProviders,
-      legacyWrapperDeprecated: config.providers.legacyWrapper,
       connectionInstructions: buildConnectionInstructions(mcpUrl),
     });
   });

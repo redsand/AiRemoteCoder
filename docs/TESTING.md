@@ -7,28 +7,25 @@ This document outlines the comprehensive test coverage for the Connect-Back Gate
 ## Running Tests
 
 ```bash
-# All tests (gateway and wrapper)
+# All tests
 npm test
 
-# MCP MVP focus (gateway + ui, excludes legacy wrapper)
+# MCP MVP focus
 npm run test:mvp
 
 # Run tests for a specific workspace
 cd gateway && npm test
-cd wrapper && npm test
+cd runner && npm test
 cd ui && npm test
 
 # Watch mode (if supported by workspace)
 cd gateway && npm run test:watch
-cd wrapper && npm run test:watch
 
 # Coverage (if supported by workspace)
 cd gateway && npm run test:coverage
-cd wrapper && npm run test:coverage
 
 # Run tests matching a pattern
 cd gateway && npm test -- --grep "pattern"
-cd wrapper && npm test -- --grep "pattern"
 
 # Run with verbose output
 cd gateway && npm test -- --reporter=verbose
@@ -36,11 +33,10 @@ cd wrapper && npm test -- --reporter=verbose
 
 # Run specific test file
 cd gateway && npm test -- src/utils/crypto.test.ts
-cd wrapper && npm test -- src/services/gateway-client.test.ts
 ```
 
-Note: The root `npm test` command runs all tests across gateway, wrapper, and ui workspaces.
-For MCP MVP validation, prefer `npm run test:mvp` so legacy wrapper failures do not block MCP control-plane development.
+Note: The root `npm test` command runs all tests across gateway, runner, and ui workspaces.
+For MVP validation, prefer `npm run test:mvp`.
 For workspace-specific test options (coverage, watch mode, etc.), navigate to the workspace directory and check its package.json for available scripts.
 
 ## Test Structure
@@ -49,21 +45,17 @@ For workspace-specific test options (coverage, watch mode, etc.), navigate to th
 gateway/
 ├── src/
 │   ├── utils/
-│   │   └── crypto.test.ts       # HMAC, hashing, nonces, redaction
+│   │   └── crypto.test.ts       # Hashing, tokens, nonces, redaction
 │   ├── services/
 │   │   └── database.test.ts     # Schema, CRUD, cascades
 │   ├── middleware/
-│   │   └── auth.test.ts         # Signature verification, RBAC
+│   │   └── auth.test.ts         # Session auth, RBAC
 │   └── routes/
-│       └── runs.test.ts         # Command allowlist validation
+│       └── runs.test.ts         # MCP claim/poll/ack/event flow
 
-wrapper/
+runner/
 ├── src/
-│   ├── utils/
-│   │   └── crypto.test.ts       # Client-side signing
-│   └── services/
-│       ├── gateway-client.test.ts  # HTTP client, error handling
-│       └── claude-runner.test.ts   # Process management, commands
+│   └── worker.test.ts           # App-server execution, polling, ack, events
 ```
 
 ---
@@ -111,17 +103,11 @@ wrapper/
 
 | Feature | Test Coverage |
 |---------|--------------|
-| Wrapper HMAC auth | ✅ Valid requests, header validation |
-| Timestamp validation | ✅ Expired, future, within skew |
-| Replay protection | ✅ Nonce tracking, expiry |
-| Capability tokens | ✅ Per-run validation |
 | UI session auth | ✅ Session lookup, expiry |
 | Cloudflare Access | ✅ Header extraction |
 | Role-based access | ✅ Admin, operator, viewer |
 
 **Key Test Cases:**
-- Tampered requests rejected (method, path, body)
-- Replay attacks detected
 - Role permissions enforced correctly
 - Session expiry handled
 
@@ -141,15 +127,15 @@ wrapper/
 - Command injection patterns blocked
 - Special `__STOP__` command recognized
 
-### 5. Gateway Client (`wrapper/src/services/gateway-client.ts`)
+### 5. MCP Runner (`runner/src/worker.ts`)
 
 | Feature | Test Coverage |
 |---------|--------------|
-| Request signing | ✅ All required headers |
-| Run auth headers | ✅ runId, capabilityToken |
-| Event types | ✅ All 6 types validated |
-| Error handling | ✅ HTTP errors, network errors, timeout |
-| Health check | ✅ Success/failure detection |
+| Claim/poll/ack loop | ✅ Pending run claim, command polling, acknowledgements |
+| Codex app-server | ✅ Thread reuse, turn lifecycle, failure propagation |
+| Event delivery | ✅ Structured stdout/marker/error events |
+| Error handling | ✅ HTTP errors, auth failures, timeout |
+| Runner identity | ✅ Explicit runner-id targeting |
 
 **Key Test Cases:**
 - Headers properly formatted
@@ -157,39 +143,12 @@ wrapper/
 - Marker events structured correctly
 - Graceful error handling
 
-### 6. Claude Runner (`wrapper/src/services/claude-runner.ts`)
-
-| Feature | Test Coverage |
-|---------|--------------|
-| Command validation | ✅ Allowlist check |
-| Output processing | ✅ stdout/stderr chunks |
-| Secret redaction | ✅ Before sending |
-| Lifecycle events | ✅ start/finish markers |
-| Event sequencing | ✅ Incremental sequence |
-| Stop handling | ✅ Graceful vs force |
-| Log files | ✅ Path construction, format |
-| Working directory | ✅ Validation, safety |
-| Tmate assist | ✅ URL parsing |
-| Result handling | ✅ Capture, truncation |
-
-**Key Test Cases:**
-- Non-allowlisted commands blocked
-- Secrets redacted from output
-- Exit codes properly reported
-- Path traversal prevented
-
----
-
 ## Security Test Matrix
 
 | Threat | Test File | Assertions |
 |--------|-----------|------------|
-| HMAC forgery | crypto.test.ts | Signature tampering detected |
-| Replay attack | auth.test.ts | Nonce reuse blocked |
-| Clock manipulation | crypto.test.ts | Timestamp bounds enforced |
 | Command injection | runs.test.ts | Metacharacters blocked |
 | Secret leakage | crypto.test.ts | Patterns redacted |
-| Path traversal | claude-runner.test.ts | Outside-project paths blocked |
 | Privilege escalation | auth.test.ts | Role checks enforced |
 | Session hijacking | database.test.ts | Session expiry works |
 
@@ -280,15 +239,4 @@ test:
     - run: npm run build:mvp
     - run: npm run test:mvp
 
-# Optional legacy wrapper lane (non-blocking while wrapper is deprecated)
-legacy-wrapper:
-  continue-on-error: true
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-    - run: npm ci
-    - run: npm run test -w wrapper
 ```

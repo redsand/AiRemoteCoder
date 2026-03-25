@@ -3,10 +3,9 @@ import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import { db } from '../services/database.js';
 import { config } from '../config.js';
-import { wrapperAuth, uiAuth, requireRole, logAudit, type AuthenticatedRequest } from '../middleware/auth.js';
-import { generateCapabilityToken, redactSecrets, hashToken } from '../utils/crypto.js';
+import { uiAuth, requireRole, logAudit, type AuthenticatedRequest } from '../middleware/auth.js';
+import { generateCapabilityToken, redactSecrets } from '../utils/crypto.js';
 import { broadcastToRun } from '../services/websocket.js';
-import { timingSafeEqual } from 'crypto';
 import { findLatestMcpSessionByTokenId, getMcpSession } from '../mcp/session-registry.js';
 import { assertScopes, extractBearerToken, validateMcpSessionAccess, validateMcpToken } from '../mcp/auth.js';
 import type { McpScope } from '../domain/types.js';
@@ -25,8 +24,6 @@ function providerFromTokenLabel(label: string | undefined): string | null {
 const createRunSchema = z.object({
   command: z.string().optional(),
   label: z.string().max(200).optional(),
-  clientId: z.string().optional(),
-  agentId: z.string().optional(), // For auto-associating with client
   repoPath: z.string().optional(),
   repoName: z.string().optional(),
   tags: z.array(z.string()).optional(),
@@ -71,10 +68,6 @@ const ackSchema = z.object({
   error: z.string().nullable().optional()
 });
 
-const claimRunSchema = z.object({
-  agentId: z.string().min(1).max(100)
-});
-
 const mcpClaimRunSchema = z.object({
   provider: z.string().optional(),
 });
@@ -111,6 +104,17 @@ function resolveAuthorizedMcpWorker(
   const runnerId = typeof runnerIdHeader === 'string' ? runnerIdHeader.trim() : '';
   const runnerIdValid = /^[a-zA-Z0-9._:@/-]{3,128}$/.test(runnerId);
 
+  // Explicit runner identity takes precedence over ambient MCP session presence.
+  if (runnerIdValid) {
+    return {
+      sessionId: null,
+      session: null,
+      claimTag: `mcp-runner:${tokenCtx.tokenId}:${runnerId}`,
+      tokenContext: tokenCtx,
+      runnerId,
+    };
+  }
+
   if (session) {
     const authCheck = validateMcpSessionAccess(session.authContext, authHeader);
     if (!authCheck.ok) {
@@ -122,21 +126,12 @@ function resolveAuthorizedMcpWorker(
   }
 
   // Standalone MCP runner fallback: authorize by token identity when no live MCP session exists.
-  if (!runnerIdValid) {
-    reply.code(400).send({ error: 'x-airc-runner-id header is required for standalone runner mode' });
-    return null;
-  }
-  return {
-    sessionId: null,
-    session: null,
-    claimTag: `mcp-runner:${tokenCtx.tokenId}:${runnerId}`,
-    tokenContext: tokenCtx,
-    runnerId,
-  };
+  reply.code(400).send({ error: 'x-airc-runner-id header is required for standalone runner mode' });
+  return null;
 }
 
 export async function runsRoutes(fastify: FastifyInstance) {
-  // Create a new run (from UI or self-registration by wrapper)
+  // Create a new run from the UI/MCP control plane
   fastify.post('/api/runs', {
     preHandler: [uiAuth, requireRole('admin', 'operator')]
   }, async (request: AuthenticatedRequest, reply) => {
@@ -144,15 +139,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
     const id = nanoid(12);
     const capabilityToken = generateCapabilityToken();
     const now = Math.floor(Date.now() / 1000);
-
-    // Find client by agentId if provided
-    let clientId = body.clientId || null;
-    if (!clientId && body.agentId) {
-      const client = db.prepare('SELECT id FROM clients WHERE agent_id = ?').get(body.agentId) as { id: string } | undefined;
-      if (client) {
-        clientId = client.id;
-      }
-    }
 
     // Merge metadata with workflow control fields
     const metadata = {
@@ -217,7 +203,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
-        clientId,
+        null,
         body.label || null,
         body.command || null,
         body.repoPath || null,
@@ -241,7 +227,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
       }
     })();
 
-    logAudit(request.user?.id, 'run.create', 'run', id, { command: body.command, clientId, autonomous: body.autonomous }, request.ip);
+    logAudit(request.user?.id, 'run.create', 'run', id, { command: body.command, autonomous: body.autonomous }, request.ip);
 
     return {
       id,
@@ -258,7 +244,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
   }, async (request: AuthenticatedRequest) => {
     const {
       status,
-      clientId,
       search,
       repo,
       waitingApproval,
@@ -272,7 +257,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
       sortOrder = 'desc'
     } = request.query as {
       status?: string;
-      clientId?: string;
       search?: string;
       repo?: string;
       waitingApproval?: string;
@@ -289,13 +273,11 @@ export async function runsRoutes(fastify: FastifyInstance) {
     let query = `
       SELECT r.id, r.status, r.label, r.command, r.repo_path, r.repo_name,
              r.waiting_approval, r.created_at, r.started_at, r.finished_at,
-             r.exit_code, r.error_message, r.metadata, r.tags, r.client_id,
-             c.display_name as client_name, c.status as client_status,
+             r.exit_code, r.error_message, r.metadata, r.tags,
              (SELECT COUNT(*) FROM artifacts WHERE run_id = r.id) as artifact_count,
              (SELECT data FROM events WHERE run_id = r.id AND type = 'assist' LIMIT 1) as assist_data,
              r.worker_type, r.claimed_by, r.claimed_at
       FROM runs r
-      LEFT JOIN clients c ON r.client_id = c.id
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -303,11 +285,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
     if (status && status !== 'all') {
       query += ' AND r.status = ?';
       params.push(status);
-    }
-
-    if (clientId) {
-      query += ' AND r.client_id = ?';
-      params.push(clientId);
     }
 
     if (workerType && workerType !== 'all') {
@@ -366,10 +343,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
       countQuery += ' AND r.status = ?';
       countParams.push(status);
     }
-    if (clientId) {
-      countQuery += ' AND r.client_id = ?';
-      countParams.push(clientId);
-    }
     if (search) {
       countQuery += ' AND (r.id LIKE ? OR r.label LIKE ? OR r.command LIKE ?)';
       countParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
@@ -400,79 +373,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
       limit: parseInt(limit, 10),
       offset: parseInt(offset, 10),
       hasMore: parseInt(offset, 10) + runs.length < count
-    };
-  });
-
-  // Wrapper: claim next pending run for a specific client/agent
-  fastify.post('/api/runs/claim', {
-    preHandler: [wrapperAuth]
-  }, async (request: AuthenticatedRequest, reply) => {
-    const body = claimRunSchema.parse(request.body);
-    const token = request.headers['x-client-token'] as string | undefined;
-
-    const client = db.prepare('SELECT id, token_hash FROM clients WHERE agent_id = ?').get(body.agentId) as { id: string; token_hash: string | null } | undefined;
-    if (!client || !client.token_hash || !token) {
-      return reply.code(403).send({ error: 'Invalid client token' });
-    }
-
-    const providedHash = hashToken(token);
-    try {
-      if (!timingSafeEqual(Buffer.from(client.token_hash, 'hex'), Buffer.from(providedHash, 'hex'))) {
-        return reply.code(403).send({ error: 'Invalid client token' });
-      }
-    } catch {
-      return reply.code(403).send({ error: 'Invalid client token' });
-    }
-
-    const leaseCutoff = Math.floor(Date.now() / 1000) - config.claimLeaseSeconds;
-
-    const claimTransaction = db.transaction(() => {
-      let query = `
-        SELECT id, command, metadata, worker_type, capability_token
-        FROM runs
-        WHERE status = 'pending'
-          AND waiting_approval = 0
-          AND (client_id = ? OR client_id IS NULL)
-          AND (claimed_by IS NULL OR claimed_by = ? OR claimed_at < ?)
-      `;
-      const params: any[] = [client.id, body.agentId, leaseCutoff];
-
-      query += ' ORDER BY CASE WHEN client_id = ? THEN 0 ELSE 1 END, created_at ASC LIMIT 1';
-      params.push(client.id);
-
-      const run = db.prepare(query).get(...params) as any;
-      if (!run) {
-        return null;
-      }
-
-      const update = db.prepare(`
-        UPDATE runs
-        SET claimed_by = ?, claimed_at = unixepoch(), client_id = COALESCE(client_id, ?)
-        WHERE id = ? AND status = 'pending'
-          AND (claimed_by IS NULL OR claimed_by = ? OR claimed_at < ?)
-      `).run(body.agentId, client.id, run.id, body.agentId, leaseCutoff);
-
-      if (update.changes === 0) {
-        return null;
-      }
-
-      return run;
-    });
-
-    const claimed = claimTransaction();
-
-    if (!claimed) {
-      return { run: null };
-    }
-
-    return {
-      run: {
-        id: claimed.id,
-        capabilityToken: claimed.capability_token,
-        command: claimed.command,
-        workerType: claimed.worker_type,
-        metadata: claimed.metadata ? JSON.parse(claimed.metadata) : null
-      }
     };
   });
 
@@ -548,11 +448,9 @@ export async function runsRoutes(fastify: FastifyInstance) {
     const run = db.prepare(`
       SELECT r.id, r.status, r.label, r.command, r.repo_path, r.repo_name,
              r.waiting_approval, r.created_at, r.started_at, r.finished_at,
-             r.exit_code, r.error_message, r.metadata, r.tags, r.client_id,
-             c.display_name as client_name, c.agent_id as client_agent_id, c.status as client_status,
+             r.exit_code, r.error_message, r.metadata, r.tags,
              r.worker_type, r.claimed_by, r.claimed_at
       FROM runs r
-      LEFT JOIN clients c ON r.client_id = c.id
       WHERE r.id = ?
     `).get(runId) as any;
 
@@ -652,50 +550,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
     return events;
   });
 
-  // Wrapper: ingest event
-  fastify.post('/api/ingest/event', {
-    preHandler: [wrapperAuth]
-  }, async (request: AuthenticatedRequest, reply) => {
-    const body = eventSchema.parse(request.body);
-    const runId = request.runAuth?.runId;
-
-    if (!runId) {
-      return reply.code(400).send({ error: 'Run ID required' });
-    }
-
-    // Redact secrets from data
-    const sanitizedData = redactSecrets(body.data);
-
-    const result = db.prepare(`
-      INSERT INTO events (run_id, type, data, sequence)
-      VALUES (?, ?, ?, ?)
-    `).run(runId, body.type, sanitizedData, body.sequence || 0);
-
-    // Update run status if needed
-    if (body.type === 'marker') {
-      const marker = JSON.parse(body.data);
-      if (marker.event === 'started') {
-        db.prepare('UPDATE runs SET status = ?, started_at = unixepoch() WHERE id = ?')
-          .run('running', runId);
-      } else if (marker.event === 'finished') {
-        db.prepare('UPDATE runs SET status = ?, finished_at = unixepoch(), exit_code = ? WHERE id = ?')
-          .run(marker.exitCode === 0 ? 'done' : 'failed', marker.exitCode, runId);
-      }
-    }
-
-    // Broadcast to WebSocket subscribers
-    broadcastToRun(runId, {
-      type: 'event',
-      eventId: Number(result.lastInsertRowid),
-      eventType: body.type,
-      data: sanitizedData,
-      timestamp: Math.floor(Date.now() / 1000)
-    });
-
-    return { ok: true, eventId: Number(result.lastInsertRowid) };
-  });
-
-  // UI: send command to wrapper
+  // UI: send command to runner
   fastify.post('/api/runs/:runId/command', {
     preHandler: [uiAuth, requireRole('admin', 'operator')]
   }, async (request: AuthenticatedRequest, reply) => {
@@ -741,54 +596,6 @@ export async function runsRoutes(fastify: FastifyInstance) {
     });
 
     return { commandId: id };
-  });
-
-  // Wrapper: poll for commands
-  fastify.get('/api/runs/:runId/commands', {
-    preHandler: [wrapperAuth]
-  }, async (request: AuthenticatedRequest, reply) => {
-    const { runId } = request.params as { runId: string };
-
-    if (request.runAuth?.runId !== runId) {
-      return reply.code(403).send({ error: 'Capability token mismatch' });
-    }
-
-    const commands = db.prepare(`
-      SELECT id, command, created_at
-      FROM commands
-      WHERE run_id = ? AND status = 'pending'
-      ORDER BY created_at ASC
-    `).all(runId);
-
-    return commands;
-  });
-
-  // Wrapper: acknowledge command
-  fastify.post('/api/runs/:runId/commands/:commandId/ack', {
-    preHandler: [wrapperAuth]
-  }, async (request: AuthenticatedRequest, reply) => {
-    const { runId, commandId } = request.params as { runId: string; commandId: string };
-    const body = ackSchema.parse(request.body);
-
-    if (request.runAuth?.runId !== runId) {
-      return reply.code(403).send({ error: 'Capability token mismatch' });
-    }
-
-    db.prepare(`
-      UPDATE commands
-      SET status = 'completed', acked_at = unixepoch(), result = ?, error = ?
-      WHERE id = ? AND run_id = ?
-    `).run(body.result || null, body.error || null, commandId, runId);
-
-    // Broadcast result to UI
-    broadcastToRun(runId, {
-      type: 'command_completed',
-      commandId,
-      result: body.result,
-      error: body.error
-    });
-
-    return { ok: true };
   });
 
   // MCP worker: poll pending commands for a claimed run
@@ -1225,40 +1032,4 @@ export async function runsRoutes(fastify: FastifyInstance) {
     };
   });
 
-  // Wrapper: update run state
-  fastify.post('/api/runs/:runId/state', {
-    preHandler: [wrapperAuth]
-  }, async (request: AuthenticatedRequest, reply) => {
-    const { runId } = request.params as { runId: string };
-    const body = request.body as {
-      workingDir?: string;
-      lastSequence?: number;
-      stdinBuffer?: string;
-      environment?: Record<string, string>;
-    };
-
-    if (request.runAuth?.runId !== runId) {
-      return reply.code(403).send({ error: 'Capability token mismatch' });
-    }
-
-    // Upsert run state
-    db.prepare(`
-      INSERT INTO run_state (run_id, working_dir, last_sequence, stdin_buffer, environment)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(run_id) DO UPDATE SET
-        working_dir = COALESCE(excluded.working_dir, run_state.working_dir),
-        last_sequence = COALESCE(excluded.last_sequence, run_state.last_sequence),
-        stdin_buffer = COALESCE(excluded.stdin_buffer, run_state.stdin_buffer),
-        environment = COALESCE(excluded.environment, run_state.environment),
-        updated_at = unixepoch()
-    `).run(
-      runId,
-      body.workingDir || process.cwd(),
-      body.lastSequence || 0,
-      body.stdinBuffer || null,
-      body.environment ? JSON.stringify(body.environment) : null
-    );
-
-    return { ok: true };
-  });
 }

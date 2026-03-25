@@ -9,10 +9,8 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
   }, async (request: AuthenticatedRequest) => {
     // Runs waiting approval
     const waitingApproval = db.prepare(`
-      SELECT r.id, r.label, r.command, r.created_at, r.client_id,
-             c.display_name as client_name
+      SELECT r.id, r.label, r.command, r.created_at
       FROM runs r
-      LEFT JOIN clients c ON r.client_id = c.id
       WHERE r.waiting_approval = 1
       ORDER BY r.created_at ASC
     `).all();
@@ -20,24 +18,12 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
     // Failed runs (last 24 hours)
     const oneDayAgo = Math.floor(Date.now() / 1000) - 86400;
     const failedRuns = db.prepare(`
-      SELECT r.id, r.label, r.command, r.finished_at, r.error_message, r.client_id,
-             c.display_name as client_name
+      SELECT r.id, r.label, r.command, r.finished_at, r.error_message
       FROM runs r
-      LEFT JOIN clients c ON r.client_id = c.id
       WHERE r.status = 'failed' AND r.finished_at > ?
       ORDER BY r.finished_at DESC
       LIMIT 10
     `).all(oneDayAgo);
-
-    // Disconnected clients with active runs
-    const disconnectedWithRuns = db.prepare(`
-      SELECT c.id, c.display_name, c.last_seen_at, c.status,
-             COUNT(r.id) as active_runs
-      FROM clients c
-      JOIN runs r ON r.client_id = c.id AND r.status = 'running'
-      WHERE c.status = 'offline'
-      GROUP BY c.id
-    `).all();
 
     // Unacknowledged alerts
     const unacknowledgedAlerts = db.prepare(`
@@ -51,12 +37,10 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
     return {
       waitingApproval,
       failedRuns,
-      disconnectedWithRuns,
       unacknowledgedAlerts,
       counts: {
         waitingApproval: waitingApproval.length,
         failedRuns: failedRuns.length,
-        disconnectedWithRuns: disconnectedWithRuns.length,
         unacknowledgedAlerts: unacknowledgedAlerts.length
       }
     };
@@ -70,12 +54,10 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
 
     const runs = db.prepare(`
       SELECT r.id, r.status, r.label, r.command, r.repo_name, r.created_at, r.started_at,
-             r.waiting_approval, r.client_id,
-             c.display_name as client_name, c.status as client_status,
+             r.waiting_approval,
              (SELECT COUNT(*) FROM artifacts WHERE run_id = r.id) as artifact_count,
              (SELECT data FROM events WHERE run_id = r.id ORDER BY id DESC LIMIT 1) as last_event
       FROM runs r
-      LEFT JOIN clients c ON r.client_id = c.id
       WHERE r.status IN ('running', 'pending')
       ORDER BY
         CASE r.status WHEN 'running' THEN 0 ELSE 1 END,
@@ -101,11 +83,9 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
       SELECT
         'run_event' as activity_type,
         e.id, e.run_id, e.type, e.data, e.timestamp,
-        r.label as run_label, r.command as run_command,
-        c.display_name as client_name
+        r.label as run_label, r.command as run_command
       FROM events e
       JOIN runs r ON e.run_id = r.id
-      LEFT JOIN clients c ON r.client_id = c.id
       WHERE e.type = 'marker'
       ORDER BY e.timestamp DESC
       LIMIT ?
@@ -120,8 +100,7 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
         eventType: e.type,
         eventData: e.data,
         runLabel: e.run_label,
-        runCommand: e.run_command,
-        clientName: e.client_name
+        runCommand: e.run_command
       }
     })));
 
@@ -130,11 +109,9 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
       SELECT
         'command' as activity_type,
         cmd.id, cmd.run_id, cmd.command, cmd.status, cmd.created_at, cmd.acked_at,
-        r.label as run_label,
-        c.display_name as client_name
+        r.label as run_label
       FROM commands cmd
       JOIN runs r ON cmd.run_id = r.id
-      LEFT JOIN clients c ON r.client_id = c.id
       ORDER BY cmd.created_at DESC
       LIMIT ?
     `).all(limitNum);
@@ -149,7 +126,6 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
         status: cmd.status,
         runId: cmd.run_id,
         runLabel: cmd.run_label,
-        clientName: cmd.client_name,
         ackedAt: cmd.acked_at
       }
     })));
@@ -159,11 +135,9 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
       SELECT
         'artifact' as activity_type,
         a.id, a.run_id, a.name, a.type, a.size, a.created_at,
-        r.label as run_label,
-        c.display_name as client_name
+        r.label as run_label
       FROM artifacts a
       JOIN runs r ON a.run_id = r.id
-      LEFT JOIN clients c ON r.client_id = c.id
       ORDER BY a.created_at DESC
       LIMIT ?
     `).all(limitNum);
@@ -178,8 +152,7 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
         artifactType: a.type,
         size: a.size,
         runId: a.run_id,
-        runLabel: a.run_label,
-        clientName: a.client_name
+        runLabel: a.run_label
       }
     })));
 
@@ -203,14 +176,6 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
       FROM runs
     `).get() as { total: number; running: number; pending: number; done: number; failed: number };
 
-    const clientStats = db.prepare(`
-      SELECT
-        COUNT(*) as total,
-        SUM(CASE WHEN status = 'online' THEN 1 ELSE 0 END) as online,
-        SUM(CASE WHEN status = 'offline' THEN 1 ELSE 0 END) as offline
-      FROM clients
-    `).get() as { total: number; online: number; offline: number };
-
     const alertStats = db.prepare(`
       SELECT COUNT(*) as unacknowledged
       FROM alerts WHERE acknowledged = 0
@@ -224,7 +189,6 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
 
     return {
       runs: runStats,
-      clients: clientStats,
       alerts: alertStats,
       todayEvents: todayEvents.count
     };

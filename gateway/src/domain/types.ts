@@ -72,9 +72,7 @@ export type ProviderName =
   | 'gemini'
   | 'opencode'
   | 'zenflow'
-  | 'rev'
-  /** @deprecated Scheduled for removal in next major release */
-  | 'legacy_wrapper';
+  | 'rev';
 
 // ---------------------------------------------------------------------------
 // Core entities
@@ -247,7 +245,7 @@ export interface UserIdentity {
   id: UserId;
   username: string;
   role: 'admin' | 'operator' | 'viewer';
-  source: 'session' | 'cloudflare' | 'wrapper' | 'mcp_token';
+  source: 'session' | 'cloudflare' | 'mcp_token';
 }
 
 export interface DeviceIdentity {

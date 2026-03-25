@@ -52,7 +52,6 @@ export function Layout({ user, onLogout, children }: LayoutProps) {
     if (path === '/') return 'Dashboard';
     if (path.startsWith('/runs/')) return 'Run Details';
     if (path === '/runs') return 'Runs';
-    if (path.startsWith('/clients/')) return 'Client Details';
     if (path === '/clients') return 'Clients';
     if (path === '/alerts') return 'Alerts';
     if (path === '/mcp') return 'MCP Control Plane';

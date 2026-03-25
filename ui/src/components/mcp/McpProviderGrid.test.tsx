@@ -11,7 +11,6 @@ const baseConfig: McpConfig = {
   availableScopes: ['runs:read', 'runs:write', 'vnc:read', 'vnc:control'],
   defaultAgentScopes: ['runs:read', 'runs:write', 'vnc:read', 'vnc:control'],
   enabledProviders: ['claude', 'codex', 'gemini', 'opencode', 'zenflow', 'rev'],
-  legacyWrapperDeprecated: true,
   connectionInstructions: {
     curl_test: { description: 'Connectivity check', command: 'curl https://gateway.example.test/mcp' },
   },

@@ -27,6 +27,29 @@ export interface WorkerExecutor {
 
 type SpawnFn = typeof spawn;
 
+function extractErrorMessage(errorPayload: unknown): string {
+  if (!errorPayload || typeof errorPayload !== 'object') {
+    return String(errorPayload ?? 'Unknown Codex app-server error');
+  }
+
+  const raw = (errorPayload as any).message;
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && typeof parsed.detail === 'string' && parsed.detail.trim().length > 0) {
+        return parsed.detail;
+      }
+    } catch {
+      return raw;
+    }
+    return raw;
+  }
+
+  const info = (errorPayload as any).codexErrorInfo;
+  if (typeof info === 'string' && info.trim().length > 0) return info;
+  return 'Unknown Codex app-server error';
+}
+
 export class CodexExecExecutor implements WorkerExecutor {
   constructor(private readonly spawnFn: SpawnFn = spawn) {}
 
@@ -108,6 +131,262 @@ export class PersistentCodexExecutor implements WorkerExecutor {
     if (!this.process) return;
     if (this.process.kill) this.process.kill('SIGINT');
     this.process = null;
+  }
+}
+
+interface PendingResponse {
+  resolve: (value: any) => void;
+  reject: (error: Error) => void;
+}
+
+interface PendingTurn {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+type CompletedTurnState = { ok: true } | { ok: false; error: Error };
+
+export class CodexAppServerExecutor implements WorkerExecutor {
+  private process: (EventEmitter & {
+    stdin?: { write: (chunk: string) => void };
+    stdout?: EventEmitter;
+    stderr?: EventEmitter;
+    kill?: (signal?: NodeJS.Signals) => void;
+  }) | null = null;
+  private emitFn: ((type: EventType, data: string) => Promise<void>) | null = null;
+  private stdoutBuffer = '';
+  private nextRequestId = 1;
+  private threadId: string | null = null;
+  private readonly pendingResponses = new Map<number, PendingResponse>();
+  private readonly pendingTurns = new Map<string, PendingTurn>();
+  private readonly completedTurns = new Map<string, CompletedTurnState>();
+  private startupPromise: Promise<void> | null = null;
+
+  constructor(
+    private readonly options: {
+      spawnFn?: SpawnFn;
+      cwd?: string;
+      appServerCommand?: string[];
+      model?: string;
+      approvalPolicy?: string;
+    } = {},
+  ) {}
+
+  private get spawnFn(): SpawnFn {
+    return this.options.spawnFn ?? spawn;
+  }
+
+  private ensureProcess(emit: (type: EventType, data: string) => Promise<void>): void {
+    this.emitFn = emit;
+    if (this.process) return;
+
+    const argv = this.options.appServerCommand ?? ['codex', 'app-server'];
+    const command = argv[0];
+    const args = argv.slice(1);
+    const child = this.spawnFn(command, args, {
+      shell: process.platform === 'win32',
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }) as any;
+    this.process = child;
+    this.stdoutBuffer = '';
+
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      this.handleStdoutChunk(chunk.toString());
+    });
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      if (this.emitFn) void this.emitFn('stderr', chunk.toString());
+    });
+    child.on?.('close', (code: number | null, signal: string | null) => {
+      const error = new Error(`codex app-server exited (code=${code} signal=${signal})`);
+      this.failAllPending(error);
+      if (this.emitFn) void this.emitFn('info', error.message);
+      this.resetProcessState();
+    });
+    child.on?.('error', (err: Error) => {
+      this.failAllPending(err);
+      if (this.emitFn) void this.emitFn('error', `codex app-server error: ${err.message}`);
+      this.resetProcessState();
+    });
+  }
+
+  private resetProcessState(): void {
+    this.process = null;
+    this.threadId = null;
+    this.startupPromise = null;
+    this.stdoutBuffer = '';
+  }
+
+  private failAllPending(err: Error): void {
+    for (const pending of this.pendingResponses.values()) pending.reject(err);
+    for (const pending of this.pendingTurns.values()) pending.reject(err);
+    this.pendingResponses.clear();
+    this.pendingTurns.clear();
+    this.completedTurns.clear();
+  }
+
+  private handleStdoutChunk(chunk: string): void {
+    this.stdoutBuffer += chunk;
+    const lines = this.stdoutBuffer.split(/\r?\n/);
+    this.stdoutBuffer = lines.pop() ?? '';
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      let message: any;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        if (this.emitFn) void this.emitFn('stderr', line);
+        continue;
+      }
+      this.handleMessage(message);
+    }
+  }
+
+  private handleMessage(message: any): void {
+    if (typeof message?.id === 'number') {
+      const pending = this.pendingResponses.get(message.id);
+      if (!pending) return;
+      this.pendingResponses.delete(message.id);
+      if (message.error) pending.reject(new Error(extractErrorMessage(message.error)));
+      else pending.resolve(message.result ?? {});
+      return;
+    }
+
+    const method = message?.method;
+    const params = message?.params;
+    if (typeof method !== 'string' || !params || typeof params !== 'object') return;
+
+    if (method === 'item/agentMessage/delta') {
+      const delta = params.delta;
+      if (typeof delta === 'string' && this.emitFn) void this.emitFn('stdout', delta);
+      return;
+    }
+
+    if (method === 'turn/completed') {
+      const turn = params.turn;
+      const turnId = typeof turn?.id === 'string' ? turn.id : null;
+      if (!turnId) return;
+      const pending = this.pendingTurns.get(turnId);
+      const result = turn?.status === 'failed'
+        ? { ok: false as const, error: new Error(extractErrorMessage(turn.error)) }
+        : { ok: true as const };
+      if (!pending) {
+        this.completedTurns.set(turnId, result);
+        return;
+      }
+      this.pendingTurns.delete(turnId);
+      if (result.ok) pending.resolve();
+      else pending.reject(result.error);
+      return;
+    }
+
+    if (method === 'error') {
+      const turnId = typeof params.turnId === 'string' ? params.turnId : null;
+      if (!turnId) return;
+      const pending = this.pendingTurns.get(turnId);
+      if (params.willRetry === false) {
+        const errorState = { ok: false as const, error: new Error(extractErrorMessage(params.error)) };
+        if (!pending) {
+          this.completedTurns.set(turnId, errorState);
+          return;
+        }
+        this.pendingTurns.delete(turnId);
+        pending.reject(errorState.error);
+      }
+      return;
+    }
+
+    if (this.emitFn) void this.emitFn('info', JSON.stringify(message));
+  }
+
+  private send(message: Record<string, unknown>): void {
+    if (!this.process?.stdin) throw new Error('Codex app-server stdin is unavailable');
+    this.process.stdin.write(`${JSON.stringify(message)}\n`);
+  }
+
+  private async request(method: string, params: Record<string, unknown>): Promise<any> {
+    const id = this.nextRequestId;
+    this.nextRequestId += 1;
+    const response = await new Promise<any>((resolve, reject) => {
+      this.pendingResponses.set(id, { resolve, reject });
+      try {
+        this.send({ id, method, params });
+      } catch (err) {
+        this.pendingResponses.delete(id);
+        reject(err);
+      }
+    });
+    return response;
+  }
+
+  private notify(method: string, params: Record<string, unknown>): void {
+    this.send({ method, params });
+  }
+
+  private async ensureSession(emit: (type: EventType, data: string) => Promise<void>): Promise<void> {
+    this.ensureProcess(emit);
+    if (this.threadId) return;
+    if (!this.startupPromise) {
+      this.startupPromise = (async () => {
+        await this.request('initialize', {
+          clientInfo: {
+            name: 'airc-mcp-runner',
+            version: '0.1.0',
+          },
+        });
+        this.notify('initialized', {});
+        const startResult = await this.request('thread/start', {
+          cwd: this.options.cwd ?? process.cwd(),
+          ...(this.options.model ? { model: this.options.model } : {}),
+          ...(this.options.approvalPolicy ? { approvalPolicy: this.options.approvalPolicy } : {}),
+        });
+        const threadId = startResult?.thread?.id;
+        if (typeof threadId !== 'string' || threadId.trim().length === 0) {
+          throw new Error(`thread/start did not return thread id: ${JSON.stringify(startResult)}`);
+        }
+        this.threadId = threadId;
+      })();
+    }
+    await this.startupPromise;
+  }
+
+  async sendInput(input: string, emit: (type: EventType, data: string) => Promise<void>): Promise<void> {
+    await this.ensureSession(emit);
+    if (!this.threadId) throw new Error('Codex app-server thread is unavailable');
+
+    const turnResult = await this.request('turn/start', {
+      threadId: this.threadId,
+      input: [{ type: 'text', text: input }],
+      ...(this.options.model ? { model: this.options.model } : {}),
+    });
+
+    const turnId = turnResult?.turn?.id;
+    if (typeof turnId !== 'string' || turnId.trim().length === 0) {
+      throw new Error(`turn/start did not return turn id: ${JSON.stringify(turnResult)}`);
+    }
+
+    const completed = this.completedTurns.get(turnId);
+    if (completed) {
+      this.completedTurns.delete(turnId);
+      if (completed.ok) return;
+      throw completed.error;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      this.pendingTurns.set(turnId, { resolve, reject });
+    });
+  }
+
+  async interrupt(): Promise<void> {
+    if (!this.process?.kill) return;
+    this.process.kill('SIGINT');
+  }
+
+  async shutdown(): Promise<void> {
+    if (!this.process?.kill) return;
+    this.process.kill('SIGINT');
+    this.resetProcessState();
   }
 }
 
@@ -234,7 +513,7 @@ export interface RunnerOptions {
   token: string;
   runnerId: string;
   provider: string;
-  codexMode: 'interactive' | 'exec';
+  codexMode: 'app-server' | 'interactive' | 'exec';
   execTemplate?: string;
   pollIdleMs?: number;
   pollCommandsMs?: number;
@@ -249,7 +528,9 @@ export function isExpectedIdleClaimError(err: unknown): boolean {
 
 function createExecutor(options: RunnerOptions): WorkerExecutor {
   if (options.provider === 'codex') {
-    return options.codexMode === 'exec' ? new CodexExecExecutor() : new PersistentCodexExecutor();
+    if (options.codexMode === 'exec') return new CodexExecExecutor();
+    if (options.codexMode === 'interactive') return new PersistentCodexExecutor();
+    return new CodexAppServerExecutor();
   }
   return new TemplateExecExecutor(options.execTemplate ?? '');
 }
@@ -321,4 +602,54 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, errorBackoffMs));
     }
   }
+}
+
+export async function runLoopOnce(
+  options: RunnerOptions,
+  deps: {
+    api?: Pick<McpWorkerApi, 'claimRun' | 'pollCommands' | 'ackCommand' | 'sendEvent'>;
+    executor?: WorkerExecutor;
+  } = {},
+): Promise<{ claimedRunId: string | null; stopRun: boolean }> {
+  const api = deps.api ?? new McpWorkerApi(options.gatewayUrl, options.token, options.provider, options.runnerId);
+  const executor = deps.executor ?? createExecutor(options);
+
+  const claimed = await api.claimRun();
+  if (!claimed.run) {
+    return { claimedRunId: null, stopRun: false };
+  }
+
+  const runId = claimed.run.id;
+  await api.sendEvent(runId, {
+    type: 'marker',
+    data: JSON.stringify({ event: 'started', provider: options.provider }),
+    sequence: 1,
+  });
+
+  if (claimed.run.command && claimed.run.command.trim()) {
+    await handleWorkerCommand(
+      { id: 'bootstrap-1', command: '__INPUT__', arguments: claimed.run.command },
+      runId,
+      api,
+      executor,
+    );
+  }
+
+  const commands = await api.pollCommands(runId);
+  let stopRun = false;
+  for (const command of commands) {
+    try {
+      stopRun = await handleWorkerCommand(command, runId, api, executor);
+      if (stopRun) break;
+    } catch (err: any) {
+      await api.sendEvent(runId, { type: 'error', data: String(err?.message ?? err) });
+      await api.ackCommand(runId, command.id, undefined, String(err?.message ?? err));
+    }
+  }
+
+  if (stopRun && executor.shutdown) {
+    await executor.shutdown();
+  }
+
+  return { claimedRunId: runId, stopRun };
 }

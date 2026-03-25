@@ -23,12 +23,6 @@ interface RunsResponse {
   hasMore: boolean;
 }
 
-interface Client {
-  id: string;
-  display_name: string;
-  agent_id: string;
-}
-
 interface Props {
   user: { id: string; username: string; role: string } | null;
 }
@@ -64,7 +58,6 @@ export function Runs({ user }: Props) {
 
   // State
   const [runs, setRuns] = useState<Run[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
   const [activeMcpSessions, setActiveMcpSessions] = useState<McpActiveSession[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -84,7 +77,6 @@ export function Runs({ user }: Props) {
 
   // Filters from URL
   const status = searchParams.get('status') || 'all';
-  const clientId = searchParams.get('clientId') || '';
   const search = searchParams.get('search') || '';
   const waitingApproval = searchParams.get('waitingApproval') === 'true';
   const workerType = searchParams.get('workerType') || 'all';
@@ -115,7 +107,6 @@ export function Runs({ user }: Props) {
     const params = new URLSearchParams();
 
     if (status !== 'all') params.set('status', status);
-    if (clientId) params.set('clientId', clientId);
     if (search) params.set('search', search);
     if (waitingApproval) params.set('waitingApproval', 'true');
     if (workerType !== 'all') params.set('workerType', workerType);
@@ -142,20 +133,7 @@ export function Runs({ user }: Props) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [status, clientId, search, waitingApproval, workerType, claim, runs.length, addToast]);
-
-  // Fetch clients for filter dropdown
-  const fetchClients = useCallback(async () => {
-    try {
-      const res = await fetch('/api/clients?limit=100');
-      if (res.ok) {
-        const data = await res.json();
-        setClients(data.clients || []);
-      }
-    } catch (err) {
-      // Ignore
-    }
-  }, []);
+  }, [status, search, waitingApproval, workerType, claim, runs.length, addToast]);
 
   const fetchMcpSessions = useCallback(async () => {
     try {
@@ -172,9 +150,8 @@ export function Runs({ user }: Props) {
   // Initial fetch
   useEffect(() => {
     fetchRuns();
-    fetchClients();
     fetchMcpSessions();
-  }, [status, clientId, search, waitingApproval, workerType, claim]);
+  }, [status, search, waitingApproval, workerType, claim]);
 
   // Auto-refresh
   useEffect(() => {
@@ -187,11 +164,10 @@ export function Runs({ user }: Props) {
   // Auto-refresh clients when new workers connect
   useEffect(() => {
     const interval = setInterval(() => {
-      fetchClients();
       fetchMcpSessions();
     }, 10000);
     return () => clearInterval(interval);
-  }, [fetchClients, fetchMcpSessions]);
+  }, [fetchMcpSessions]);
 
   useEffect(() => {
     if (activeMcpSessions.length === 0) {
@@ -210,13 +186,7 @@ export function Runs({ user }: Props) {
   };
 
   // Check if any filters are active
-  const hasActiveFilters = status !== 'all' || !!clientId || !!search || waitingApproval || workerType !== 'all' || claim !== 'all';
-
-  // Client filter options
-  const clientOptions: FilterOption[] = [
-    { value: '', label: 'All Clients' },
-    ...clients.map(c => ({ value: c.id, label: c.display_name })),
-  ];
+  const hasActiveFilters = status !== 'all' || !!search || waitingApproval || workerType !== 'all' || claim !== 'all';
 
   // Create new run
   const handleCreateRun = async () => {
@@ -415,12 +385,6 @@ export function Runs({ user }: Props) {
           value={claim}
           options={claimOptions}
           onChange={(val) => updateFilter('claim', val)}
-        />
-        <FilterSelect
-          label="Client"
-          value={clientId}
-          options={clientOptions}
-          onChange={(val) => updateFilter('clientId', val)}
         />
         {waitingApproval && (
           <div

@@ -39,7 +39,7 @@ vi.mock('../config.js', () => ({
       gemini: true,
       opencode: true,
       rev: true,
-      legacyWrapper: true,
+      zenflow: true,
     },
   },
 }));
@@ -101,6 +101,20 @@ describe('routes/alerts', () => {
 
     expect(listRes.statusCode).toBe(200);
     expect((listRes.json() as Array<{ id: string }>)).toEqual(expect.arrayContaining([expect.objectContaining({ id })]));
+  });
+
+  it('rejects deprecated client-offline alert rules', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/alerts/rules',
+      headers: { cookie: 'session=session-1' },
+      payload: {
+        name: 'Legacy client rule',
+        type: 'client_offline_active_runs',
+      },
+    });
+
+    expect(createRes.statusCode).toBe(500);
   });
 
   it('lists alerts, acknowledges them, and reports stats', async () => {

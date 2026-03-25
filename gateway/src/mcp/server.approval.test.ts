@@ -92,7 +92,7 @@ vi.mock('../config.js', () => ({
     allowlistedCommands: [],
     approvalTimeoutSeconds: 300,
     maxArtifactSize: 52428800,
-    providers: { claude: true, codex: true, gemini: true, opencode: true, rev: true, legacyWrapper: false },
+    providers: { claude: true, codex: true, gemini: true, opencode: true, zenflow: true, rev: true },
   },
 }));
 

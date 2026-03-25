@@ -16,13 +16,13 @@ export function buildRunnerCommandSnippet(
     bash: `export AIREMOTECODER_GATEWAY_URL="${safeGatewayUrl}"
 export AIREMOTECODER_MCP_TOKEN="<YOUR_MCP_TOKEN>"
 export AIREMOTECODER_PROVIDER="${normalizedProvider}"
-export AIREMOTECODER_CODEX_MODE="interactive"
+export AIREMOTECODER_CODEX_MODE="app-server"
 export AIREMOTECODER_RUNNER_ID="${safeRunnerId}"
 airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"`,
     powershell: `$env:AIREMOTECODER_GATEWAY_URL="${safeGatewayUrl}"
 $env:AIREMOTECODER_MCP_TOKEN="<YOUR_MCP_TOKEN>"
 $env:AIREMOTECODER_PROVIDER="${normalizedProvider}"
-$env:AIREMOTECODER_CODEX_MODE="interactive"
+$env:AIREMOTECODER_CODEX_MODE="app-server"
 $env:AIREMOTECODER_RUNNER_ID="${safeRunnerId}"
 airc-mcp-runner --runner-id "$env:AIREMOTECODER_RUNNER_ID"`,
   };

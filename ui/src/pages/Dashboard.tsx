@@ -1,19 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { StatusPill, RunCard, type Run } from '../components/ui';
+import { RunCard, type Run } from '../components/ui';
 import McpSpotlight from '../components/mcp/McpSpotlight';
 import type { McpActiveSession, McpConfig, McpSetupStatus, McpToken } from '../features/mcp/types';
 
 interface NeedsAttention {
   waitingApproval: Run[];
   failedRuns: Run[];
-  disconnectedWithRuns: {
-    id: string;
-    display_name: string;
-    last_seen_at: number;
-    status: string;
-    active_runs: number;
-  }[];
   unacknowledgedAlerts: {
     id: string;
     type: string;
@@ -44,11 +37,6 @@ interface DashboardStats {
     pending: number;
     done: number;
     failed: number;
-  };
-  clients: {
-    total: number;
-    online: number;
-    offline: number;
   };
   alerts: {
     unacknowledged: number;
@@ -156,8 +144,7 @@ export function Dashboard({ user: _user }: Props) {
 
   const totalAttention = needsAttention
     ? needsAttention.counts.waitingApproval +
-      needsAttention.counts.failedRuns +
-      needsAttention.counts.disconnectedWithRuns
+      needsAttention.counts.failedRuns
     : 0;
 
   return (
@@ -181,8 +168,8 @@ export function Dashboard({ user: _user }: Props) {
             <div className="stat-label">Running</div>
           </div>
           <div className="stat-card">
-            <div className="stat-value">{stats.clients.online}</div>
-            <div className="stat-label">Legacy Clients Online</div>
+            <div className="stat-value">{mcpSessions.length}</div>
+            <div className="stat-label">Connected MCP Sessions</div>
           </div>
           <div className="stat-card">
             <div className="stat-value" style={{ color: totalAttention > 0 ? 'var(--accent-red)' : undefined }}>
@@ -254,35 +241,6 @@ export function Dashboard({ user: _user }: Props) {
             </div>
           )}
 
-          {/* Disconnected Clients */}
-          {needsAttention && needsAttention.disconnectedWithRuns.length > 0 && (
-            <div className="attention-group">
-              <h3 className="attention-title">
-                <span className="attention-badge" style={{ background: 'var(--accent-yellow)' }}>
-                  {needsAttention.disconnectedWithRuns.length}
-                </span>
-                Clients Offline with Active Runs
-              </h3>
-              <div className="attention-items">
-                {needsAttention.disconnectedWithRuns.map((client) => (
-                  <div
-                    key={client.id}
-                    className="attention-item"
-                    onClick={() => navigate(`/clients/${client.id}`)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <StatusPill status="offline" size="sm" />
-                      <span>{client.display_name}</span>
-                    </div>
-                    <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
-                      {client.active_runs} active runs
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </section>
       )}
 

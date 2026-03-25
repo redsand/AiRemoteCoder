@@ -84,7 +84,6 @@ export interface AppConfig {
     opencode: boolean;
     zenflow: boolean;
     rev: boolean;
-    legacyWrapper: boolean;
   };
   approvalTimeoutSeconds: number;
   allowlistedCommands: string[];
@@ -291,7 +290,6 @@ function buildConfig(): AppConfig {
       opencode: process.env.AIRC_PROVIDER_OPENCODE !== 'false',
       zenflow: process.env.AIRC_PROVIDER_ZENFLOW !== 'false',
       rev: process.env.AIRC_PROVIDER_REV !== 'false',
-      legacyWrapper: process.env.AIRC_LEGACY_WRAPPERS_ENABLED !== 'false',
     },
     approvalTimeoutSeconds,
     allowlistedCommands,

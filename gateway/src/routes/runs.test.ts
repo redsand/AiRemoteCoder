@@ -6,8 +6,6 @@ import { createHash } from 'crypto';
 import { runsRoutes } from './runs.js';
 import { vncRoutes } from './vnc.js';
 import { db } from '../services/database.js';
-import { rawBodyPlugin } from '../middleware/auth.js';
-import { createSignature, generateNonce, hashBody } from '../utils/crypto.js';
 import { clearMcpSessionsForTests, registerMcpSession } from '../mcp/session-registry.js';
 
 const { testDbPath } = vi.hoisted(() => ({
@@ -44,8 +42,8 @@ vi.mock('../config.js', () => ({
       codex: true,
       gemini: true,
       opencode: true,
+      zenflow: true,
       rev: true,
-      legacyWrapper: true,
     },
   },
 }));
@@ -62,12 +60,10 @@ function cleanup() {
   db.prepare('DELETE FROM run_state').run();
   db.prepare('DELETE FROM runs').run();
   db.prepare('DELETE FROM clients').run();
-  db.prepare('DELETE FROM nonces').run();
 }
 
 function buildApp() {
   const fastify = Fastify({ logger: false });
-  rawBodyPlugin(fastify);
   fastify.register(fastifyCookie, { secret: 'test-auth-secret' });
   fastify.register(runsRoutes);
   fastify.register(vncRoutes);
@@ -76,27 +72,6 @@ function buildApp() {
 
 function adminSessionHeaders(session: string) {
   return { cookie: `session=${session}` };
-}
-
-function wrapperHeaders(method: string, url: string, body: string, runId?: string, capabilityToken?: string, clientToken?: string) {
-  const nonce = generateNonce();
-  const timestamp = Math.floor(Date.now() / 1000);
-  return {
-    'x-signature': createSignature({
-      method,
-      path: url,
-      bodyHash: hashBody(body),
-      timestamp,
-      nonce,
-      runId,
-      capabilityToken,
-    }, 'test-hmac-secret'),
-    'x-timestamp': String(timestamp),
-    'x-nonce': nonce,
-    ...(runId ? { 'x-run-id': runId } : {}),
-    ...(capabilityToken ? { 'x-capability-token': capabilityToken } : {}),
-    ...(clientToken ? { 'x-client-token': clientToken } : {}),
-  };
 }
 
 describe('routes/runs', () => {
@@ -156,37 +131,7 @@ describe('routes/runs', () => {
     expect(detailRes.json()).toMatchObject({ id: created.id, status: 'pending' });
   });
 
-  it('claims a pending run with a valid client token', async () => {
-    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
-    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
-
-    const clientToken = 'client-token';
-    const clientHash = createHash('sha256').update(clientToken).digest('hex');
-    db.prepare(`
-      INSERT INTO clients (id, display_name, agent_id, token_hash, status)
-      VALUES ('client-1', 'Agent One', 'agent-1', ?, 'online')
-    `).run(clientHash);
-    db.prepare(`
-      INSERT INTO runs (id, status, capability_token, worker_type, command)
-      VALUES ('run-1', 'pending', 'cap-1', 'claude', 'npm test')
-    `).run();
-
-    const claimBody = JSON.stringify({ agentId: 'agent-1' });
-    const claimRes = await app.inject({
-      method: 'POST',
-      url: '/api/runs/claim',
-      headers: {
-        ...wrapperHeaders('POST', '/api/runs/claim', claimBody, undefined, undefined, clientToken),
-        'content-type': 'application/json',
-      },
-      payload: claimBody,
-    });
-
-    expect(claimRes.statusCode).toBe(200);
-    expect(claimRes.json()).toHaveProperty('run.id', 'run-1');
-  });
-
-  it('persists and returns run state for wrapper sessions', async () => {
+  it('persists and returns run state for UI queries', async () => {
     db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
     db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
 
@@ -194,25 +139,10 @@ describe('routes/runs', () => {
       INSERT INTO runs (id, status, capability_token, worker_type, command)
       VALUES ('run-1', 'running', 'cap-1', 'claude', 'npm test')
     `).run();
-
-    const stateBody = JSON.stringify({
-      workingDir: process.cwd(),
-      lastSequence: 7,
-      stdinBuffer: 'abc',
-      environment: { NODE_ENV: 'test' },
-    });
-
-    const stateRes = await app.inject({
-      method: 'POST',
-      url: '/api/runs/run-1/state',
-      headers: {
-        ...wrapperHeaders('POST', '/api/runs/run-1/state', stateBody, 'run-1', 'cap-1'),
-        'content-type': 'application/json',
-      },
-      payload: stateBody,
-    });
-
-    expect(stateRes.statusCode).toBe(200);
+    db.prepare(`
+      INSERT INTO run_state (run_id, working_dir, original_command, last_sequence, stdin_buffer, environment)
+      VALUES ('run-1', ?, 'npm test', 7, 'abc', ?)
+    `).run(process.cwd(), JSON.stringify({ NODE_ENV: 'test' }));
 
     const getStateRes = await app.inject({
       method: 'GET',
@@ -903,38 +833,57 @@ describe('routes/runs', () => {
     });
   });
 
-  it('adopts stale MCP session claims for token-runner polling on same provider', async () => {
+  it('prefers explicit runner identity over active MCP session for runner-targeted claims', async () => {
     db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
 
-    const token = 'mcp-token-adopt-stale';
+    const token = 'mcp-token-runner-over-session';
     const tokenHash = createHash('sha256').update(token).digest('hex');
     db.prepare(`
       INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
-      VALUES ('mcp-tok-11', ?, 'auto:codex', 'user-1', '["runs:read","sessions:write"]')
+      VALUES ('mcp-tok-13', ?, 'auto:codex', 'user-1', '["runs:read","runs:write","sessions:write"]')
     `).run(tokenHash);
 
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-live-codex',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'mcp-tok-13',
+        tokenLabel: 'auto:codex',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['runs:read', 'runs:write', 'sessions:write'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
     db.prepare(`
-      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
-      VALUES ('run-mcp-adopt-stale', 'running', 'codex', 'cap-mcp-adopt-stale', 'mcp:stale-session-id', unixepoch() - 600, unixepoch())
-    `).run();
-    db.prepare(`
-      INSERT INTO commands (id, run_id, command, arguments, status, created_at)
-      VALUES ('cmd-mcp-adopt-stale', 'run-mcp-adopt-stale', '__INPUT__', 'adopt stale', 'pending', unixepoch())
+      INSERT INTO runs (id, status, worker_type, capability_token, waiting_approval, metadata, created_at)
+      VALUES ('run-mcp-runner-over-session', 'pending', 'codex', 'cap-mcp-runner-over-session', 0, '{"mcpRunnerId":"runner-z"}', unixepoch())
     `).run();
 
-    const pollRes = await app.inject({
-      method: 'GET',
-      url: '/api/mcp/runs/run-mcp-adopt-stale/commands',
+    const claimRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/claim',
       headers: {
         authorization: `Bearer ${token}`,
-        'x-airc-runner-id': 'runner-c',
+        'x-airc-runner-id': 'runner-z',
+        'content-type': 'application/json',
       },
+      payload: { provider: 'codex' },
     });
-    expect(pollRes.statusCode).toBe(200);
-    const commands = pollRes.json() as Array<{ id: string; command: string }>;
-    expect(commands.some((entry) => entry.id === 'cmd-mcp-adopt-stale' && entry.command === '__INPUT__')).toBe(true);
 
-    const runAfter = db.prepare('SELECT claimed_by FROM runs WHERE id = ?').get('run-mcp-adopt-stale') as { claimed_by: string | null };
-    expect(runAfter.claimed_by).toBe('mcp-runner:mcp-tok-11:runner-c');
+    expect(claimRes.statusCode).toBe(200);
+    expect(claimRes.json()).toMatchObject({
+      run: { id: 'run-mcp-runner-over-session' },
+    });
+
+    const saved = db.prepare('SELECT claimed_by, status FROM runs WHERE id = ?').get('run-mcp-runner-over-session') as {
+      claimed_by: string | null;
+      status: string;
+    };
+    expect(saved.claimed_by).toBe('mcp-runner:mcp-tok-13:runner-z');
+    expect(saved.status).toBe('running');
   });
+
 });

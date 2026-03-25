@@ -33,7 +33,6 @@ interface Props {
 const alertTypeLabels: Record<string, string> = {
   run_failed: 'Run Failed',
   waiting_approval_timeout: 'Waiting Approval Timeout',
-  client_offline_active_runs: 'Client Offline with Active Runs',
 };
 
 const severityColors: Record<string, string> = {
@@ -207,8 +206,6 @@ export function Alerts({ user }: Props) {
   const handleAlertClick = (alert: Alert) => {
     if (alert.target_type === 'run' && alert.target_id) {
       navigate(`/runs/${alert.target_id}`);
-    } else if (alert.target_type === 'client' && alert.target_id) {
-      navigate(`/clients/${alert.target_id}`);
     }
   };
 
@@ -418,7 +415,6 @@ export function Alerts({ user }: Props) {
           >
             <option value="run_failed">When a run fails</option>
             <option value="waiting_approval_timeout">When approval times out</option>
-            <option value="client_offline_active_runs">When client goes offline with active runs</option>
           </select>
         </div>
 

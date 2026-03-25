@@ -7,7 +7,6 @@ import {
   Runs,
   RunDetail,
   Clients,
-  ClientDetailPage,
   Alerts,
   Settings,
   McpSettings,
@@ -103,7 +102,6 @@ function App() {
 
             {/* Clients */}
             <Route path="/clients" element={<Clients user={user} />} />
-            <Route path="/clients/:clientId" element={<ClientDetailPage user={user} />} />
 
             {/* Alerts */}
             <Route path="/alerts" element={<Alerts user={user} />} />

@@ -31,8 +31,12 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
   const runnerId = (explicitRunnerId?.trim() && explicitRunnerId.trim().length > 0)
     ? explicitRunnerId.trim()
     : createHash('sha256').update(`${hostname()}:${process.cwd()}`).digest('hex').slice(0, 16);
-  const codexModeRaw = (args.get('codex-mode') ?? env.AIREMOTECODER_CODEX_MODE ?? 'interactive').toLowerCase();
-  const codexMode = codexModeRaw === 'exec' ? 'exec' : 'interactive';
+  const codexModeRaw = (args.get('codex-mode') ?? env.AIREMOTECODER_CODEX_MODE ?? 'app-server').toLowerCase();
+  const codexMode = codexModeRaw === 'exec'
+    ? 'exec'
+    : codexModeRaw === 'interactive'
+      ? 'interactive'
+      : 'app-server';
   const execTemplate = args.get('exec-template') ?? env.AIREMOTECODER_EXEC_TEMPLATE;
   if (!token) {
     throw new Error('Missing MCP token. Set AIREMOTECODER_MCP_TOKEN (or pass --token).');

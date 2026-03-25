@@ -11,7 +11,6 @@ const config: McpConfig = {
   availableScopes: ['runs:read', 'vnc:read'],
   defaultAgentScopes: ['runs:read', 'vnc:read'],
   enabledProviders: ['claude', 'codex'],
-  legacyWrapperDeprecated: false,
   connectionInstructions: {},
 };
 

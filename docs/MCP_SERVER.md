@@ -414,10 +414,10 @@ out.extend([
 path.write_text("\n".join(out), encoding="utf-8")
 PY
 
-# start MCP worker loop (interactive codex mode)
+# start MCP worker loop (Codex App Server primary mode)
 export AIREMOTECODER_GATEWAY_URL="http://localhost:3100"
 export AIREMOTECODER_PROVIDER="codex"
-export AIREMOTECODER_CODEX_MODE="interactive"
+export AIREMOTECODER_CODEX_MODE="app-server"
 export AIREMOTECODER_RUNNER_ID="$(hostname):$PWD"
 npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
@@ -449,10 +449,10 @@ url = "http://localhost:3100/mcp"
 bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
 '@ | Add-Content -Path $configPath -Encoding utf8
 
-# start MCP worker loop (interactive codex mode)
+# start MCP worker loop (Codex App Server primary mode)
 $env:AIREMOTECODER_GATEWAY_URL="http://localhost:3100"
 $env:AIREMOTECODER_PROVIDER="codex"
-$env:AIREMOTECODER_CODEX_MODE="interactive"
+$env:AIREMOTECODER_CODEX_MODE="app-server"
 $env:AIREMOTECODER_RUNNER_ID="$env:COMPUTERNAME:$((Get-Location).Path)"
 npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$env:AIREMOTECODER_RUNNER_ID"
 ```
@@ -468,12 +468,12 @@ Run this on the coding host after MCP token setup:
 export AIREMOTECODER_GATEWAY_URL=http://localhost:3100
 export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
 export AIREMOTECODER_PROVIDER=codex
-export AIREMOTECODER_CODEX_MODE=interactive
+export AIREMOTECODER_CODEX_MODE=app-server
 export AIREMOTECODER_RUNNER_ID="$(hostname):$PWD"
 npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
-Set `AIREMOTECODER_CODEX_MODE=exec` to run one-shot `codex exec` for each prompt.
+`app-server` is the primary Codex transport. Set `AIREMOTECODER_CODEX_MODE=exec` to run one-shot `codex exec` for each prompt. `interactive` remains legacy fallback only.
 For persistent install, run `npm install -g @ai-remote-coder/mcp-runner@latest` and start with `airc-mcp-runner`.
 
 For non-Codex providers set:

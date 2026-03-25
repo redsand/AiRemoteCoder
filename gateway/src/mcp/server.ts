@@ -293,7 +293,7 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
         return ok({ message: `Run is already in terminal state: ${run.status}`, run_id });
       }
 
-      // Post a stop command the wrapper will pick up
+      // Post a stop command the runner will pick up
       const cmdId = nanoid();
       db.prepare(`
         INSERT INTO commands (id, run_id, command, status, created_at)
@@ -1031,24 +1031,6 @@ function buildCapabilityMatrix() {
       supportsStreaming: true,
       supportsModelSelection: true,
       nativeMcp: false,
-      version: '1.0.0',
-    };
-  }
-
-  if (config.providers.legacyWrapper) {
-    /** @deprecated */
-    matrix.legacy_wrapper = {
-      provider: 'legacy_wrapper',
-      supportsInteractiveInput: true,
-      supportsResume: true,
-      supportsCheckpoint: true,
-      supportsApprovalGating: false,
-      supportsToolUseEvents: false,
-      supportsStreaming: true,
-      supportsModelSelection: false,
-      nativeMcp: false,
-      deprecated: true,
-      deprecationNote: 'Scheduled for removal in next major release. Migrate to a native provider adapter.',
       version: '1.0.0',
     };
   }

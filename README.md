@@ -5,7 +5,7 @@ A secure, mobile-friendly gateway for remotely monitoring and controlling AI cod
 AiRemoteCoder is now **MCP-first**:
 - MCP control plane (`/mcp`) is the primary agent-facing interface
 - The existing secure UI/API/WebSocket channel is the primary human-facing interface
-- Legacy subprocess wrappers remain available only as compatibility mode during migration
+- `airc-mcp-runner` is the only supported local execution bridge
 
 ## Setup
 
@@ -77,9 +77,9 @@ AiRemoteCoder is now **MCP-first**:
 - **Real-time Monitoring**: Stream normalized run/session events to your phone/browser
 - **Multi-Agent Support**: Claude, Codex, Gemini, OpenCode, Zenflow, Rev, VNC, and hands-on
 - **Command Execution**: Run allowlisted commands (tests, git operations) from the UI
-- **Secure Authentication**: HMAC-signed requests, session auth, optional TOTP 2FA, Cloudflare Access
+- **Secure Authentication**: Scoped MCP tokens, session auth, optional TOTP 2FA, Cloudflare Access
 - **Connect-Back Only**: Agents initiate outbound connections — no inbound ports required
-- **Artifact Collection**: Upload and download files and diffs from agent runs
+- **Artifact Collection**: Download files and diffs from agent runs
 - **VNC Remote Desktop**: Full remote desktop access as a fallback for manual intervention
 - **Run Resume**: Resume stopped or failed runs, preserving working directory and session state
 - **Worker Pool**: Run multiple agents concurrently with configurable limits
@@ -100,8 +100,6 @@ Then:
 4. Generate provider setup commands/snippets for your project
 5. Run your coding agent (Claude/Codex/Gemini/OpenCode/Zenflow/Rev) in that project
 6. Create and control runs from the UI
-
-Legacy wrapper mode (deprecated) remains available during migration. See `docs/MIGRATION_FROM_LEGACY.md`.
 
 ## MCP Setup (Codex example)
 
@@ -148,13 +146,13 @@ After MCP setup, start the worker loop on the coding host (from any project dire
 export AIREMOTECODER_GATEWAY_URL=http://localhost:3100
 export AIREMOTECODER_MCP_TOKEN=<YOUR_MCP_TOKEN>
 export AIREMOTECODER_PROVIDER=codex
-export AIREMOTECODER_CODEX_MODE=interactive
+export AIREMOTECODER_CODEX_MODE=app-server
 export AIREMOTECODER_RUNNER_ID="$(hostname):$PWD"
 npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
-This loop claims MCP runs, polls queued commands, executes prompts via a persistent Codex interactive session, acknowledges commands, and streams events/lifecycle markers back to the gateway.
-Set `AIREMOTECODER_CODEX_MODE=exec` to use one-shot `codex exec` per prompt.
+This loop claims MCP runs, polls queued commands, executes prompts via `codex app-server`, acknowledges commands, and streams structured events/lifecycle markers back to the gateway.
+Set `AIREMOTECODER_CODEX_MODE=exec` to use one-shot `codex exec` per prompt. `interactive` remains legacy fallback only.
 
 Optional global install:
 
@@ -183,7 +181,6 @@ For phone access via Cloudflare Tunnel:
 
 - [MCP Architecture](docs/MCP_ARCHITECTURE.md)
 - [MCP Server Reference](docs/MCP_SERVER.md)
-- [Migration From Legacy Wrappers](docs/MIGRATION_FROM_LEGACY.md)
 - [Quickstart Guide](docs/QUICKSTART.md)
 - [DigitalOcean Deployment](docs/DIGITALOCEAN.md)
 - [Security Model](docs/SECURITY.md)
@@ -194,7 +191,7 @@ For phone access via Cloudflare Tunnel:
 
 ```
 ├── gateway/          # Fastify server (MCP server + REST API + WebSocket + SQLite)
-├── wrapper/          # Deprecated wrapper compatibility path
+├── runner/           # MCP helper runner (Codex app-server primary path)
 ├── ui/               # React UI (mobile-friendly)
 ├── docs/             # Documentation
 ├── scripts/          # Utility scripts (startup, certs, tunnels, pruning)
@@ -211,8 +208,6 @@ For phone access via Cloudflare Tunnel:
 
 - TLS everywhere (auto-generated self-signed certs for development)
 - Scoped MCP bearer tokens and per-tool authorization
-- HMAC-signed wrapper requests (legacy compatibility path)
-- Replay protection via nonces (10-minute expiry)
 - Allowlisted commands only (extensible via `EXTRA_ALLOWED_COMMANDS`)
 - Secret redaction in all log streams
 - Argon2id password hashing

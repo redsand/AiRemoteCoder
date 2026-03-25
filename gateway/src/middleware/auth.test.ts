@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join, dirname } from 'path';
-import { wrapperAuth, uiAuth, requireRole, type AuthenticatedRequest } from './auth.js';
+import { uiAuth, requireRole, type AuthenticatedRequest } from './auth.js';
 import { db } from '../services/database.js';
-import { createSignature, generateNonce, hashBody, generateCapabilityToken } from '../utils/crypto.js';
 
 const { testDbPath } = vi.hoisted(() => ({
   testDbPath: process.cwd() + '\\.vitest-data\\middleware-auth-' + Math.random().toString(36).slice(2) + '.db',
@@ -37,8 +36,8 @@ vi.mock('../config.js', () => ({
       codex: true,
       gemini: true,
       opencode: true,
+      zenflow: true,
       rev: true,
-      legacyWrapper: true,
     },
   },
 }));
@@ -54,7 +53,6 @@ function makeReply() {
 }
 
 function cleanup() {
-  db.prepare('DELETE FROM nonces').run();
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM users').run();
   db.prepare('DELETE FROM runs').run();
@@ -68,93 +66,6 @@ describe('middleware/auth', () => {
 
   afterEach(() => {
     cleanup();
-  });
-
-  it('accepts valid wrapper requests and binds run auth', async () => {
-    const runId = 'run-1';
-    const capabilityToken = generateCapabilityToken();
-    db.prepare(`
-      INSERT INTO runs (id, status, capability_token, worker_type)
-      VALUES (?, 'pending', ?, 'claude')
-    `).run(runId, capabilityToken);
-
-    const nonce = generateNonce();
-    const timestamp = Math.floor(Date.now() / 1000);
-    const body = JSON.stringify({ input: 'hello' });
-    const signature = createSignature({
-      method: 'POST',
-      path: '/api/runs/run-1/input',
-      bodyHash: hashBody(body),
-      timestamp,
-      nonce,
-      runId,
-      capabilityToken,
-    }, 'test-hmac-secret');
-
-    const request = {
-      headers: {
-        'x-signature': signature,
-        'x-timestamp': String(timestamp),
-        'x-nonce': nonce,
-        'x-run-id': runId,
-        'x-capability-token': capabilityToken,
-        'content-type': 'application/json',
-      },
-      rawBody: body,
-      method: 'POST',
-      url: '/api/runs/run-1/input',
-      ip: '127.0.0.1',
-    } as Partial<AuthenticatedRequest> as AuthenticatedRequest;
-    const reply = makeReply();
-
-    await wrapperAuth(request, reply);
-
-    expect(reply.code).not.toHaveBeenCalled();
-    expect(request.user?.source).toBe('wrapper');
-    expect(request.runAuth).toEqual({ runId, capabilityToken });
-  });
-
-  it('rejects replayed wrapper nonces', async () => {
-    const runId = 'run-2';
-    const capabilityToken = generateCapabilityToken();
-    db.prepare(`
-      INSERT INTO runs (id, status, capability_token, worker_type)
-      VALUES (?, 'pending', ?, 'claude')
-    `).run(runId, capabilityToken);
-
-    const nonce = generateNonce();
-    const body = JSON.stringify({ input: 'hello' });
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signature = createSignature({
-      method: 'POST',
-      path: '/api/runs/run-2/input',
-      bodyHash: hashBody(body),
-      timestamp,
-      nonce,
-      runId,
-      capabilityToken,
-    }, 'test-hmac-secret');
-
-    const request = {
-      headers: {
-        'x-signature': signature,
-        'x-timestamp': String(timestamp),
-        'x-nonce': nonce,
-        'x-run-id': runId,
-        'x-capability-token': capabilityToken,
-      },
-      rawBody: body,
-      method: 'POST',
-      url: '/api/runs/run-2/input',
-      ip: '127.0.0.1',
-    } as Partial<AuthenticatedRequest> as AuthenticatedRequest;
-    const reply = makeReply();
-
-    await wrapperAuth(request, reply);
-    await wrapperAuth(request, reply);
-
-    expect(reply.code).toHaveBeenLastCalledWith(401);
-    expect(reply.send).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('Nonce already used') }));
   });
 
   it('accepts a valid session cookie for ui auth', async () => {

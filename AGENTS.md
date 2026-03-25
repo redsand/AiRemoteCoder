@@ -10,13 +10,13 @@ repository. Read it before making any changes.
 AiRemoteCoder is a connect-back gateway that lets you manage AI coding agents
 (Claude Code, Codex, Gemini CLI, OpenCode, Rev) remotely from a phone or
 browser. The gateway is a Fastify/Node.js TypeScript server. Agents connect to
-it via the MCP control plane (primary) or the legacy subprocess wrapper (deprecated).
+it via the MCP control plane and the `airc-mcp-runner` helper.
 
 **Repository layout:**
 
 ```
 gateway/     Fastify server — MCP server, REST API, WebSocket, SQLite
-wrapper/     CLI tool that spawns AI agents (deprecated for new work)
+runner/      CLI tool that pairs a local coding environment with the gateway
 ui/          React web UI (Vite + TypeScript)
 docs/        Architecture and operational documentation
 ```
@@ -63,13 +63,10 @@ cd gateway && npm test
 # Watch mode
 cd gateway && npm run test:watch
 
-# Wrapper unit tests
-cd wrapper && npm test
-
 # All tests from root
 npm test --workspaces
 
-# MCP MVP test path (gateway + ui, excludes deprecated wrapper)
+# MCP MVP test path
 npm run test:mvp
 ```
 
@@ -96,7 +93,6 @@ The MCP control plane is the primary agent-facing interface. Every change to
 | `mcp/server.ts` | `mcp/server.test.ts` | Every tool: auth failure, scope failure, success, not-found, idempotency, and approval state transitions |
 | `mcp/plugin.ts` | `mcp/plugin.test.ts` | HTTP routes: POST/GET/DELETE /mcp, session auth/replay checks, token CRUD, /api/mcp/config |
 | `adapters/types.ts` | `adapters/adapter-contract.test.ts` | Interface compliance |
-| `adapters/legacy-wrapper.ts` | `adapters/legacy-wrapper.test.ts` | All adapter methods |
 | `adapters/registry.ts` | `adapters/registry.test.ts` | Register, get, list, has |
 | `services/database.ts` (new helpers) | `services/database.test.ts` | findMcpToken, expireTimedOutApprovals |
 | `services/approval-workflow.ts` | `services/approval-workflow.test.ts` | Transactional approval create/resolve, rollback on failure |
@@ -161,12 +157,11 @@ The provider setup flow must have direct tests for:
    what crosses boundaries. Adapters must convert from their native format to
    these types.
 
-5. **Additive migration.** Do not remove legacy code until `AIRC_LEGACY_WRAPPERS_ENABLED=false`
-   is confirmed working and the adapter path is proven. Use feature flags.
+5. **MCP plus helper only.** Do not reintroduce wrapper-era HMAC client-token
+   flows, subprocess bridge routes, or deprecated compatibility adapters.
 
-6. **Legacy wrapper is deprecated.** Do not add new features to
-   `gateway/src/adapters/legacy-wrapper.ts` or `wrapper/src/`. New work goes
-   into native provider adapters.
+6. **Runner is the local bridge.** New execution features belong in `runner/`
+   and the MCP worker APIs, not in ad hoc local wrappers.
 
 ---
 
@@ -188,13 +183,12 @@ gateway/src/
   adapters/
     types.ts             ProviderAdapter interface
     registry.ts          Adapter registry
-    legacy-wrapper.ts    @deprecated compatibility shim
     *.test.ts            Adapter tests
   services/
     database.ts          SQLite schema + helpers
     websocket.ts         WebSocket hub
   middleware/
-    auth.ts              HMAC wrapper auth + UI session auth
+    auth.ts              UI session auth
   routes/                Existing REST API routes (unchanged)
   utils/
     crypto.ts            HMAC, hashing, token generation
@@ -208,7 +202,6 @@ gateway/src/
 |----------|---------|-------------|
 | `AIRC_MCP_ENABLED` | `true` | Enable MCP control plane |
 | `AIRC_MCP_PATH` | `/mcp` | MCP endpoint path |
-| `AIRC_LEGACY_WRAPPERS_ENABLED` | `true` | Enable deprecated wrapper compat |
 | `AIRC_PROVIDER_CLAUDE` | `true` | Enable Claude adapter |
 | `AIRC_PROVIDER_CODEX` | `true` | Enable Codex adapter |
 | `AIRC_PROVIDER_GEMINI` | `true` | Enable Gemini adapter |
@@ -238,6 +231,5 @@ gateway/src/
 |-----|---------|
 | `docs/MCP_ARCHITECTURE.md` | System design and data flow |
 | `docs/MCP_SERVER.md` | MCP tool reference |
-| `docs/MIGRATION_FROM_LEGACY.md` | How to migrate from wrapper to MCP |
 | `docs/SECURITY.md` | Threat model |
 | `docs/TESTING.md` | Test procedures |
