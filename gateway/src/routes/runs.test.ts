@@ -972,4 +972,114 @@ describe('routes/runs', () => {
     expect(saved.status).toBe('running');
   });
 
+  it('returns an already claimed running run for the same runner after helper restart', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-recover';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-recover', ?, 'auto:claude', 'user-1', '["runs:read","runs:write","sessions:write"]')
+    `).run(tokenHash);
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at, metadata)
+      VALUES ('run-mcp-recover', 'running', 'claude', 'cap-mcp-recover', 'mcp-runner:mcp-tok-recover:runner-r', unixepoch(), unixepoch(), '{"mcpRunnerId":"runner-r"}')
+    `).run();
+    db.prepare(`
+      INSERT INTO run_state (run_id, working_dir, original_command, provider_state)
+      VALUES ('run-mcp-recover', 'C:/repo', 'bootstrap', '{"cliSessionId":"session-recover-1"}')
+    `).run();
+
+    const claimRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/claim',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-airc-runner-id': 'runner-r',
+        'content-type': 'application/json',
+      },
+      payload: { provider: 'claude' },
+    });
+
+    expect(claimRes.statusCode).toBe(200);
+    expect(claimRes.json()).toMatchObject({
+      run: {
+        id: 'run-mcp-recover',
+        workerType: 'claude',
+        resumeState: { cliSessionId: 'session-recover-1' },
+      },
+    });
+  });
+
+  it('persists helper resume state for a claimed run', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-state';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-state', ?, 'auto:claude', 'user-1', '["runs:read","runs:write","sessions:write"]')
+    `).run(tokenHash);
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at, metadata)
+      VALUES ('run-mcp-state', 'running', 'claude', 'cap-mcp-state', 'mcp-runner:mcp-tok-state:runner-state', unixepoch(), unixepoch(), '{"mcpRunnerId":"runner-state","workingDir":"C:/repo"}')
+    `).run();
+
+    const stateRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/run-mcp-state/state',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-airc-runner-id': 'runner-state',
+        'x-airc-project-dir': 'C:/repo',
+        'content-type': 'application/json',
+      },
+      payload: { resumeState: { cliSessionId: 'session-xyz' } },
+    });
+
+    expect(stateRes.statusCode).toBe(200);
+    expect(stateRes.json()).toMatchObject({ ok: true });
+
+    const saved = db.prepare('SELECT working_dir, provider_state FROM run_state WHERE run_id = ?').get('run-mcp-state') as {
+      working_dir: string;
+      provider_state: string | null;
+    };
+    expect(saved.working_dir).toBe('C:/repo');
+    expect(saved.provider_state ? JSON.parse(saved.provider_state) : null).toEqual({ cliSessionId: 'session-xyz' });
+  });
+
+  it('rejects helper resume state updates from the wrong runner claim', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-state-deny';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-state-deny', ?, 'auto:claude', 'user-1', '["runs:read","runs:write","sessions:write"]')
+    `).run(tokenHash);
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at, metadata)
+      VALUES ('run-mcp-state-deny', 'running', 'claude', 'cap-mcp-state-deny', 'mcp-runner:mcp-tok-state-deny:runner-good', unixepoch(), unixepoch(), '{"mcpRunnerId":"runner-good"}')
+    `).run();
+
+    const stateRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/run-mcp-state-deny/state',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-airc-runner-id': 'runner-bad',
+        'content-type': 'application/json',
+      },
+      payload: { resumeState: { cliSessionId: 'session-bad' } },
+    });
+
+    expect(stateRes.statusCode).toBe(403);
+    expect(stateRes.json()).toMatchObject({
+      error: 'Run is not claimed by this MCP session',
+    });
+  });
+
 });

@@ -81,6 +81,10 @@ const mcpClaimRunSchema = z.object({
   provider: z.string().optional(),
 });
 
+const workerStateSchema = z.object({
+  resumeState: z.record(z.unknown()).nullable(),
+});
+
 function resolveAuthorizedMcpWorker(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -412,18 +416,43 @@ export async function runsRoutes(fastify: FastifyInstance) {
     const now = Math.floor(Date.now() / 1000);
     const claimTransaction = db.transaction(() => {
       const targetRunnerId = auth.runnerId ?? null;
-      const run = db.prepare(`
-        SELECT id, command, metadata, worker_type, capability_token
-        FROM runs
-        WHERE status = 'pending'
-          AND waiting_approval = 0
-          AND worker_type = ?
+      const existingRun = db.prepare(`
+        SELECT r.id, r.command, r.metadata, r.worker_type, r.capability_token, rs.provider_state
+        FROM runs r
+        LEFT JOIN run_state rs ON rs.run_id = r.id
+        WHERE r.status = 'running'
+          AND r.worker_type = ?
+          AND r.claimed_by = ?
           AND (
-            json_extract(metadata, '$.mcpRunnerId') IS NULL
-            OR json_extract(metadata, '$.mcpRunnerId') = ?
+            json_extract(r.metadata, '$.mcpRunnerId') IS NULL
+            OR json_extract(r.metadata, '$.mcpRunnerId') = ?
           )
-          AND (claimed_by IS NULL OR claimed_by = ?)
-        ORDER BY created_at ASC
+        ORDER BY r.claimed_at DESC, r.created_at DESC
+        LIMIT 1
+      `).get(provider, claimTag, targetRunnerId) as any;
+
+      if (existingRun) {
+        db.prepare(`
+          UPDATE runs
+          SET claimed_at = ?
+          WHERE id = ? AND claimed_by = ?
+        `).run(now, existingRun.id, claimTag);
+        return existingRun;
+      }
+
+      const run = db.prepare(`
+        SELECT r.id, r.command, r.metadata, r.worker_type, r.capability_token, rs.provider_state
+        FROM runs r
+        LEFT JOIN run_state rs ON rs.run_id = r.id
+        WHERE r.status = 'pending'
+          AND r.waiting_approval = 0
+          AND r.worker_type = ?
+          AND (
+            json_extract(r.metadata, '$.mcpRunnerId') IS NULL
+            OR json_extract(r.metadata, '$.mcpRunnerId') = ?
+          )
+          AND (r.claimed_by IS NULL OR r.claimed_by = ?)
+        ORDER BY r.created_at ASC
         LIMIT 1
       `).get(provider, targetRunnerId, claimTag) as any;
 
@@ -456,6 +485,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
         command: claimed.command,
         workerType: claimed.worker_type,
         metadata: claimed.metadata ? JSON.parse(claimed.metadata) : null,
+        resumeState: claimed.provider_state ? JSON.parse(claimed.provider_state) : null,
       },
     };
   });
@@ -765,6 +795,58 @@ export async function runsRoutes(fastify: FastifyInstance) {
     });
 
     return { ok: true, eventId: Number(result.lastInsertRowid) };
+  });
+
+  // MCP worker: persist provider resume state for helper restarts
+  fastify.post('/api/mcp/runs/:runId/state', async (request, reply) => {
+    const auth = resolveAuthorizedMcpWorker(request, reply, ['sessions:write']);
+    if (!auth) return;
+    const { runId } = request.params as { runId: string };
+    const body = workerStateSchema.parse(request.body ?? {});
+    const { claimTag } = auth;
+
+    const run = db.prepare('SELECT id, claimed_by, repo_path, command, metadata FROM runs WHERE id = ?').get(runId) as {
+      id: string;
+      claimed_by: string | null;
+      repo_path: string | null;
+      command: string | null;
+      metadata: string | null;
+    } | undefined;
+    if (!run) {
+      return reply.code(404).send({ error: 'Run not found' });
+    }
+
+    if (run.claimed_by !== claimTag) {
+      return reply.code(403).send({ error: 'Run is not claimed by this MCP session' });
+    }
+
+    const existingState = db.prepare('SELECT working_dir FROM run_state WHERE run_id = ?').get(runId) as {
+      working_dir: string;
+    } | undefined;
+    const metadata = run.metadata ? JSON.parse(run.metadata) as Record<string, unknown> : {};
+    const projectDirHeader = request.headers['x-airc-project-dir'];
+    const workingDir = existingState?.working_dir
+      ?? (typeof metadata.workingDir === 'string' ? metadata.workingDir : null)
+      ?? (typeof projectDirHeader === 'string' && projectDirHeader.trim().length > 0 ? projectDirHeader.trim() : null)
+      ?? run.repo_path
+      ?? process.cwd();
+
+    db.prepare(`
+      INSERT INTO run_state (run_id, working_dir, original_command, provider_state, updated_at)
+      VALUES (?, ?, ?, ?, unixepoch())
+      ON CONFLICT(run_id) DO UPDATE SET
+        working_dir = excluded.working_dir,
+        original_command = COALESCE(run_state.original_command, excluded.original_command),
+        provider_state = excluded.provider_state,
+        updated_at = unixepoch()
+    `).run(
+      runId,
+      workingDir,
+      run.command ?? null,
+      body.resumeState ? JSON.stringify(body.resumeState) : null,
+    );
+
+    return { ok: true };
   });
 
   // MCP worker: upload synthesized artifact content

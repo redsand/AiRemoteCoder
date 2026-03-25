@@ -27,6 +27,9 @@ Environment variables are also supported:
 The helper automatically reports its current working directory to the gateway.
 That directory is shown in the **Connected Hosts** UI so hosts can be
 distinguished by project root.
+The helper also persists provider resume state for the claimed run, so after a
+gateway or helper restart it can reclaim the same run and continue when the
+provider exposes a resumable session identifier.
 
 ## Codex transport
 

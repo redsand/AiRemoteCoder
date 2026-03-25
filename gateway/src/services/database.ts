@@ -176,6 +176,7 @@ db.exec(`
     last_sequence INTEGER DEFAULT 0,
     stdin_buffer TEXT,
     environment TEXT,
+    provider_state TEXT,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
@@ -270,6 +271,7 @@ migrateLegacyClientSchema();
 ensureColumn('runs', 'claimed_by', 'TEXT');
 ensureColumn('runs', 'claimed_at', 'INTEGER');
 ensureColumn('commands', 'arguments', 'TEXT');
+ensureColumn('run_state', 'provider_state', 'TEXT');
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_runs_claimed_by ON runs(claimed_by);

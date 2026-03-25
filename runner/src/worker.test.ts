@@ -322,14 +322,13 @@ describe('runner executor helpers', () => {
     ]);
   });
 
-  it('writes Claude prompts to stdin on Windows-safe path', async () => {
-    const stdinEnd = vi.fn();
+  it('passes Claude prompts as CLI args on Windows too', async () => {
     let firstArgs: string[] = [];
     const spawnFn = vi.fn((command: string, args: string[]) => {
       void command;
       firstArgs = args;
       const child = new EventEmitter() as any;
-      child.stdin = { end: stdinEnd };
+      child.stdin = { end: vi.fn() };
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       queueMicrotask(() => {
@@ -342,8 +341,7 @@ describe('runner executor helpers', () => {
     const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any, platform: 'win32' });
     await executor.sendInput('Get-ChildItem $env:TEMP', async () => {});
 
-    expect(stdinEnd).toHaveBeenCalledWith('Get-ChildItem $env:TEMP');
-    expect(firstArgs).not.toContain('Get-ChildItem $env:TEMP');
+    expect(firstArgs).toEqual(expect.arrayContaining(['--', 'Get-ChildItem $env:TEMP']));
   });
 
   it('surfaces Claude CLI errors from stream-json results', async () => {
@@ -366,6 +364,35 @@ describe('runner executor helpers', () => {
 
     const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any });
     await expect(executor.sendInput('explode', async () => {})).rejects.toThrow('permission denied');
+  });
+
+  it('restores Claude CLI session id for helper restart resume', async () => {
+    const spawnFn = vi.fn(() => {
+      const child = new EventEmitter() as any;
+      child.stdin = { end: vi.fn() };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          session_id: 'session-restored',
+        })}\n`));
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any });
+    executor.restoreState?.({ cliSessionId: 'session-restored' });
+    await executor.sendInput('resume me', async () => {});
+
+    expect(spawnFn).toHaveBeenCalledWith(
+      'claude',
+      expect.arrayContaining(['--resume', 'session-restored']),
+      expect.any(Object),
+    );
+    expect(executor.snapshotState?.()).toEqual({ cliSessionId: 'session-restored' });
   });
 
   it('collects git diff and changed files for synthesized change reporting', async () => {
@@ -518,6 +545,7 @@ describe('runner loop integration', () => {
       pollCommands: vi.fn().mockResolvedValue([]),
       ackCommand: vi.fn().mockResolvedValue({ ok: true }),
       sendEvent: vi.fn().mockResolvedValue({ ok: true }),
+      saveResumeState: vi.fn().mockResolvedValue({ ok: true }),
       uploadArtifact: vi.fn().mockResolvedValue({ ok: true, artifactId: 'artifact-1' }),
     };
     const executor = {
@@ -557,6 +585,7 @@ describe('runner loop integration', () => {
       codexApprovalPolicy: 'never',
     }, { api: api as any, executor: executor as any, spawnFn: spawnFn as any });
 
+    expect(spawnFn).toHaveBeenCalled();
     expect(api.sendEvent).toHaveBeenCalledWith('run-claude-1', expect.objectContaining({
       type: 'info',
       data: expect.stringContaining('"method":"item/completed"'),
@@ -570,5 +599,39 @@ describe('runner loop integration', () => {
       type: 'diff',
       content: expect.stringContaining('diff --git a/src/app.ts b/src/app.ts'),
     }));
+  });
+
+  it('hydrates executor resume state from claim response before polling commands', async () => {
+    const api = {
+      claimRun: vi.fn().mockResolvedValue({
+        run: {
+          id: 'run-claude-restart',
+          command: null,
+          workerType: 'claude',
+          resumeState: { cliSessionId: 'session-from-gateway' },
+        },
+      }),
+      pollCommands: vi.fn().mockResolvedValue([]),
+      ackCommand: vi.fn().mockResolvedValue({ ok: true }),
+      sendEvent: vi.fn().mockResolvedValue({ ok: true }),
+      saveResumeState: vi.fn().mockResolvedValue({ ok: true }),
+      uploadArtifact: vi.fn().mockResolvedValue({ ok: true, artifactId: 'artifact-1' }),
+    };
+    const executor = {
+      sendInput: vi.fn(),
+      interrupt: vi.fn().mockResolvedValue(undefined),
+      restoreState: vi.fn(),
+    };
+
+    await runLoopOnce({
+      gatewayUrl: 'http://localhost:3100',
+      token: 'token-1',
+      runnerId: 'runner-1',
+      provider: 'claude',
+      codexMode: 'app-server',
+      codexApprovalPolicy: 'never',
+    }, { api: api as any, executor: executor as any });
+
+    expect(executor.restoreState).toHaveBeenCalledWith({ cliSessionId: 'session-from-gateway' });
   });
 });

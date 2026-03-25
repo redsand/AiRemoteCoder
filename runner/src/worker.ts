@@ -14,6 +14,8 @@ interface ClaimedRun {
   id: string;
   command: string | null;
   workerType: string;
+  metadata?: Record<string, unknown> | null;
+  resumeState?: Record<string, unknown> | null;
 }
 
 interface ClaimResponse {
@@ -26,9 +28,33 @@ interface WorkerArtifactUpload {
   content: string;
 }
 
+function summarizeCommand(command: WorkerCommand): string {
+  if (command.command === '__INPUT__') {
+    const text = (command.arguments ?? '').trim().replace(/\s+/g, ' ');
+    return `prompt ${command.id}: ${text.slice(0, 80)}${text.length > 80 ? '...' : ''}`;
+  }
+  if (command.command === '__EXEC__') {
+    const text = (command.arguments ?? '').trim().replace(/\s+/g, ' ');
+    return `command ${command.id}: ${text.slice(0, 80)}${text.length > 80 ? '...' : ''}`;
+  }
+  return `${command.command} ${command.id}`;
+}
+
+function logRunnerInfo(message: string): void {
+  // eslint-disable-next-line no-console
+  console.info(`[airc-mcp-runner] ${message}`);
+}
+
+function logRunnerError(message: string): void {
+  // eslint-disable-next-line no-console
+  console.error(`[airc-mcp-runner] ${message}`);
+}
+
 export interface WorkerExecutor {
   sendInput(input: string, emit: (type: EventType, data: string) => Promise<void>): Promise<void>;
   interrupt(): Promise<void>;
+  restoreState?(state: Record<string, unknown> | null): void;
+  snapshotState?(): Record<string, unknown> | null;
   shutdown?(): Promise<void>;
 }
 
@@ -516,15 +542,25 @@ export class ClaudeCliExecutor implements WorkerExecutor {
     }
   }
 
+  restoreState(state: Record<string, unknown> | null): void {
+    const sessionId = state?.cliSessionId;
+    if (typeof sessionId === 'string' && sessionId.trim().length > 0) {
+      this.cliSessionId = sessionId.trim();
+    }
+  }
+
+  snapshotState(): Record<string, unknown> | null {
+    return this.cliSessionId ? { cliSessionId: this.cliSessionId } : null;
+  }
+
   async sendInput(input: string, emit: (type: EventType, data: string) => Promise<void>): Promise<void> {
     const args = this.buildArgs();
     const command = this.options.command ?? 'claude';
-    const useStdin = this.platform === 'win32';
 
     await emit('info', `Executing Claude prompt (${input.length} chars)`);
 
     await new Promise<void>((resolve, reject) => {
-      const child = this.spawnFn(command, useStdin ? args : [...args, input], {
+      const child = this.spawnFn(command, [...args, '--', input], {
         shell: false,
         windowsHide: true,
         cwd: this.options.cwd ?? process.cwd(),
@@ -570,11 +606,7 @@ export class ClaudeCliExecutor implements WorkerExecutor {
         reject(new Error(stderrText || `claude exited with code ${code}`));
       });
 
-      if (useStdin) {
-        child.stdin?.end(input);
-      } else {
-        child.stdin?.end();
-      }
+      child.stdin?.end();
     });
   }
 
@@ -666,6 +698,10 @@ export class McpWorkerApi {
 
   uploadArtifact(runId: string, artifact: WorkerArtifactUpload): Promise<{ ok: boolean; artifactId: string }> {
     return this.request('POST', `/api/mcp/runs/${runId}/artifacts`, artifact);
+  }
+
+  saveResumeState(runId: string, resumeState: Record<string, unknown> | null): Promise<{ ok: boolean }> {
+    return this.request('POST', `/api/mcp/runs/${runId}/state`, { resumeState });
   }
 }
 
@@ -799,29 +835,33 @@ export function createBufferedEventSink(
 export async function handleWorkerCommand(
   command: WorkerCommand,
   runId: string,
-  api: Pick<McpWorkerApi, 'ackCommand' | 'sendEvent'> & Partial<Pick<McpWorkerApi, 'uploadArtifact'>>,
+  api: Pick<McpWorkerApi, 'ackCommand' | 'sendEvent'> & Partial<Pick<McpWorkerApi, 'uploadArtifact' | 'saveResumeState'>>,
   executor: WorkerExecutor,
   providerOrSpawnFn: string | SpawnFn = 'codex',
   spawnFn: SpawnFn = spawn,
 ): Promise<boolean> {
   const provider = typeof providerOrSpawnFn === 'string' ? providerOrSpawnFn : 'codex';
   const effectiveSpawnFn = typeof providerOrSpawnFn === 'function' ? providerOrSpawnFn : spawnFn;
+  logRunnerInfo(`processing ${summarizeCommand(command)} on run ${runId}`);
 
   if (command.command === '__STOP__') {
     await api.sendEvent(runId, { type: 'marker', data: JSON.stringify({ event: 'finished', exitCode: 0 }) });
     await api.ackCommand(runId, command.id, 'stopped');
+    logRunnerInfo(`stopped run ${runId}`);
     return true;
   }
 
   if (command.command === '__ESCAPE__') {
     await executor.interrupt();
     await api.ackCommand(runId, command.id, 'interrupted');
+    logRunnerInfo(`sent interrupt for run ${runId}`);
     return false;
   }
 
   if (command.command === '__START_VNC_STREAM__') {
     await api.sendEvent(runId, { type: 'info', data: 'VNC stream start command delivered to MCP worker' });
     await api.ackCommand(runId, command.id, 'vnc-start-ack');
+    logRunnerInfo(`acknowledged VNC stream start for run ${runId}`);
     return false;
   }
 
@@ -836,6 +876,7 @@ export async function handleWorkerCommand(
     await sink.flush();
     await emitSynthesizedChangeReport(runId, provider, api, effectiveSpawnFn);
     await api.ackCommand(runId, command.id, 'ok');
+    logRunnerInfo(`completed ${summarizeCommand(command)} on run ${runId}`);
     return false;
   }
 
@@ -843,8 +884,12 @@ export async function handleWorkerCommand(
   const sink = createBufferedEventSink(runId, api);
   await executor.sendInput(input, sink.emit);
   await sink.flush();
+  if (api.saveResumeState && executor.snapshotState) {
+    await api.saveResumeState(runId, executor.snapshotState());
+  }
   await emitSynthesizedChangeReport(runId, provider, api, effectiveSpawnFn);
   await api.ackCommand(runId, command.id, 'ok');
+  logRunnerInfo(`completed ${summarizeCommand(command)} on run ${runId}`);
   return false;
 }
 
@@ -898,6 +943,10 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
       }
 
       const runId = claimed.run.id;
+      logRunnerInfo(`claimed run ${runId} for provider ${options.provider}`);
+      if (executor.restoreState) {
+        executor.restoreState(claimed.run.resumeState ?? null);
+      }
       sequence += 1;
       await api.sendEvent(runId, {
         type: 'marker',
@@ -912,6 +961,7 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
           api,
           executor,
           options.provider,
+          spawn,
         );
       }
 
@@ -941,8 +991,7 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
           lastIdleClaimLogAt = now;
         }
       } else {
-        // eslint-disable-next-line no-console
-        console.error('[airc-mcp-runner] error', err?.message ?? err);
+        logRunnerError(`error ${err?.message ?? err}`);
       }
       await new Promise((resolve) => setTimeout(resolve, errorBackoffMs));
     }
@@ -952,7 +1001,7 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
 export async function runLoopOnce(
   options: RunnerOptions,
   deps: {
-    api?: Pick<McpWorkerApi, 'claimRun' | 'pollCommands' | 'ackCommand' | 'sendEvent' | 'uploadArtifact'>;
+    api?: Pick<McpWorkerApi, 'claimRun' | 'pollCommands' | 'ackCommand' | 'sendEvent' | 'uploadArtifact' | 'saveResumeState'>;
     executor?: WorkerExecutor;
     spawnFn?: SpawnFn;
   } = {},
@@ -966,6 +1015,10 @@ export async function runLoopOnce(
   }
 
   const runId = claimed.run.id;
+  logRunnerInfo(`claimed run ${runId} for provider ${options.provider}`);
+  if (executor.restoreState) {
+    executor.restoreState(claimed.run.resumeState ?? null);
+  }
   await api.sendEvent(runId, {
     type: 'marker',
     data: JSON.stringify({ event: 'started', provider: options.provider }),
@@ -979,6 +1032,7 @@ export async function runLoopOnce(
       api,
       executor,
       options.provider,
+      deps.spawnFn,
     );
   }
 
@@ -991,6 +1045,7 @@ export async function runLoopOnce(
     } catch (err: any) {
       await api.sendEvent(runId, { type: 'error', data: String(err?.message ?? err) });
       await api.ackCommand(runId, command.id, undefined, String(err?.message ?? err));
+      logRunnerError(`command ${command.id} failed on run ${runId}: ${String(err?.message ?? err)}`);
     }
   }
 

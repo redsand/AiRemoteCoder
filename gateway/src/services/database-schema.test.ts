@@ -48,8 +48,10 @@ describe('services/database schema', () => {
       SELECT name FROM sqlite_master WHERE type = 'table'
     `).all() as Array<{ name: string }>;
     const runColumns = mod.db.prepare(`PRAGMA table_info(runs)`).all() as Array<{ name: string }>;
+    const runStateColumns = mod.db.prepare(`PRAGMA table_info(run_state)`).all() as Array<{ name: string }>;
 
     expect(tables.some((entry) => entry.name === 'clients')).toBe(false);
     expect(runColumns.some((entry) => entry.name === 'client_id')).toBe(false);
+    expect(runStateColumns.some((entry) => entry.name === 'provider_state')).toBe(true);
   });
 });

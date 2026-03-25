@@ -242,6 +242,8 @@ last returned event — save it for the next call.
 - **Pending runner-targeted runs** keep the helper startup command visible on
   the run detail page, so the operator can recover it even after dismissing the
   creation modal.
+- **Helper restarts** now reclaim the same running run for the same `runner_id`
+  and restore persisted provider resume state when the provider exposes one.
 - **Run Command** queues a local allowlisted command for the helper to execute.
   It does not send that command as an agent prompt.
 - **Send Prompt** still queues agent input for the active coding agent thread.
@@ -516,6 +518,7 @@ Worker endpoints used:
 - `GET /api/mcp/runs/:runId/commands`
 - `POST /api/mcp/runs/:runId/commands/:commandId/ack`
 - `POST /api/mcp/runs/:runId/events`
+- `POST /api/mcp/runs/:runId/state`
 
 The worker loop supports bearer-token session resolution when `mcp-session-id`
 is omitted by selecting the most recent active MCP session for that token.
