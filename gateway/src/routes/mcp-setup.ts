@@ -183,15 +183,41 @@ PY`,
         `$path = "${filePath.replace(/\//g, '\\\\')}"
 $dir = Split-Path -Parent $path
 if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+function ConvertTo-AircHashtable($value) {
+  if ($null -eq $value) { return $null }
+  if ($value -is [string] -or $value -is [ValueType]) { return $value }
+  if ($value -is [System.Collections.IDictionary]) {
+    $hash = @{}
+    foreach ($key in $value.Keys) {
+      $hash[$key] = ConvertTo-AircHashtable $value[$key]
+    }
+    return $hash
+  }
+  if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+    $items = @()
+    foreach ($item in $value) {
+      $items += ,(ConvertTo-AircHashtable $item)
+    }
+    return $items
+  }
+  if ($value.PSObject -and $value.PSObject.Properties.Count -gt 0) {
+    $hash = @{}
+    foreach ($prop in $value.PSObject.Properties) {
+      $hash[$prop.Name] = ConvertTo-AircHashtable $prop.Value
+    }
+    return $hash
+  }
+  return $value
+}
 $patchJson = @'
 ${rendered}
 '@
-$patch = $patchJson | ConvertFrom-Json -AsHashtable
+$patch = ConvertTo-AircHashtable ($patchJson | ConvertFrom-Json)
 $current = @{}
 if (Test-Path $path) {
   $raw = Get-Content -Raw -Path $path
   if ($raw.Trim()) {
-    try { $current = $raw | ConvertFrom-Json -AsHashtable } catch { $current = @{} }
+    try { $current = ConvertTo-AircHashtable ($raw | ConvertFrom-Json) } catch { $current = @{} }
   }
 }
 function Merge-Hashtable([hashtable]$dst, [hashtable]$src) {

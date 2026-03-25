@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { extractEventChangeDetails } from '../../features/runs/changes';
+import { countDiffStats, extractEventChangeDetails, splitDiffByFile } from '../../features/runs/changes';
 
 export interface LogEvent {
   id: number;
@@ -31,6 +31,7 @@ export interface FormattedLogEvent {
   details?: {
     files: string[];
     diff: string | null;
+    stats?: Array<{ path: string; additions: number; deletions: number }>;
   } | null;
 }
 
@@ -119,7 +120,15 @@ function summarizeDiff(diff: string): FormattedLogEvent {
   return {
     content: count > 0 ? `Diff updated for ${count} file${count === 1 ? '' : 's'}` : 'Diff updated',
     emphasis: 'tool',
-    details,
+    details: details
+      ? {
+          ...details,
+          stats: splitDiffByFile(diff).map((entry) => ({
+            path: entry.path,
+            ...countDiffStats(entry.diff),
+          })),
+        }
+      : null,
   };
 }
 
@@ -580,9 +589,20 @@ function LogLine({ event, searchTerm }: LogLineProps) {
           <div style={{ marginTop: '8px', paddingLeft: '12px', color: 'var(--text-secondary)' }}>
             {formatted.details.files.length > 0 && (
               <ul style={{ margin: 0, paddingLeft: '18px' }}>
-                {formatted.details.files.map((file) => (
-                  <li key={file} style={{ marginBottom: '4px' }}>{file}</li>
-                ))}
+                {formatted.details.files.map((file) => {
+                  const stats = formatted.details?.stats?.find((entry) => entry.path === file);
+                  return (
+                    <li key={file} style={{ marginBottom: '4px' }}>
+                      <span>{file}</span>
+                      {stats && (
+                        <span style={{ marginLeft: '8px', fontWeight: 700 }}>
+                          <span style={{ color: 'var(--accent-green)' }}>+{stats.additions}</span>
+                          <span style={{ marginLeft: '6px', color: 'var(--accent-red)' }}>-{stats.deletions}</span>
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
             {formatted.details.diff && (

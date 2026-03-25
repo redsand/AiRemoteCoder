@@ -48,7 +48,9 @@ new run is created.
 1. Create a new run in the UI.
 2. Copy the generated `airc-mcp-runner --runner-id ...` command.
 3. Run that command in the target project directory.
-4. Watch the run move from `pending` to `running`.
+4. Confirm the host shows the expected project directory in **Connected Hosts**.
+5. Watch the run move from `pending` to `running`.
+6. Use **Changes** in run detail to inspect file-by-file diffs as Codex edits files.
 
 ## Validation
 

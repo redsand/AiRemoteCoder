@@ -232,6 +232,8 @@ describe('mcpSetupRoutes', () => {
     expect(install.copyPaste?.bash?.[1] ?? '').not.toContain('airc-mcp-runner');
     expect(install.copyPaste?.powershell?.[0] ?? '').toContain('mcp_servers.airemotecoder');
     expect(install.copyPaste?.powershell?.[0] ?? '').toContain('Set-Content -Path $configPath -Value $out -Encoding utf8');
+    expect(install.copyPaste?.powershell?.[0] ?? '').not.toContain('-AsHashtable');
+    expect(install.copyPaste?.powershell?.[0] ?? '').toContain("if ($value -is [string] -or $value -is [ValueType]) { return $value }");
     expect(install.copyPaste?.powershell?.[1] ?? '').toContain('npm install -g @ai-remote-coder/mcp-runner@latest');
     expect(install.copyPaste?.powershell?.[1] ?? '').not.toContain('airc-mcp-runner');
     expect(install.instructions).toContain('Start the runner when creating a run from the UI');

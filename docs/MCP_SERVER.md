@@ -235,6 +235,18 @@ last returned event — save it for the next call.
 
 ---
 
+## UI behavior notes
+
+- **Connected Hosts** now shows helper-reported project directory metadata when
+  `airc-mcp-runner` is active for a project.
+- **Run Command** queues a local allowlisted command for the helper to execute.
+  It does not send that command as an agent prompt.
+- **Send Prompt** still queues agent input for the active coding agent thread.
+- **Changes** in run detail presents changed files and the latest captured diff
+  per file using Codex app-server change events.
+
+---
+
 ### `list_artifacts`
 List artifacts from a run.
 

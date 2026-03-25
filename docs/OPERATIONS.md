@@ -16,6 +16,9 @@ This document describes the supported runtime model for AiRemoteCoder.
 4. The runner executes locally and streams normalized events back to the gateway.
 5. The UI reads run state, events, approvals, and artifacts from the gateway.
 
+The helper also reports its current project directory so **Connected Hosts**
+can distinguish multiple helpers on the same machine.
+
 ## Supported endpoints
 
 ### Authentication
@@ -82,6 +85,12 @@ Required environment in the generated command:
 Provider-specific mode variables may also be included.
 
 Today, only Codex is a production-ready runner target. Other providers may still connect to MCP and use setup flows, but the helper does not yet provide native persistent executors for them.
+
+Run controls are intentionally split:
+
+- **Run Command**: queues an allowlisted local shell command for the helper
+- **Send Prompt**: queues agent input for the active coding agent thread
+- **Changes**: shows captured changed files and the latest diff per file
 
 ## Operational checks
 

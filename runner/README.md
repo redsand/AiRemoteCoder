@@ -24,12 +24,17 @@ Environment variables are also supported:
 - `AIREMOTECODER_CODEX_APPROVAL_POLICY` (defaults to `never` for the current MVP path)
 - `AIREMOTECODER_EXEC_TEMPLATE` (manual fallback only for non-codex providers)
 
+The helper automatically reports its current working directory to the gateway.
+That directory is shown in the **Connected Hosts** UI so hosts can be
+distinguished by project root.
+
 ## Codex transport
 
 For Codex, `app-server` is the primary mode.
 
 - `app-server`: preferred. Uses `codex app-server` for a persistent conversational thread with structured JSON-RPC messages.
   - Default approval policy is `never` so queued runs do not hang on unhandled approval prompts.
+  - File-change and diff events are surfaced into the AiRemoteCoder **Changes** view.
 - `exec`: fallback. Uses one-shot `codex exec` for each queued prompt.
 - `interactive`: legacy fallback only. It relies on plain stdin piping and is not the recommended production path.
 

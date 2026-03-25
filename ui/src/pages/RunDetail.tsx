@@ -13,6 +13,7 @@ import { VncViewer } from '../components/VncViewer';
 import { useVncConnection } from '../hooks/useVncConnection';
 import { summarizeRunActivity } from '../features/runs/activity';
 import { buildRunChangeReport } from '../features/runs/changes';
+import { loadAllRunEvents } from '../features/runs/event-replay';
 
 interface Run {
   id: string;
@@ -47,6 +48,7 @@ interface Artifact {
 interface Command {
   id: string;
   command: string;
+  arguments?: string | null;
   status: string;
   created_at: number;
   acked_at: number | null;
@@ -186,13 +188,11 @@ export function RunDetail({ user }: Props) {
   // Fetch events
   const fetchEvents = useCallback(async () => {
     try {
-      const res = await fetch(`/api/runs/${runId}/events?after=${lastEventId.current}&limit=500`);
-      if (res.ok) {
-        const newEvents = await res.json();
-        if (newEvents.length > 0) {
-          setEvents(prev => [...prev, ...newEvents]);
-          lastEventId.current = newEvents[newEvents.length - 1].id;
-        }
+      if (!runId) return;
+      const allEvents = await loadAllRunEvents(runId);
+      setEvents(allEvents);
+      if (allEvents.length > 0) {
+        lastEventId.current = allEvents[allEvents.length - 1].id;
       }
     } catch (err) {
       console.error('Failed to fetch events:', err);
@@ -1157,19 +1157,6 @@ export function RunDetail({ user }: Props) {
   );
 }
 
-function renderCommandLabel(command: Command): string {
-  if (command.command === '__EXEC__' && command.result !== undefined) {
-    return command.result ? command.result : (command.error ? command.command : (command.command));
-  }
-  if (command.command === '__EXEC__') {
-    return command.command;
-  }
-  if (command.command === '__INPUT__') {
-    return command.result ?? command.command;
-  }
-  return command.command;
-}
-
 // Timeline View
 function TimelineView({ events }: { events: LogEvent[] }) {
   // Group events by step_id or time buckets
@@ -1357,7 +1344,11 @@ function CommandsList({ commands }: { commands: Command[] }) {
         <div key={cmd.id} className="command-item">
           <div className="command-header">
             <code className="command-text">
-              {cmd.command === '__EXEC__' ? (cmd.result ?? cmd.error ?? cmd.command) : cmd.command}
+              {cmd.command === '__EXEC__'
+                ? (cmd.arguments ?? cmd.command)
+                : cmd.command === '__INPUT__'
+                  ? (cmd.arguments ?? cmd.command)
+                  : cmd.command}
             </code>
             <StatusPill
               status={cmd.status === 'completed' ? 'done' : 'pending'}
@@ -1437,8 +1428,14 @@ function ChangesView({ events }: { events: LogEvent[] }) {
             }}
           >
             <div>{file.path}</div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Updated {new Date(file.updatedAt * 1000).toLocaleTimeString()}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                Updated {new Date(file.updatedAt * 1000).toLocaleTimeString()}
+              </div>
+              <div style={{ display: 'flex', gap: '8px', fontSize: '11px', fontWeight: 700 }}>
+                <span style={{ color: 'var(--accent-green)' }}>+{file.additions}</span>
+                <span style={{ color: 'var(--accent-red)' }}>-{file.deletions}</span>
+              </div>
             </div>
           </button>
         ))}
@@ -1453,7 +1450,13 @@ function ChangesView({ events }: { events: LogEvent[] }) {
         }}
       >
         <div style={{ padding: '12px', borderBottom: '1px solid var(--border-color)', fontWeight: 600 }}>
-          {selected.path}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+            <span>{selected.path}</span>
+            <span style={{ display: 'flex', gap: '10px', fontSize: '12px', fontWeight: 700 }}>
+              <span style={{ color: 'var(--accent-green)' }}>+{selected.additions}</span>
+              <span style={{ color: 'var(--accent-red)' }}>-{selected.deletions}</span>
+            </span>
+          </div>
         </div>
         {selected.diff ? (
           <pre

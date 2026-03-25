@@ -77,7 +77,7 @@ AiRemoteCoder is now **MCP-first**:
 - **Real-time Monitoring**: Stream normalized run/session events to your phone/browser
 - **Multi-Provider MCP Setup**: Claude, Codex, Gemini, OpenCode, Zenflow, and Rev can connect to the gateway MCP server
 - **Codex Runner MVP**: `airc-mcp-runner` is production-ready for Codex today; other runner transports remain planned/preview
-- **Command Execution**: Run allowlisted commands (tests, git operations) from the UI
+- **Command Execution**: Run allowlisted local commands (tests, git operations) from the UI through the helper; prompts still go to the agent
 - **Secure Authentication**: Scoped MCP tokens, session auth, optional TOTP 2FA, Cloudflare Access
 - **Connect-Back Only**: Agents initiate outbound connections — no inbound ports required
 - **Artifact Collection**: Download files and diffs from agent runs
@@ -101,6 +101,7 @@ Then:
 4. Generate provider setup commands/snippets for your project
 5. Run your coding agent in that project
 6. Create and control runs from the UI
+7. Use **Connected Hosts** to verify the helper-reported project directory and **Changes** in a run to inspect file diffs
 
 ## MCP Setup (Codex example)
 
@@ -137,7 +138,7 @@ path.write_text("\n".join(out), encoding="utf-8")
 PY
 ```
 
-The MCP page provides copy/paste one-shot Bash and PowerShell commands that replace only the `airemotecoder` MCP block and keep all other config intact.
+The MCP page provides copy/paste one-shot Bash and PowerShell commands that replace only the `airemotecoder` MCP block and keep all other config intact. The PowerShell snippet is compatible with older Windows PowerShell versions and does not depend on `ConvertFrom-Json -AsHashtable`.
 
 ## MCP Worker Mode (Codex-first, production path)
 

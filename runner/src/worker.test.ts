@@ -86,21 +86,21 @@ describe('runner command handling', () => {
     const child = new EventEmitter() as any;
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    child.on = child.addListener.bind(child);
-    const spawnFn = vi.fn(() => child);
+    const spawnFn = vi.fn(() => {
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from('On branch main\n'));
+        child.emit('close', 0);
+      });
+      return child;
+    });
 
-    const pending = handleWorkerCommand(
+    const stop = await handleWorkerCommand(
       { id: 'cmd-exec', command: '__EXEC__', arguments: 'git status' },
       'run-exec',
       { sendEvent, ackCommand } as any,
       { sendInput, interrupt },
       spawnFn as any,
     );
-
-    child.stdout.emit('data', Buffer.from('On branch main\n'));
-    child.emit('close', 0);
-
-    const stop = await pending;
     expect(stop).toBe(false);
     expect(sendInput).not.toHaveBeenCalled();
     expect(spawnFn).toHaveBeenCalledWith('git status', [], expect.objectContaining({
