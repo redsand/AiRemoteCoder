@@ -166,12 +166,19 @@ export async function runsRoutes(fastify: FastifyInstance) {
     };
 
     const workerType = body.workerType || 'claude';
+    const mcpMode = typeof body.metadata?.mcpMode === 'string'
+      ? body.metadata.mcpMode
+      : null;
     const mcpSessionId = typeof body.metadata?.mcpSessionId === 'string'
       ? body.metadata.mcpSessionId
       : null;
+    const mcpRunnerId = typeof body.metadata?.mcpRunnerId === 'string'
+      ? body.metadata.mcpRunnerId
+      : null;
 
-    const attachedSession = mcpSessionId ? getMcpSession(mcpSessionId) : undefined;
-    if (mcpSessionId && !attachedSession) {
+    const shouldAttachSession = Boolean(mcpSessionId) && mcpMode !== 'agent';
+    const attachedSession = shouldAttachSession ? getMcpSession(mcpSessionId!) : undefined;
+    if (shouldAttachSession && !attachedSession) {
       return reply.code(409).send({ error: 'Selected MCP host is no longer connected. Refresh sessions and retry.' });
     }
     if (attachedSession) {
@@ -183,7 +190,7 @@ export async function runsRoutes(fastify: FastifyInstance) {
         return reply.code(409).send({ error: 'Selected MCP host is stale. Wait for reconnect and retry.' });
       }
       const sessionProvider = providerFromTokenLabel(attachedSession.authContext.tokenLabel);
-      if (workerType !== 'vnc' && workerType !== 'hands-on' && sessionProvider && workerType !== sessionProvider) {
+    if (workerType !== 'vnc' && workerType !== 'hands-on' && sessionProvider && workerType !== sessionProvider) {
         return reply.code(400).send({
           error: `Worker type (${workerType}) does not match connected MCP provider (${sessionProvider})`,
         });
@@ -195,6 +202,14 @@ export async function runsRoutes(fastify: FastifyInstance) {
 
     const initialStatus = attachedSession ? 'running' : 'pending';
     const claimedBy = attachedSession ? `mcp:${attachedSession.id}` : null;
+    if (!attachedSession && mcpMode === 'agent' && mcpRunnerId) {
+      (metadata as any).mcpRunnerId = mcpRunnerId;
+    } else if (!attachedSession && mcpMode === 'agent' && mcpSessionId && !mcpRunnerId) {
+      // Backward-compat: stale UI may still send mcpSessionId for agent mode.
+      // Treat it as runner identity instead of auto-attaching to MCP session claim.
+      (metadata as any).mcpRunnerId = mcpSessionId;
+      delete (metadata as any).mcpSessionId;
+    }
 
     db.transaction(() => {
       db.prepare(`

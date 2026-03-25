@@ -301,6 +301,57 @@ describe('routes/runs', () => {
     expect(saved.started_at).toBeTypeOf('number');
   });
 
+  it('does not auto-attach MCP session when mcpMode=agent and stores runner identity for compatibility', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+    db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-agent-compat',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'tok-compat',
+        tokenLabel: 'auto:codex',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['runs:read', 'runs:write'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/runs',
+      headers: adminSessionHeaders('session-1'),
+      payload: {
+        label: 'Agent compatibility run',
+        workerType: 'codex',
+        metadata: {
+          mcpMode: 'agent',
+          mcpSessionId: 'mcp-session-agent-compat',
+        },
+      },
+    });
+
+    expect(createRes.statusCode).toBe(200);
+    expect(createRes.json()).toMatchObject({
+      status: 'pending',
+      attachedMcpSessionId: null,
+    });
+
+    const runId = (createRes.json() as { id: string }).id;
+    const saved = db.prepare('SELECT status, claimed_by, metadata FROM runs WHERE id = ?').get(runId) as {
+      status: string;
+      claimed_by: string | null;
+      metadata: string | null;
+    };
+    expect(saved.status).toBe('pending');
+    expect(saved.claimed_by).toBe(null);
+    const metadata = saved.metadata ? JSON.parse(saved.metadata) : {};
+    expect(metadata.mcpRunnerId).toBe('mcp-session-agent-compat');
+    expect(metadata.mcpSessionId).toBeUndefined();
+  });
+
   it('allows an MCP session to claim a pending run for its provider', async () => {
     db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
     db.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES ('session-1', 'user-1', ?)`).run(Math.floor(Date.now() / 1000) + 3600);
