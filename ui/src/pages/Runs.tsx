@@ -16,6 +16,7 @@ import { isMcpSessionFresh } from '../features/mcp/run-worker-options';
 import { buildRunnerCommandSnippet } from '../features/mcp/runner-command';
 import { isProductionReadyRunnerProvider, supportsRunnerProvider } from '../features/mcp/providers';
 import { getMcpHostSubtitle, getMcpHostTitle } from '../features/mcp/host-display';
+import { getRunsRefreshInterval } from '../features/runs/refresh';
 
 interface RunsResponse {
   runs: Run[];
@@ -157,11 +158,12 @@ export function Runs({ user }: Props) {
 
   // Auto-refresh
   useEffect(() => {
+    const intervalMs = getRunsRefreshInterval(runs.map((run) => run.status));
     const interval = setInterval(() => {
       fetchRuns();
-    }, 15000);
+    }, intervalMs);
     return () => clearInterval(interval);
-  }, [fetchRuns]);
+  }, [fetchRuns, runs]);
 
   // Auto-refresh clients when new workers connect
   useEffect(() => {

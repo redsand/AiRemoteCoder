@@ -76,7 +76,7 @@ AiRemoteCoder is now **MCP-first**:
 - **Secure Human Channel (Primary)**: Existing UI + `/api/*` + WebSocket for approvals, status, artifacts
 - **Real-time Monitoring**: Stream normalized run/session events to your phone/browser
 - **Multi-Provider MCP Setup**: Claude, Codex, Gemini, OpenCode, Zenflow, and Rev can connect to the gateway MCP server
-- **Codex Runner MVP**: `airc-mcp-runner` is production-ready for Codex today; other runner transports remain planned/preview
+- **Runner MVP**: `airc-mcp-runner` is production-ready for Codex today, with Claude available as a preview runner path for active testing
 - **Command Execution**: Run allowlisted local commands (tests, git operations) from the UI through the helper; prompts still go to the agent
 - **Secure Authentication**: Scoped MCP tokens, session auth, optional TOTP 2FA, Cloudflare Access
 - **Connect-Back Only**: Agents initiate outbound connections — no inbound ports required
@@ -165,7 +165,8 @@ npm install -g @ai-remote-coder/mcp-runner@latest
 airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
-Non-Codex providers are not production-ready runner targets yet. The current helper only offers manual `execTemplate` fallback for them:
+Claude preview runs now use the native helper transport and no longer require `AIREMOTECODER_EXEC_TEMPLATE`.
+Other non-Codex providers are not production-ready runner targets yet. The current helper still offers manual `execTemplate` fallback for them:
 
 ```bash
 export AIREMOTECODER_PROVIDER=gemini
@@ -173,7 +174,7 @@ export AIREMOTECODER_EXEC_TEMPLATE="gemini run {input}"
 airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
-Do not treat that path as equivalent to the Codex app-server transport. Claude, Gemini, OpenCode, Zenflow, and Rev still need native runner executors before they should be considered reliable production runner targets.
+Do not treat that path as equivalent to the Codex app-server transport. Gemini, OpenCode, Zenflow, and Rev still need native runner executors before they should be considered reliable production runner targets. Claude remains preview-only until its runner path is validated end to end.
 
 ## Remote Access
 

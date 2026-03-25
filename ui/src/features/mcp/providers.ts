@@ -15,10 +15,10 @@ export const MCP_PROVIDERS: McpProviderDefinition[] = [
     label: 'Claude Code',
     icon: '🤖',
     description: "Anthropic's Claude Code CLI and IDE extension",
-    configFile: '.claude/mcp.json',
+    configFile: '.mcp.json',
     docsKey: 'claude_code',
     runnerSupport: 'preview',
-    runnerSupportNote: 'Runner pairing is not production-ready yet. Use MCP setup now; native Claude runner transport is planned next.',
+    runnerSupportNote: 'Runner pairing is available for preview testing through the helper. Codex remains the only production-ready runner path today.',
   },
   {
     key: 'codex',

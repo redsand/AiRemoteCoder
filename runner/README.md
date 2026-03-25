@@ -22,7 +22,7 @@ Environment variables are also supported:
 - `AIREMOTECODER_RUNNER_ID` (stable per host+project identity)
 - `AIREMOTECODER_CODEX_MODE` (`app-server`, `exec`, or legacy `interactive`)
 - `AIREMOTECODER_CODEX_APPROVAL_POLICY` (defaults to `never` for the current MVP path)
-- `AIREMOTECODER_EXEC_TEMPLATE` (manual fallback only for non-codex providers)
+- `AIREMOTECODER_EXEC_TEMPLATE` (manual fallback for providers without native executors)
 
 The helper automatically reports its current working directory to the gateway.
 That directory is shown in the **Connected Hosts** UI so hosts can be
@@ -41,10 +41,11 @@ For Codex, `app-server` is the primary mode.
 ## Provider readiness
 
 - `codex`: production-ready runner path
-- `claude`: not production-ready in the runner yet
+- `claude`: preview runner path using Claude CLI `--print --output-format stream-json`
 - `gemini`: not production-ready in the runner yet
 - `opencode`: not production-ready in the runner yet
 - `zenflow`: not production-ready in the runner yet
 - `rev`: not production-ready in the runner yet
 
-Non-Codex providers currently require a manual `AIREMOTECODER_EXEC_TEMPLATE` and do not yet have native persistent executors.
+Claude no longer requires `AIREMOTECODER_EXEC_TEMPLATE`.
+Gemini, OpenCode, Zenflow, and Rev still use manual `AIREMOTECODER_EXEC_TEMPLATE` fallback until native executors land.

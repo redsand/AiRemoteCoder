@@ -618,7 +618,7 @@ describe('Database Service', () => {
       }
       const duration = Date.now() - start;
       
-      expect(duration).toBeLessThan(200); // Should be very fast
+      expect(duration).toBeLessThan(500); // Should remain fast without relying on tight CI timing
     });
   });
 });

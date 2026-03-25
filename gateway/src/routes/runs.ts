@@ -1,6 +1,9 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { nanoid } from 'nanoid';
+import { existsSync, mkdirSync } from 'fs';
+import { writeFile } from 'fs/promises';
+import { join } from 'path';
 import { db } from '../services/database.js';
 import { config } from '../config.js';
 import { uiAuth, requireRole, logAudit, type AuthenticatedRequest } from '../middleware/auth.js';
@@ -66,6 +69,12 @@ const commandSchema = z.object({
 const ackSchema = z.object({
   result: z.string().nullable().optional(),
   error: z.string().nullable().optional()
+});
+
+const workerArtifactSchema = z.object({
+  name: z.string().min(1).max(255),
+  type: z.enum(['log', 'text', 'json', 'diff', 'patch', 'markdown', 'file']).default('text'),
+  content: z.string(),
 });
 
 const mcpClaimRunSchema = z.object({
@@ -756,6 +765,51 @@ export async function runsRoutes(fastify: FastifyInstance) {
     });
 
     return { ok: true, eventId: Number(result.lastInsertRowid) };
+  });
+
+  // MCP worker: upload synthesized artifact content
+  fastify.post('/api/mcp/runs/:runId/artifacts', async (request, reply) => {
+    const auth = resolveAuthorizedMcpWorker(request, reply, ['sessions:write']);
+    if (!auth) return;
+    const { runId } = request.params as { runId: string };
+    const body = workerArtifactSchema.parse(request.body);
+    const { claimTag } = auth;
+
+    const run = db.prepare('SELECT id, claimed_by FROM runs WHERE id = ?').get(runId) as {
+      id: string;
+      claimed_by: string | null;
+    } | undefined;
+    if (!run) {
+      return reply.code(404).send({ error: 'Run not found' });
+    }
+
+    if (run.claimed_by !== claimTag) {
+      return reply.code(403).send({ error: 'Run is not claimed by this MCP session' });
+    }
+
+    const artifactId = nanoid(12);
+    const safeName = body.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+    const runDir = join(config.artifactsDir, runId);
+    if (!existsSync(runDir)) {
+      mkdirSync(runDir, { recursive: true });
+    }
+    const artifactPath = join(runDir, `${artifactId}_${safeName}`);
+    const content = redactSecrets(body.content);
+    await writeFile(artifactPath, content, 'utf8');
+
+    db.prepare(`
+      INSERT INTO artifacts (id, run_id, name, type, size, path)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(artifactId, runId, safeName, body.type, Buffer.byteLength(content, 'utf8'), artifactPath);
+
+    broadcastToRun(runId, {
+      type: 'artifact_uploaded',
+      artifactId,
+      name: safeName,
+      artifactType: body.type,
+    });
+
+    return { ok: true, artifactId };
   });
 
   // Stop run request

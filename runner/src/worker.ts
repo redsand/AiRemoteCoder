@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
 
@@ -17,6 +18,12 @@ interface ClaimedRun {
 
 interface ClaimResponse {
   run: ClaimedRun | null;
+}
+
+interface WorkerArtifactUpload {
+  name: string;
+  type: 'log' | 'text' | 'json' | 'diff' | 'patch' | 'markdown' | 'file';
+  content: string;
 }
 
 export interface WorkerExecutor {
@@ -449,10 +456,12 @@ export class ClaudeCliExecutor implements WorkerExecutor {
 
   private buildArgs(): string[] {
     const args = [
+      '-p',
       '--print',
       '--output-format',
       'stream-json',
       '--include-partial-messages',
+      '--verbose',
       '--permission-mode',
       this.options.permissionMode ?? 'acceptEdits',
     ];
@@ -462,7 +471,7 @@ export class ClaudeCliExecutor implements WorkerExecutor {
     if (this.cliSessionId) {
       args.push('--resume', this.cliSessionId);
     } else {
-      args.push('--session-id', `airc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+      args.push('--session-id', randomUUID());
     }
     return args;
   }
@@ -654,6 +663,103 @@ export class McpWorkerApi {
   sendEvent(runId: string, event: { type: EventType; data: string; sequence?: number }): Promise<{ ok: boolean }> {
     return this.request('POST', `/api/mcp/runs/${runId}/events`, event);
   }
+
+  uploadArtifact(runId: string, artifact: WorkerArtifactUpload): Promise<{ ok: boolean; artifactId: string }> {
+    return this.request('POST', `/api/mcp/runs/${runId}/artifacts`, artifact);
+  }
+}
+
+async function runCommandCapture(
+  spawnFn: SpawnFn,
+  command: string,
+  args: string[],
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawnFn(command, args, {
+      shell: false,
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+export async function collectGitChangeReport(
+  spawnFn: SpawnFn = spawn,
+): Promise<{ files: string[]; diff: string } | null> {
+  const diffResult = await runCommandCapture(
+    spawnFn,
+    'git',
+    ['diff', '--no-ext-diff', '--binary', 'HEAD', '--'],
+  );
+  if (diffResult.code !== 0) return null;
+  const diff = diffResult.stdout.trim();
+  if (!diff) return null;
+
+  const namesResult = await runCommandCapture(
+    spawnFn,
+    'git',
+    ['diff', '--name-only', 'HEAD', '--'],
+  );
+  const files = namesResult.code === 0
+    ? namesResult.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    : [];
+
+  return { files, diff };
+}
+
+async function emitSynthesizedChangeReport(
+  runId: string,
+  provider: string,
+  api: Pick<McpWorkerApi, 'sendEvent'> & Partial<Pick<McpWorkerApi, 'uploadArtifact'>>,
+  spawnFn: SpawnFn = spawn,
+): Promise<void> {
+  if (provider === 'codex') return;
+  const report = await collectGitChangeReport(spawnFn);
+  if (!report || report.files.length === 0) return;
+
+  await api.sendEvent(runId, {
+    type: 'info',
+    data: JSON.stringify({
+      method: 'item/completed',
+      params: {
+        item: {
+          type: 'fileChange',
+          changes: report.files.map((path) => ({
+            path,
+            kind: { type: 'update', move_path: null },
+          })),
+          status: 'completed',
+        },
+      },
+    }),
+  });
+
+  await api.sendEvent(runId, {
+    type: 'info',
+    data: JSON.stringify({
+      method: 'turn/diff/updated',
+      params: {
+        diff: report.diff,
+      },
+    }),
+  });
+
+  if (api.uploadArtifact) {
+    await api.uploadArtifact(runId, {
+      name: `${runId}.diff`,
+      type: 'diff',
+      content: report.diff,
+    });
+  }
 }
 
 export function createBufferedEventSink(
@@ -693,10 +799,14 @@ export function createBufferedEventSink(
 export async function handleWorkerCommand(
   command: WorkerCommand,
   runId: string,
-  api: Pick<McpWorkerApi, 'ackCommand' | 'sendEvent'>,
+  api: Pick<McpWorkerApi, 'ackCommand' | 'sendEvent'> & Partial<Pick<McpWorkerApi, 'uploadArtifact'>>,
   executor: WorkerExecutor,
+  providerOrSpawnFn: string | SpawnFn = 'codex',
   spawnFn: SpawnFn = spawn,
 ): Promise<boolean> {
+  const provider = typeof providerOrSpawnFn === 'string' ? providerOrSpawnFn : 'codex';
+  const effectiveSpawnFn = typeof providerOrSpawnFn === 'function' ? providerOrSpawnFn : spawnFn;
+
   if (command.command === '__STOP__') {
     await api.sendEvent(runId, { type: 'marker', data: JSON.stringify({ event: 'finished', exitCode: 0 }) });
     await api.ackCommand(runId, command.id, 'stopped');
@@ -722,8 +832,9 @@ export async function handleWorkerCommand(
       return false;
     }
     const sink = createBufferedEventSink(runId, api);
-    await executeShellCommand(shellCommand, sink.emit, spawnFn);
+    await executeShellCommand(shellCommand, sink.emit, effectiveSpawnFn);
     await sink.flush();
+    await emitSynthesizedChangeReport(runId, provider, api, effectiveSpawnFn);
     await api.ackCommand(runId, command.id, 'ok');
     return false;
   }
@@ -732,6 +843,7 @@ export async function handleWorkerCommand(
   const sink = createBufferedEventSink(runId, api);
   await executor.sendInput(input, sink.emit);
   await sink.flush();
+  await emitSynthesizedChangeReport(runId, provider, api, effectiveSpawnFn);
   await api.ackCommand(runId, command.id, 'ok');
   return false;
 }
@@ -799,6 +911,7 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
           runId,
           api,
           executor,
+          options.provider,
         );
       }
 
@@ -811,7 +924,7 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
         }
         for (const command of commands) {
           try {
-            stopRun = await handleWorkerCommand(command, runId, api, executor);
+            stopRun = await handleWorkerCommand(command, runId, api, executor, options.provider);
           } catch (err: any) {
             await api.sendEvent(runId, { type: 'error', data: String(err?.message ?? err) });
             await api.ackCommand(runId, command.id, undefined, String(err?.message ?? err));
@@ -839,8 +952,9 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
 export async function runLoopOnce(
   options: RunnerOptions,
   deps: {
-    api?: Pick<McpWorkerApi, 'claimRun' | 'pollCommands' | 'ackCommand' | 'sendEvent'>;
+    api?: Pick<McpWorkerApi, 'claimRun' | 'pollCommands' | 'ackCommand' | 'sendEvent' | 'uploadArtifact'>;
     executor?: WorkerExecutor;
+    spawnFn?: SpawnFn;
   } = {},
 ): Promise<{ claimedRunId: string | null; stopRun: boolean }> {
   const api = deps.api ?? new McpWorkerApi(options.gatewayUrl, options.token, options.provider, options.runnerId);
@@ -864,6 +978,7 @@ export async function runLoopOnce(
       runId,
       api,
       executor,
+      options.provider,
     );
   }
 
@@ -871,7 +986,7 @@ export async function runLoopOnce(
   let stopRun = false;
   for (const command of commands) {
     try {
-      stopRun = await handleWorkerCommand(command, runId, api, executor);
+      stopRun = await handleWorkerCommand(command, runId, api, executor, options.provider, deps.spawnFn);
       if (stopRun) break;
     } catch (err: any) {
       await api.sendEvent(runId, { type: 'error', data: String(err?.message ?? err) });

@@ -14,7 +14,8 @@ describe('MCP provider metadata', () => {
   it('annotates non-codex providers as preview/manual runner support', () => {
     expect(getMcpProvider('codex')?.runnerSupport).toBe('production');
     expect(getMcpProvider('gemini')?.runnerSupport).toBe('preview');
-    expect(getMcpProvider('claude')?.runnerSupportNote).toContain('not production-ready');
+    expect(getMcpProvider('claude')?.configFile).toBe('.mcp.json');
+    expect(getMcpProvider('claude')?.runnerSupportNote).toContain('preview testing');
   });
 
   it('allows known preview providers to be used for runner testing', () => {

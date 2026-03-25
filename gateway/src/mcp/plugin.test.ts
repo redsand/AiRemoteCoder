@@ -489,14 +489,15 @@ describe('GET /api/mcp/sessions', () => {
   it('includes runner host directory and project name when reported by helper', async () => {
     const { clearMcpSessionsForTests, upsertMcpRunnerHost } = await import('./session-registry.js');
     clearMcpSessionsForTests();
+    const now = Math.floor(Date.now() / 1000);
     upsertMcpRunnerHost({
       tokenId: 'tok-1',
       runnerId: 'runner-visual',
       provider: 'codex',
       user: { id: 'user-1', username: 'admin', role: 'admin', source: 'mcp_token' },
       scopes: ['runs:read', 'runs:write'],
-      createdAt: 100,
-      lastSeenAt: 101,
+      createdAt: now,
+      lastSeenAt: now,
       projectDir: 'C:\\Users\\TimShelton\\source\\repos\\VisualSynth',
     });
 
@@ -516,6 +517,82 @@ describe('GET /api/mcp/sessions', () => {
         projectDir: 'C:\\Users\\TimShelton\\source\\repos\\VisualSynth',
         runnerId: 'runner-visual',
       }),
+    ]));
+    await app.close();
+  });
+
+  it('filters stale session and runner host entries from the active list', async () => {
+    const { clearMcpSessionsForTests, registerMcpSession, upsertMcpRunnerHost } = await import('./session-registry.js');
+    clearMcpSessionsForTests();
+    const now = Math.floor(Date.now() / 1000);
+
+    registerMcpSession({
+      id: 'fresh-session',
+      transport: { handleRequest: vi.fn() } as any,
+      authContext: {
+        tokenId: 'tok-fresh',
+        tokenLabel: 'auto:claude',
+        scopes: ['runs:read'],
+        user: { id: 'user-1', username: 'admin', role: 'admin', source: 'mcp_token' },
+      } as any,
+      createdAt: now,
+      lastSeenAt: now,
+      projectDir: 'C:\\repo\\fresh',
+    });
+
+    registerMcpSession({
+      id: 'stale-session',
+      transport: { handleRequest: vi.fn() } as any,
+      authContext: {
+        tokenId: 'tok-stale',
+        tokenLabel: 'auto:claude',
+        scopes: ['runs:read'],
+        user: { id: 'user-1', username: 'admin', role: 'admin', source: 'mcp_token' },
+      } as any,
+      createdAt: now - 600,
+      lastSeenAt: now - 600,
+      projectDir: 'C:\\repo\\stale',
+    });
+
+    upsertMcpRunnerHost({
+      tokenId: 'tok-fresh',
+      runnerId: 'runner-fresh',
+      provider: 'claude',
+      user: { id: 'user-1', username: 'admin', role: 'admin', source: 'mcp_token' },
+      scopes: ['runs:read'],
+      createdAt: now,
+      lastSeenAt: now,
+      projectDir: 'C:\\repo\\fresh',
+    });
+
+    upsertMcpRunnerHost({
+      tokenId: 'tok-stale',
+      runnerId: 'runner-stale',
+      provider: 'claude',
+      user: { id: 'user-1', username: 'admin', role: 'admin', source: 'mcp_token' },
+      scopes: ['runs:read'],
+      createdAt: now - 600,
+      lastSeenAt: now - 600,
+      projectDir: 'C:\\repo\\stale',
+    });
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/mcp/sessions',
+      cookies: { session: 'valid-session' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'fresh-session' }),
+      expect.objectContaining({ runnerId: 'runner-fresh' }),
+    ]));
+    expect(body.sessions).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'stale-session' }),
+    ]));
+    expect(body.sessions).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ runnerId: 'runner-stale' }),
     ]));
     await app.close();
   });

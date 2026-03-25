@@ -27,6 +27,8 @@ export interface McpRunnerHostEntry {
 
 const sessions = new Map<string, McpSessionEntry>();
 const runnerHosts = new Map<string, McpRunnerHostEntry>();
+const MCP_SESSION_TTL_SECONDS = 120;
+const MCP_RUNNER_TTL_SECONDS = 120;
 
 function projectNameFromDir(projectDir: string | null | undefined): string | null {
   if (!projectDir) return null;
@@ -37,6 +39,7 @@ function projectNameFromDir(projectDir: string | null | undefined): string | nul
 }
 
 export function registerMcpSession(entry: McpSessionEntry): void {
+  pruneStaleMcpEntries();
   entry.projectName = entry.projectName ?? projectNameFromDir(entry.projectDir);
   sessions.set(entry.id, entry);
 }
@@ -46,6 +49,7 @@ export function getMcpSession(sessionId: string): McpSessionEntry | undefined {
 }
 
 export function touchMcpSession(sessionId: string): void {
+  pruneStaleMcpEntries();
   const existing = sessions.get(sessionId);
   if (!existing) return;
   existing.lastSeenAt = Math.floor(Date.now() / 1000);
@@ -57,10 +61,12 @@ export function removeMcpSession(sessionId: string): void {
 }
 
 export function listMcpSessions(): McpSessionEntry[] {
+  pruneStaleMcpEntries();
   return Array.from(sessions.values());
 }
 
 export function findLatestMcpSessionByTokenId(tokenId: string): McpSessionEntry | undefined {
+  pruneStaleMcpEntries();
   const matches = Array.from(sessions.values())
     .filter((entry) => entry.authContext.tokenId === tokenId)
     .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
@@ -75,6 +81,7 @@ export function clearMcpSessionsForTests(): void {
 export function upsertMcpRunnerHost(
   entry: Omit<McpRunnerHostEntry, 'id' | 'createdAt' | 'projectName'> & { id?: string; createdAt?: number },
 ): McpRunnerHostEntry {
+  pruneStaleMcpEntries();
   const key = entry.id ?? `${entry.tokenId}:${entry.runnerId}`;
   const now = Math.floor(Date.now() / 1000);
   const existing = runnerHosts.get(key);
@@ -95,5 +102,19 @@ export function upsertMcpRunnerHost(
 }
 
 export function listMcpRunnerHosts(): McpRunnerHostEntry[] {
+  pruneStaleMcpEntries();
   return Array.from(runnerHosts.values());
+}
+
+function pruneStaleMcpEntries(now = Math.floor(Date.now() / 1000)): void {
+  for (const [id, session] of sessions.entries()) {
+    if ((now - session.lastSeenAt) > MCP_SESSION_TTL_SECONDS) {
+      sessions.delete(id);
+    }
+  }
+  for (const [id, runner] of runnerHosts.entries()) {
+    if ((now - runner.lastSeenAt) > MCP_RUNNER_TTL_SECONDS) {
+      runnerHosts.delete(id);
+    }
+  }
 }

@@ -10,10 +10,18 @@ import {
   type LogEvent,
 } from '../components/ui';
 import { VncViewer } from '../components/VncViewer';
+import { PendingRunnerPanel } from '../components/runs/PendingRunnerPanel';
 import { useVncConnection } from '../hooks/useVncConnection';
 import { summarizeRunActivity } from '../features/runs/activity';
 import { buildRunChangeReport } from '../features/runs/changes';
 import { loadAllRunEvents } from '../features/runs/event-replay';
+import { shouldPollPendingRun } from '../features/runs/refresh';
+
+interface RunMetadata {
+  mcpRunnerId?: string | null;
+  mcpSessionId?: string | null;
+  [key: string]: unknown;
+}
 
 interface Run {
   id: string;
@@ -35,6 +43,7 @@ interface Run {
   claimed_by?: string | null;
   claimed_at?: number | null;
   worker_type?: string | null;
+  metadata?: RunMetadata | null;
 }
 
 interface Artifact {
@@ -279,6 +288,18 @@ export function RunDetail({ user }: Props) {
       }
     };
   }, [runId]);
+
+  useEffect(() => {
+    if (!shouldPollPendingRun(run?.status)) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      fetchRun();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [fetchRun, run?.status]);
 
   // Send command
   const sendCommand = async () => {
@@ -805,6 +826,11 @@ export function RunDetail({ user }: Props) {
           </div>
         </div>
       </div>
+
+      <PendingRunnerPanel
+        workerType={run.worker_type}
+        runnerId={typeof run.metadata?.mcpRunnerId === 'string' ? run.metadata.mcpRunnerId : null}
+      />
 
       {/* Prompt Waiting Banner */}
       {promptWaiting && (

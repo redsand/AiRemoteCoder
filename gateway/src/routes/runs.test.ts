@@ -406,6 +406,64 @@ describe('routes/runs', () => {
     expect(saved.error).toBe(null);
   });
 
+  it('allows a claimed MCP worker to upload a text diff artifact', async () => {
+    db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
+
+    const token = 'mcp-token-artifact';
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    db.prepare(`
+      INSERT INTO mcp_tokens (id, token_hash, label, user_id, scopes)
+      VALUES ('mcp-tok-artifact', ?, 'auto:claude', 'user-1', '["sessions:write"]')
+    `).run(tokenHash);
+
+    const now = Math.floor(Date.now() / 1000);
+    registerMcpSession({
+      id: 'mcp-session-artifact',
+      transport: {} as any,
+      authContext: {
+        tokenId: 'mcp-tok-artifact',
+        tokenLabel: 'auto:claude',
+        user: { id: 'user-1', username: 'alice', role: 'admin', source: 'mcp_token' },
+        scopes: ['sessions:write'],
+      },
+      createdAt: now,
+      lastSeenAt: now,
+    });
+
+    db.prepare(`
+      INSERT INTO runs (id, status, worker_type, capability_token, claimed_by, claimed_at, started_at)
+      VALUES ('run-mcp-artifact', 'running', 'claude', 'cap-mcp-artifact', 'mcp:mcp-session-artifact', unixepoch(), unixepoch())
+    `).run();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/runs/run-mcp-artifact/artifacts',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'mcp-session-id': 'mcp-session-artifact',
+        'content-type': 'application/json',
+      },
+      payload: {
+        name: 'run-mcp-artifact.diff',
+        type: 'diff',
+        content: 'diff --git a/src/app.ts b/src/app.ts\n',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; artifactId: string };
+    expect(body.ok).toBe(true);
+    const saved = db.prepare('SELECT name, type, size, path FROM artifacts WHERE id = ?').get(body.artifactId) as {
+      name: string;
+      type: string;
+      size: number;
+      path: string;
+    };
+    expect(saved.name).toBe('run-mcp-artifact.diff');
+    expect(saved.type).toBe('diff');
+    expect(saved.size).toBeGreaterThan(0);
+  });
+
   it('delivers VNC control commands through MCP command polling', async () => {
     db.prepare(`INSERT INTO users (id, username, password_hash, role) VALUES ('user-1', 'alice', 'hash', 'admin')`).run();
 

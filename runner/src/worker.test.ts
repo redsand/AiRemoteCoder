@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildExecInvocation,
   ClaudeCliExecutor,
+  collectGitChangeReport,
   createBufferedEventSink,
   CodexAppServerExecutor,
   handleWorkerCommand,
@@ -288,25 +289,34 @@ describe('runner executor helpers', () => {
     expect(spawnFn).toHaveBeenCalledTimes(2);
     expect(spawns[0]?.command).toBe('claude');
     expect(spawns[0]?.args).toEqual(expect.arrayContaining([
+      '-p',
       '--print',
       '--output-format',
       'stream-json',
       '--include-partial-messages',
+      '--verbose',
       '--permission-mode',
       'acceptEdits',
       '--session-id',
     ]));
+    const sessionIdIndex = spawns[0]?.args.indexOf('--session-id') ?? -1;
+    expect(sessionIdIndex).toBeGreaterThan(-1);
+    expect(spawns[0]?.args[sessionIdIndex + 1]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
     expect(spawns[1]?.args).toEqual(expect.arrayContaining([
+      '-p',
       '--print',
       '--output-format',
       'stream-json',
       '--include-partial-messages',
+      '--verbose',
       '--permission-mode',
       'acceptEdits',
       '--resume',
       'session-1',
     ]));
-    expect(events).toEqual([
+    expect(events.filter((event) => event.type === 'stdout')).toEqual([
       { type: 'stdout', data: 'first reply' },
       { type: 'stdout', data: 'second reply' },
     ]);
@@ -314,7 +324,10 @@ describe('runner executor helpers', () => {
 
   it('writes Claude prompts to stdin on Windows-safe path', async () => {
     const stdinEnd = vi.fn();
-    const spawnFn = vi.fn(() => {
+    let firstArgs: string[] = [];
+    const spawnFn = vi.fn((command: string, args: string[]) => {
+      void command;
+      firstArgs = args;
       const child = new EventEmitter() as any;
       child.stdin = { end: stdinEnd };
       child.stdout = new EventEmitter();
@@ -330,7 +343,7 @@ describe('runner executor helpers', () => {
     await executor.sendInput('Get-ChildItem $env:TEMP', async () => {});
 
     expect(stdinEnd).toHaveBeenCalledWith('Get-ChildItem $env:TEMP');
-    expect(spawnFn.mock.calls[0]?.[1]).not.toContain('Get-ChildItem $env:TEMP');
+    expect(firstArgs).not.toContain('Get-ChildItem $env:TEMP');
   });
 
   it('surfaces Claude CLI errors from stream-json results', async () => {
@@ -353,6 +366,37 @@ describe('runner executor helpers', () => {
 
     const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any });
     await expect(executor.sendInput('explode', async () => {})).rejects.toThrow('permission denied');
+  });
+
+  it('collects git diff and changed files for synthesized change reporting', async () => {
+    const spawnFn = vi.fn((command: string, args: string[]) => {
+      const child = new EventEmitter() as any;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        if (args.includes('--name-only')) {
+          child.stdout.emit('data', Buffer.from('src/app.ts\nsrc/lib.ts\n'));
+        } else {
+          child.stdout.emit('data', Buffer.from(
+            'diff --git a/src/app.ts b/src/app.ts\n' +
+            '--- a/src/app.ts\n' +
+            '+++ b/src/app.ts\n' +
+            '@@ -1 +1 @@\n' +
+            '-old\n' +
+            '+new\n',
+          ));
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const report = await collectGitChangeReport(spawnFn as any);
+    expect(report).toEqual({
+      files: ['src/app.ts', 'src/lib.ts'],
+      diff: expect.stringContaining('diff --git a/src/app.ts b/src/app.ts'),
+    });
+    expect(spawnFn).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -464,5 +508,67 @@ describe('runner loop integration', () => {
     expect(api.ackCommand).toHaveBeenCalledWith('run-1', 'cmd-1', 'ok');
     expect(api.ackCommand).toHaveBeenCalledWith('run-1', 'cmd-stop', 'stopped');
     expect(executor.shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('synthesizes diff events and uploads a diff artifact for non-codex providers', async () => {
+    const api = {
+      claimRun: vi.fn().mockResolvedValue({
+        run: { id: 'run-claude-1', command: 'bootstrap task', workerType: 'claude' },
+      }),
+      pollCommands: vi.fn().mockResolvedValue([]),
+      ackCommand: vi.fn().mockResolvedValue({ ok: true }),
+      sendEvent: vi.fn().mockResolvedValue({ ok: true }),
+      uploadArtifact: vi.fn().mockResolvedValue({ ok: true, artifactId: 'artifact-1' }),
+    };
+    const executor = {
+      sendInput: vi.fn(async (_input: string, emit: (type: string, data: string) => Promise<void>) => {
+        await emit('stdout', 'done');
+      }),
+      interrupt: vi.fn().mockResolvedValue(undefined),
+    };
+    const spawnFn = vi.fn((command: string, args: string[]) => {
+      const child = new EventEmitter() as any;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        if (args.includes('--name-only')) {
+          child.stdout.emit('data', Buffer.from('src/app.ts\n'));
+        } else {
+          child.stdout.emit('data', Buffer.from(
+            'diff --git a/src/app.ts b/src/app.ts\n' +
+            '--- a/src/app.ts\n' +
+            '+++ b/src/app.ts\n' +
+            '@@ -1 +1 @@\n' +
+            '-old\n' +
+            '+new\n',
+          ));
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    await runLoopOnce({
+      gatewayUrl: 'http://localhost:3100',
+      token: 'token-1',
+      runnerId: 'runner-1',
+      provider: 'claude',
+      codexMode: 'app-server',
+      codexApprovalPolicy: 'never',
+    }, { api: api as any, executor: executor as any, spawnFn: spawnFn as any });
+
+    expect(api.sendEvent).toHaveBeenCalledWith('run-claude-1', expect.objectContaining({
+      type: 'info',
+      data: expect.stringContaining('"method":"item/completed"'),
+    }));
+    expect(api.sendEvent).toHaveBeenCalledWith('run-claude-1', expect.objectContaining({
+      type: 'info',
+      data: expect.stringContaining('"method":"turn/diff/updated"'),
+    }));
+    expect(api.uploadArtifact).toHaveBeenCalledWith('run-claude-1', expect.objectContaining({
+      name: 'run-claude-1.diff',
+      type: 'diff',
+      content: expect.stringContaining('diff --git a/src/app.ts b/src/app.ts'),
+    }));
   });
 });

@@ -239,11 +239,17 @@ last returned event — save it for the next call.
 
 - **Connected Hosts** now shows helper-reported project directory metadata when
   `airc-mcp-runner` is active for a project.
+- **Pending runner-targeted runs** keep the helper startup command visible on
+  the run detail page, so the operator can recover it even after dismissing the
+  creation modal.
 - **Run Command** queues a local allowlisted command for the helper to execute.
   It does not send that command as an agent prompt.
 - **Send Prompt** still queues agent input for the active coding agent thread.
 - **Changes** in run detail presents changed files and the latest captured diff
   per file using Codex app-server change events.
+- For providers that do not emit native change/diff events, `airc-mcp-runner`
+  now synthesizes a git-based change report after successful turns and uploads a
+  diff artifact so the same **Changes** UI can still render file updates.
 
 ---
 
@@ -492,7 +498,8 @@ npx -y @ai-remote-coder/mcp-runner@latest --runner-id "$AIREMOTECODER_RUNNER_ID"
 Set `AIREMOTECODER_CODEX_APPROVAL_POLICY=never` for the current MVP path so turns do not block on app-server approval requests that are not yet bridged back into the UI.
 For persistent install, run `npm install -g @ai-remote-coder/mcp-runner@latest` and start with `airc-mcp-runner`.
 
-For non-Codex providers the runner currently supports only manual `execTemplate` fallback:
+Claude now has a preview native runner path through `airc-mcp-runner`, so it does not require `AIREMOTECODER_EXEC_TEMPLATE`.
+For Gemini/OpenCode/Zenflow/Rev the runner currently supports only manual `execTemplate` fallback:
 
 ```bash
 export AIREMOTECODER_PROVIDER=<provider>
@@ -501,6 +508,7 @@ export AIREMOTECODER_EXEC_TEMPLATE="<provider-cli> ... {input}"
 
 `{input}` is required and is replaced with the queued prompt payload.
 This is not equivalent to the Codex app-server path and should not be treated as production-ready runner support yet.
+Claude remains preview-only until its helper path is validated end to end.
 
 Worker endpoints used:
 
