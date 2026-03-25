@@ -21,11 +21,15 @@ export function buildRunnerCommandSnippet(
   const safeGatewayUrl = gatewayUrl.replace(/"/g, '\\"');
   const codexSpecificEnv = normalizedProvider === 'codex'
     ? 'export AIREMOTECODER_CODEX_MODE="app-server"\nexport AIREMOTECODER_CODEX_APPROVAL_POLICY="never"\n'
+    : normalizedProvider === 'claude'
+      ? 'export AIREMOTECODER_CLAUDE_PERMISSION_MODE="bypassPermissions"\n'
     : isNativeRunnerProvider(normalizedProvider)
       ? ''
       : `export AIREMOTECODER_EXEC_TEMPLATE="${buildExecTemplatePlaceholder(normalizedProvider)}"\n`;
   const codexSpecificPsEnv = normalizedProvider === 'codex'
     ? '$env:AIREMOTECODER_CODEX_MODE="app-server"\n$env:AIREMOTECODER_CODEX_APPROVAL_POLICY="never"\n'
+    : normalizedProvider === 'claude'
+      ? '$env:AIREMOTECODER_CLAUDE_PERMISSION_MODE="bypassPermissions"\n'
     : isNativeRunnerProvider(normalizedProvider)
       ? ''
       : `$env:AIREMOTECODER_EXEC_TEMPLATE="${buildExecTemplatePlaceholder(normalizedProvider)}"\n`;

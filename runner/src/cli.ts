@@ -41,6 +41,9 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
     ?? env.AIREMOTECODER_CODEX_APPROVAL_POLICY
     ?? env.CODEX_APPROVAL_POLICY
     ?? 'never').trim().toLowerCase();
+  const claudePermissionMode = (args.get('claude-permission-mode')
+    ?? env.AIREMOTECODER_CLAUDE_PERMISSION_MODE
+    ?? 'bypassPermissions').trim();
   const execTemplate = args.get('exec-template') ?? env.AIREMOTECODER_EXEC_TEMPLATE;
   if (!token) {
     throw new Error('Missing MCP token. Set AIREMOTECODER_MCP_TOKEN (or pass --token).');
@@ -53,6 +56,7 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
     provider,
     codexMode,
     codexApprovalPolicy,
+    claudePermissionMode,
     execTemplate,
   };
 }

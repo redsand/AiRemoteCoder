@@ -296,7 +296,7 @@ describe('runner executor helpers', () => {
       '--include-partial-messages',
       '--verbose',
       '--permission-mode',
-      'acceptEdits',
+      'bypassPermissions',
       '--session-id',
     ]));
     const sessionIdIndex = spawns[0]?.args.indexOf('--session-id') ?? -1;
@@ -312,7 +312,7 @@ describe('runner executor helpers', () => {
       '--include-partial-messages',
       '--verbose',
       '--permission-mode',
-      'acceptEdits',
+      'bypassPermissions',
       '--resume',
       'session-1',
     ]));
@@ -320,6 +320,28 @@ describe('runner executor helpers', () => {
       { type: 'stdout', data: 'first reply' },
       { type: 'stdout', data: 'second reply' },
     ]);
+  });
+
+  it('allows overriding Claude permission mode explicitly', async () => {
+    let firstArgs: string[] = [];
+    const spawnFn = vi.fn((command: string, args: string[]) => {
+      void command;
+      firstArgs = args;
+      const child = new EventEmitter() as any;
+      child.stdin = { end: vi.fn() };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', subtype: 'success', session_id: 'session-1' })}\n`));
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any, permissionMode: 'acceptEdits' });
+    await executor.sendInput('hello', async () => {});
+
+    expect(firstArgs).toEqual(expect.arrayContaining(['--permission-mode', 'acceptEdits']));
   });
 
   it('passes Claude prompts as CLI args on Windows too', async () => {
@@ -421,6 +443,67 @@ describe('runner executor helpers', () => {
     infoSpy.mockRestore();
   });
 
+  it('surfaces Claude tool, thinking, and system status activity', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const spawnFn = vi.fn(() => {
+      const child = new EventEmitter() as any;
+      child.stdin = { end: vi.fn() };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'system',
+          subtype: 'status',
+          status: 'waiting_for_permission',
+          session_id: 'session-1',
+        })}\n`));
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'thinking', text: 'Considering next steps' },
+              { type: 'tool_use', name: 'Bash', id: 'tool-1', input: { command: 'npm test' } },
+              { type: 'text', text: 'Working on it' },
+            ],
+          },
+        })}\n`));
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'user',
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: 'tool-1', content: 'Tests passed' },
+            ],
+          },
+        })}\n`));
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          session_id: 'session-1',
+        })}\n`));
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any });
+    const events: Array<{ type: string; data: string }> = [];
+
+    await executor.sendInput('status?', async (type, data) => {
+      events.push({ type, data });
+    });
+
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'info', data: 'Claude status: waiting_for_permission' },
+      { type: 'info', data: 'Claude reasoning: Considering next steps' },
+      { type: 'info', data: 'Claude tool started: Bash npm test' },
+      { type: 'stdout', data: 'Working on it' },
+      { type: 'info', data: 'Claude tool result: Tests passed' },
+    ]));
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Claude status: waiting_for_permission'));
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Claude tool started: Bash npm test'));
+    infoSpy.mockRestore();
+  });
+
   it('collects git diff and changed files for synthesized change reporting', async () => {
     const spawnFn = vi.fn((command: string, args: string[]) => {
       const child = new EventEmitter() as any;
@@ -468,6 +551,17 @@ describe('runner cli parsing', () => {
     expect(options.runnerId).toMatch(/^[a-f0-9]{16}$/);
   });
 
+  it('defaults Claude permission mode to bypassPermissions', () => {
+    const options = parseRunnerOptions([], {
+      AIREMOTECODER_GATEWAY_URL: 'http://gw:3100',
+      AIREMOTECODER_MCP_TOKEN: 'token-123',
+      AIREMOTECODER_PROVIDER: 'claude',
+    });
+
+    expect(options.provider).toBe('claude');
+    expect(options.claudePermissionMode).toBe('bypassPermissions');
+  });
+
   it('normalizes /mcp gateway url to base gateway url', () => {
     const options = parseRunnerOptions([], {
       AIREMOTECODER_GATEWAY_URL: 'http://localhost:3100/mcp',
@@ -479,7 +573,7 @@ describe('runner cli parsing', () => {
 
   it('allows argv to override env', () => {
     const options = parseRunnerOptions(
-      ['--gateway-url', 'http://other:3100', '--token', 't2', '--provider', 'gemini', '--exec-template', 'gemini run {input}', '--codex-approval-policy', 'on-request'],
+      ['--gateway-url', 'http://other:3100', '--token', 't2', '--provider', 'gemini', '--exec-template', 'gemini run {input}', '--codex-approval-policy', 'on-request', '--claude-permission-mode', 'acceptEdits'],
       {
         AIREMOTECODER_GATEWAY_URL: 'http://gw:3100',
         AIREMOTECODER_MCP_TOKEN: 'token-123',
@@ -490,6 +584,7 @@ describe('runner cli parsing', () => {
     expect(options.provider).toBe('gemini');
     expect(options.execTemplate).toBe('gemini run {input}');
     expect(options.codexApprovalPolicy).toBe('on-request');
+    expect(options.claudePermissionMode).toBe('acceptEdits');
     expect(options.runnerId).toMatch(/^[a-f0-9]{16}$/);
   });
 

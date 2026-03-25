@@ -50,6 +50,48 @@ function logRunnerError(message: string): void {
   console.error(`[airc-mcp-runner] ${message}`);
 }
 
+function logStreamEvent(type: EventType, data: string): void {
+  const trimmed = data.trim();
+  if (!trimmed) return;
+  if (type === 'error') {
+    logRunnerError(trimmed);
+    return;
+  }
+  if (type === 'info' || type === 'marker' || type === 'stderr') {
+    logRunnerInfo(trimmed);
+  }
+}
+
+function summarizeClaudeToolInput(input: unknown): string {
+  if (typeof input === 'string') return input.trim();
+  if (!input || typeof input !== 'object') return '';
+  const record = input as Record<string, unknown>;
+  const value = record.command ?? record.cmd ?? record.path ?? record.file_path ?? record.pattern ?? record.query;
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function summarizeClaudeToolResultContent(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    const textParts = content
+      .map((item) => {
+        if (typeof item === 'string') return item.trim();
+        if (!item || typeof item !== 'object') return '';
+        const record = item as Record<string, unknown>;
+        const value = record.text ?? record.content ?? record.message ?? record.output;
+        return typeof value === 'string' ? value.trim() : '';
+      })
+      .filter(Boolean);
+    return textParts.join(' ').trim();
+  }
+  if (content && typeof content === 'object') {
+    const record = content as Record<string, unknown>;
+    const value = record.text ?? record.content ?? record.message ?? record.output;
+    return typeof value === 'string' ? value.trim() : '';
+  }
+  return '';
+}
+
 export interface WorkerExecutor {
   sendInput(input: string, emit: (type: EventType, data: string) => Promise<void>): Promise<void>;
   interrupt(): Promise<void>;
@@ -489,7 +531,7 @@ export class ClaudeCliExecutor implements WorkerExecutor {
       '--include-partial-messages',
       '--verbose',
       '--permission-mode',
-      this.options.permissionMode ?? 'acceptEdits',
+      this.options.permissionMode ?? 'bypassPermissions',
     ];
     if (this.options.model) {
       args.push('--model', this.options.model);
@@ -524,6 +566,27 @@ export class ClaudeCliExecutor implements WorkerExecutor {
       for (const part of content) {
         if (part?.type === 'text' && typeof part.text === 'string' && part.text.length > 0) {
           void emit('stdout', part.text);
+          continue;
+        }
+        if (part?.type === 'thinking' && typeof part.text === 'string' && part.text.trim().length > 0) {
+          void emit('info', `Claude reasoning: ${part.text.trim()}`);
+          continue;
+        }
+        if (part?.type === 'tool_use') {
+          const toolName = typeof part.name === 'string' && part.name.trim().length > 0 ? part.name.trim() : 'tool';
+          const details = summarizeClaudeToolInput(part.input);
+          void emit('info', `Claude tool started: ${toolName}${details ? ` ${details}` : ''}`);
+        }
+      }
+      return;
+    }
+
+    if (event?.type === 'user') {
+      const content = Array.isArray(event.message?.content) ? event.message.content : [];
+      for (const part of content) {
+        if (part?.type === 'tool_result') {
+          const details = summarizeClaudeToolResultContent(part.content);
+          void emit('info', `Claude tool result: ${details || 'completed'}`);
         }
       }
       return;
@@ -533,11 +596,18 @@ export class ClaudeCliExecutor implements WorkerExecutor {
       if (event.is_error || event.subtype === 'error') {
         result.ok = false;
         result.error = new Error(String(event.error ?? 'Claude CLI reported an error'));
+        return;
+      }
+      if (typeof event.result === 'string' && event.result.trim().length > 0) {
+        void emit('info', `Claude result: ${event.result.trim()}`);
       }
       return;
     }
 
     if (event?.type === 'system') {
+      if (event.subtype === 'status' && typeof event.status === 'string' && event.status.trim().length > 0) {
+        void emit('info', `Claude status: ${event.status.trim()}`);
+      }
       return;
     }
   }
@@ -554,12 +624,16 @@ export class ClaudeCliExecutor implements WorkerExecutor {
   }
 
   async sendInput(input: string, emit: (type: EventType, data: string) => Promise<void>): Promise<void> {
+    const localEmit = async (type: EventType, data: string) => {
+      logStreamEvent(type, data);
+      await emit(type, data);
+    };
     const args = this.buildArgs();
     const command = this.options.command ?? 'claude';
     const sessionFlag = this.cliSessionId ? `resume=${this.cliSessionId}` : 'session=new';
 
-    await emit('info', `Executing Claude prompt (${input.length} chars)`);
-    logRunnerInfo(`launching Claude (${sessionFlag}, permissionMode=${this.options.permissionMode ?? 'acceptEdits'})`);
+    await localEmit('info', `Executing Claude prompt (${input.length} chars)`);
+    logRunnerInfo(`launching Claude (${sessionFlag}, permissionMode=${this.options.permissionMode ?? 'bypassPermissions'})`);
 
     await new Promise<void>((resolve, reject) => {
       const child = this.spawnFn(command, [...args, '--', input], {
@@ -592,7 +666,7 @@ export class ClaudeCliExecutor implements WorkerExecutor {
         for (const rawLine of lines) {
           const line = rawLine.trim();
           if (!line) continue;
-          this.parseStreamJsonLine(line, emit, result);
+          this.parseStreamJsonLine(line, localEmit, result);
         }
       });
 
@@ -602,7 +676,7 @@ export class ClaudeCliExecutor implements WorkerExecutor {
         lastActivityAt = Date.now();
         stderrBuffer += text;
         logRunnerInfo(`Claude stderr: ${text.trim()}`);
-        void emit('stderr', text);
+        void localEmit('stderr', text);
       });
 
       child.on('error', (err) => {
@@ -612,7 +686,7 @@ export class ClaudeCliExecutor implements WorkerExecutor {
       child.on('close', (code) => {
         clearWatchdog();
         if (stdoutBuffer.trim().length > 0) {
-          this.parseStreamJsonLine(stdoutBuffer.trim(), emit, result);
+          this.parseStreamJsonLine(stdoutBuffer.trim(), localEmit, result);
           stdoutBuffer = '';
         }
         if (!sawOutput) {
@@ -853,6 +927,7 @@ export function createBufferedEventSink(
     }
 
     await flush();
+    logStreamEvent(type, data);
     await api.sendEvent(runId, { type, data });
   };
 
@@ -927,6 +1002,7 @@ export interface RunnerOptions {
   provider: string;
   codexMode: 'app-server' | 'interactive' | 'exec';
   codexApprovalPolicy: string;
+  claudePermissionMode?: string;
   execTemplate?: string;
   pollIdleMs?: number;
   pollCommandsMs?: number;
@@ -946,7 +1022,9 @@ function createExecutor(options: RunnerOptions): WorkerExecutor {
     return new CodexAppServerExecutor({ approvalPolicy: options.codexApprovalPolicy || 'never' });
   }
   if (options.provider === 'claude') {
-    return new ClaudeCliExecutor();
+    return new ClaudeCliExecutor({
+      permissionMode: options.claudePermissionMode,
+    });
   }
   return new TemplateExecExecutor(options.execTemplate ?? '');
 }

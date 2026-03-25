@@ -166,6 +166,8 @@ airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
 Claude preview runs now use the native helper transport and no longer require `AIREMOTECODER_EXEC_TEMPLATE`.
+For the current preview path, use `AIREMOTECODER_CLAUDE_PERMISSION_MODE=bypassPermissions`; `acceptEdits` still allows bash/tool approval stalls and is not the deterministic MVP setting.
+`airc-mcp-runner` now also prints Claude status/tool/stderr activity locally so blocked turns can be diagnosed from the helper terminal.
 Other non-Codex providers are not production-ready runner targets yet. The current helper still offers manual `execTemplate` fallback for them:
 
 ```bash

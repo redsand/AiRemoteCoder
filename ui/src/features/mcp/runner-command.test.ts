@@ -37,10 +37,12 @@ describe('buildRunnerCommandSnippet', () => {
 
     expect(snippet.bash).toContain('AIREMOTECODER_PROVIDER="claude"');
     expect(snippet.bash).not.toContain('AIREMOTECODER_EXEC_TEMPLATE=');
+    expect(snippet.bash).toContain('AIREMOTECODER_CLAUDE_PERMISSION_MODE="bypassPermissions"');
     expect(snippet.bash).toContain('airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"');
 
     expect(snippet.powershell).toContain('$env:AIREMOTECODER_PROVIDER="claude"');
     expect(snippet.powershell).not.toContain('AIREMOTECODER_EXEC_TEMPLATE=');
+    expect(snippet.powershell).toContain('$env:AIREMOTECODER_CLAUDE_PERMISSION_MODE="bypassPermissions"');
     expect(snippet.powershell).toContain('airc-mcp-runner --runner-id "$env:AIREMOTECODER_RUNNER_ID"');
   });
 });

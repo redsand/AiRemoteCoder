@@ -22,6 +22,7 @@ Environment variables are also supported:
 - `AIREMOTECODER_RUNNER_ID` (stable per host+project identity)
 - `AIREMOTECODER_CODEX_MODE` (`app-server`, `exec`, or legacy `interactive`)
 - `AIREMOTECODER_CODEX_APPROVAL_POLICY` (defaults to `never` for the current MVP path)
+- `AIREMOTECODER_CLAUDE_PERMISSION_MODE` (defaults to `bypassPermissions` for the current Claude preview path)
 - `AIREMOTECODER_EXEC_TEMPLATE` (manual fallback for providers without native executors)
 
 The helper automatically reports its current working directory to the gateway.
@@ -45,6 +46,8 @@ For Codex, `app-server` is the primary mode.
 
 - `codex`: production-ready runner path
 - `claude`: preview runner path using Claude CLI `--print --output-format stream-json`
+  - Default permission mode is `bypassPermissions` for the current MVP debugging path.
+  - The helper now prints Claude status/tool/stderr activity locally so a blocked turn is visible in the runner terminal.
 - `gemini`: not production-ready in the runner yet
 - `opencode`: not production-ready in the runner yet
 - `zenflow`: not production-ready in the runner yet
