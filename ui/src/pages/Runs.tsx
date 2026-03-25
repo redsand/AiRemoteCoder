@@ -13,6 +13,7 @@ import {
 } from '../components/ui';
 import type { McpActiveSession } from '../features/mcp/types';
 import { isMcpSessionFresh } from '../features/mcp/run-worker-options';
+import { buildRunnerCommandSnippet } from '../features/mcp/runner-command';
 
 interface RunsResponse {
   runs: Run[];
@@ -76,6 +77,8 @@ export function Runs({ user }: Props) {
   const [createCommand, setCreateCommand] = useState('');
   const [createAutonomous, setCreateAutonomous] = useState(true);
   const [createLoading, setCreateLoading] = useState(false);
+  const [showRunnerCommandModal, setShowRunnerCommandModal] = useState(false);
+  const [runnerCommand, setRunnerCommand] = useState<{ bash: string; powershell: string; runId: string } | null>(null);
 
   const navigate = useNavigate();
 
@@ -267,7 +270,16 @@ export function Runs({ user }: Props) {
         setCreateMode('agent');
         setCreateCommand('');
         setCreateAutonomous(true);
-        navigate(`/runs/${data.id}`);
+        if (createMode === 'agent') {
+          const snippet = buildRunnerCommandSnippet(
+            String(resolvedWorkerType || selectedHost?.provider || 'codex'),
+            createHostSessionId || selectedHost?.id || 'default-runner'
+          );
+          setRunnerCommand({ ...snippet, runId: data.id });
+          setShowRunnerCommandModal(true);
+        } else {
+          navigate(`/runs/${data.id}`);
+        }
       } else {
         const error = await res.json();
         addToast('error', error.error || 'Failed to create run');
@@ -283,6 +295,15 @@ export function Runs({ user }: Props) {
   const selectedProviderLabel = selectedHost?.provider ? selectedHost.provider.toUpperCase() : 'Unavailable';
   const selectedHostFresh = isMcpSessionFresh(selectedHost);
   const canUseManualModes = Boolean(selectedHost && selectedHostFresh);
+
+  const copyText = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      addToast('success', `${label} copied`);
+    } catch {
+      addToast('error', `Failed to copy ${label}`);
+    }
+  };
 
   useEffect(() => {
     if ((createMode === 'vnc' || createMode === 'hands-on') && !canUseManualModes) {
@@ -628,6 +649,65 @@ export function Runs({ user }: Props) {
           </div>
         </Modal>
       )}
+
+      <Modal
+        open={showRunnerCommandModal && Boolean(runnerCommand)}
+        onClose={() => {
+          setShowRunnerCommandModal(false);
+        }}
+        title="Start Runner For This Host"
+        footer={
+          <>
+            <button
+              className="btn"
+              onClick={() => {
+                setShowRunnerCommandModal(false);
+              }}
+            >
+              Close
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                if (runnerCommand) {
+                  setShowRunnerCommandModal(false);
+                  navigate(`/runs/${runnerCommand.runId}`);
+                }
+              }}
+            >
+              Open Run
+            </button>
+          </>
+        }
+      >
+        {runnerCommand ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div className="text-muted" style={{ fontSize: '13px' }}>
+              Run this in your project shell after creating the run.
+            </div>
+
+            <div className="snippet-block">
+              <div className="snippet-header">
+                <span className="text-muted">PowerShell</span>
+                <button className="btn-icon" onClick={() => copyText(runnerCommand.powershell, 'PowerShell command')}>
+                  ⧉ Copy
+                </button>
+              </div>
+              <pre className="code-block">{runnerCommand.powershell}</pre>
+            </div>
+
+            <div className="snippet-block">
+              <div className="snippet-header">
+                <span className="text-muted">Bash</span>
+                <button className="btn-icon" onClick={() => copyText(runnerCommand.bash, 'Bash command')}>
+                  ⧉ Copy
+                </button>
+              </div>
+              <pre className="code-block">{runnerCommand.bash}</pre>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
 
     </div>
   );
