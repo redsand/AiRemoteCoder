@@ -389,6 +389,65 @@ describe('runner executor helpers', () => {
     await expect(executor.sendInput('explode', async () => {})).rejects.toThrow('permission denied');
   });
 
+  it('prefers Claude result text when stream-json reports an error without an error field', async () => {
+    const spawnFn = vi.fn(() => {
+      const child = new EventEmitter() as any;
+      child.stdin = { end: vi.fn() };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          is_error: true,
+          result: 'File has not been read yet. Read it first before writing to it.',
+        })}\n`));
+        child.emit('close', 1);
+      });
+      return child;
+    });
+
+    const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any });
+    await expect(executor.sendInput('explode', async () => {})).rejects.toThrow('File has not been read yet');
+  });
+
+  it('carries forward Claude tool_use_error text when the final result is generic', async () => {
+    const spawnFn = vi.fn(() => {
+      const child = new EventEmitter() as any;
+      child.stdin = { end: vi.fn() };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'tool_use', name: 'Edit', id: 'tool-1', input: { file_path: 'server/routes.js' } },
+            ],
+          },
+        })}\n`));
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'user',
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: 'tool-1', content: '<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>' },
+            ],
+          },
+        })}\n`));
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          is_error: true,
+        })}\n`));
+        child.emit('close', 1);
+      });
+      return child;
+    });
+
+    const executor = new ClaudeCliExecutor({ spawnFn: spawnFn as any });
+    await expect(executor.sendInput('explode', async () => {})).rejects.toThrow('File has not been read yet');
+  });
+
   it('restores Claude CLI session id for helper restart resume', async () => {
     const spawnFn = vi.fn(() => {
       const child = new EventEmitter() as any;

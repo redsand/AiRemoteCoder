@@ -13,6 +13,8 @@
   "scripts": {
     "dev": "tsx src/cli.ts",
     "build": "tsc",
+    "prepare": "npm run build",
+    "prepack": "npm run build",
     "start": "node dist/cli.js",
     "test": "vitest run",
     "test:watch": "vitest"

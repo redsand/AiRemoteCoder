@@ -512,9 +512,28 @@ interface ClaudeResultState {
   error?: Error;
 }
 
+function stripClaudeToolUseErrorMarkup(text: string): string {
+  return text.replace(/<\/?tool_use_error>/gi, '').trim();
+}
+
+function extractClaudeErrorMessage(event: any, lastToolError: string | null): string {
+  const directError = typeof event?.error === 'string' ? event.error.trim() : '';
+  if (directError) return directError;
+
+  const resultText = typeof event?.result === 'string' ? stripClaudeToolUseErrorMarkup(event.result) : '';
+  if (resultText) return resultText;
+
+  if (lastToolError && lastToolError.trim().length > 0) return lastToolError.trim();
+
+  const returnCode = event?.returncode;
+  if (typeof returnCode === 'number') return `Claude CLI exited with code ${returnCode}`;
+  return 'Claude CLI reported an error';
+}
+
 export class ClaudeCliExecutor implements WorkerExecutor {
   private cliSessionId: string | null = null;
   private readonly toolNames = new Map<string, string>();
+  private lastToolError: string | null = null;
 
   constructor(
     private readonly options: {
@@ -608,14 +627,19 @@ export class ClaudeCliExecutor implements WorkerExecutor {
       for (const part of content) {
         if (part?.type === 'tool_result') {
           const details = summarizeClaudeToolResultContent(part.content);
+          const normalizedDetails = stripClaudeToolUseErrorMarkup(details);
           const toolId = typeof part.tool_use_id === 'string' ? part.tool_use_id : '';
           const toolLabel = (toolId && this.toolNames.get(toolId)) || 'Tool';
+          const isToolError = /<tool_use_error>/i.test(String(part.content ?? '')) || /\btool_use_error\b/i.test(details);
+          if (isToolError && normalizedDetails) {
+            this.lastToolError = normalizedDetails;
+          }
           void emit('tool_use', JSON.stringify({
             phase: 'post',
             tool: toolLabel,
             provider: 'claude',
             toolId: toolId || null,
-            summary: details || 'completed',
+            summary: normalizedDetails || 'completed',
           }));
         }
       }
@@ -625,7 +649,7 @@ export class ClaudeCliExecutor implements WorkerExecutor {
     if (event?.type === 'result') {
       if (event.is_error || event.subtype === 'error') {
         result.ok = false;
-        result.error = new Error(String(event.error ?? 'Claude CLI reported an error'));
+        result.error = new Error(extractClaudeErrorMessage(event, this.lastToolError));
         return;
       }
       if (typeof event.result === 'string' && event.result.trim().length > 0) {
@@ -654,6 +678,7 @@ export class ClaudeCliExecutor implements WorkerExecutor {
   }
 
   async sendInput(input: string, emit: (type: EventType, data: string) => Promise<void>): Promise<void> {
+    this.lastToolError = null;
     const localEmit = async (type: EventType, data: string) => {
       logStreamEvent(type, data);
       await emit(type, data);
