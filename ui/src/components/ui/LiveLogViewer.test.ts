@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { condenseLogEvents, countErrorEvents, formatLogEventDisplay, type LogEvent } from './LiveLogViewer';
+import { condenseLogEvents, countErrorEvents, formatLogEventDisplay, shouldDisableAutoScroll, type LogEvent } from './LiveLogViewer';
 
 describe('LiveLogViewer helpers', () => {
   it('condenses adjacent stdout token fragments into readable lines', () => {
@@ -15,6 +15,52 @@ describe('LiveLogViewer helpers', () => {
       { id: 1, type: 'stdout', data: 'Hello world!', timestamp: 1 },
       { id: 1.001, type: 'stdout', data: 'Next line', timestamp: 1 },
       { id: 4, type: 'stderr', data: 'warn ing', timestamp: 2 },
+    ]);
+  });
+
+  it('condenses codex reasoning summary delta JSON into a readable reasoning line', () => {
+    const events: LogEvent[] = [
+      {
+        id: 9,
+        type: 'info',
+        timestamp: 1,
+        data: JSON.stringify({
+          method: 'item/reasoning/summaryPartAdded',
+          params: { itemId: 'r1', summaryIndex: 0 },
+        }),
+      },
+      {
+        id: 10,
+        type: 'info',
+        timestamp: 1,
+        data: JSON.stringify({
+          method: 'item/reasoning/summaryTextDelta',
+          params: { itemId: 'r1', summaryIndex: 0, delta: 'Inspecting' },
+        }),
+      },
+      {
+        id: 11,
+        type: 'info',
+        timestamp: 1,
+        data: JSON.stringify({
+          method: 'item/reasoning/summaryTextDelta',
+          params: { itemId: 'r1', summaryIndex: 0, delta: ' shader settings' },
+        }),
+      },
+      {
+        id: 12,
+        type: 'info',
+        timestamp: 2,
+        data: JSON.stringify({
+          method: 'item/completed',
+          params: { item: { type: 'reasoning', id: 'r1' } },
+        }),
+      },
+    ];
+
+    expect(condenseLogEvents(events)).toEqual([
+      { id: 10, type: 'info', data: 'Codex reasoning: Inspecting shader settings', timestamp: 1 },
+      { id: 12, type: 'info', data: events[3].data, timestamp: 2 },
     ]);
   });
 
@@ -265,6 +311,80 @@ describe('LiveLogViewer helpers', () => {
     expect(legacyToolResult.emphasis).toBe('success');
   });
 
+  it('formats condensed Codex reasoning lines as readable activity text', () => {
+    const reasoning = formatLogEventDisplay({
+      id: 1,
+      type: 'info',
+      timestamp: 1,
+      data: 'Codex reasoning: Inspecting shader settings',
+    });
+
+    expect(reasoning.content).toBe('Codex reasoning: Inspecting shader settings');
+    expect(reasoning.emphasis).toBe('info');
+  });
+
+  it('falls back to a generic MCP activity label instead of showing raw JSON', () => {
+    const fallback = formatLogEventDisplay({
+      id: 99,
+      type: 'info',
+      timestamp: 1,
+      data: JSON.stringify({
+        method: 'thread/customThing/updated',
+        params: { foo: 'bar' },
+      }),
+    });
+
+    expect(fallback.content).toBe('Agent activity: thread custom Thing updated');
+    expect(fallback.emphasis).toBe('default');
+  });
+
+  it('formats Gemini runner activity into the same readable timeline style', () => {
+    const prompt = formatLogEventDisplay({
+      id: 1,
+      type: 'info',
+      timestamp: 1,
+      data: 'Executing Gemini prompt (95 chars)',
+    });
+    expect(prompt.content).toBe('Prompt delivered to Gemini');
+    expect(prompt.emphasis).toBe('info');
+
+    const sessionStarted = formatLogEventDisplay({
+      id: 2,
+      type: 'info',
+      timestamp: 1,
+      data: 'Gemini session initialized',
+    });
+    expect(sessionStarted.content).toBe('Gemini session started');
+    expect(sessionStarted.emphasis).toBe('info');
+
+    const toolStarted = formatLogEventDisplay({
+      id: 3,
+      type: 'tool_use',
+      timestamp: 1,
+      data: JSON.stringify({ phase: 'pre', tool: 'bash npm test', provider: 'gemini', toolId: 'tool-1' }),
+    });
+    expect(toolStarted.content).toBe('Tool call started: bash npm test');
+    expect(toolStarted.emphasis).toBe('tool');
+
+    const toolFinished = formatLogEventDisplay({
+      id: 4,
+      type: 'tool_use',
+      timestamp: 1,
+      data: JSON.stringify({ phase: 'post', tool: 'bash npm test', provider: 'gemini', toolId: 'tool-1', summary: 'Tests passed' }),
+    });
+    expect(toolFinished.content).toBe('Tool call finished: bash npm test');
+    expect(toolFinished.emphasis).toBe('success');
+
+    const legacyToolResult = formatLogEventDisplay({
+      id: 5,
+      type: 'info',
+      timestamp: 1,
+      data: 'Gemini tool result: Tests passed',
+    });
+    expect(legacyToolResult.content).toBe('Tool call finished');
+    expect(legacyToolResult.emphasis).toBe('success');
+  });
+
   it('counts only real error events instead of matching generic diff text', () => {
     const events: LogEvent[] = [
       {
@@ -298,5 +418,11 @@ describe('LiveLogViewer helpers', () => {
     ];
 
     expect(countErrorEvents(condenseLogEvents(events))).toBe(2);
+  });
+
+  it('keeps auto-scroll enabled during programmatic scroll-to-bottom updates', () => {
+    expect(shouldDisableAutoScroll(1000, 850, 100, true, true)).toBe(false);
+    expect(shouldDisableAutoScroll(1000, 750, 100, true, false)).toBe(true);
+    expect(shouldDisableAutoScroll(1000, 905, 100, true, false)).toBe(false);
   });
 });

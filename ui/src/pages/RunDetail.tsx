@@ -16,6 +16,8 @@ import { summarizeRunActivity } from '../features/runs/activity';
 import { buildRunChangeReport } from '../features/runs/changes';
 import { loadAllRunEvents } from '../features/runs/event-replay';
 import { shouldPollPendingRun } from '../features/runs/refresh';
+import { buildRunConnectivitySummary } from '../features/runs/connectivity';
+import type { McpActiveSession } from '../features/mcp/types';
 
 interface RunMetadata {
   mcpRunnerId?: string | null;
@@ -115,6 +117,7 @@ export function RunDetail({ user }: Props) {
   // State
   const [run, setRun] = useState<Run | null>(null);
   const [events, setEvents] = useState<LogEvent[]>([]);
+  const [activeMcpSessions, setActiveMcpSessions] = useState<McpActiveSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
@@ -208,6 +211,18 @@ export function RunDetail({ user }: Props) {
     }
   }, [runId]);
 
+  const fetchMcpSessions = useCallback(async () => {
+    try {
+      const res = await fetch('/api/mcp/sessions');
+      if (res.ok) {
+        const data = await res.json();
+        setActiveMcpSessions(Array.isArray(data.sessions) ? data.sessions : []);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // Connect WebSocket
   const connectWebSocket = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -277,6 +292,7 @@ export function RunDetail({ user }: Props) {
   useEffect(() => {
     fetchRun();
     fetchEvents();
+    fetchMcpSessions();
     connectWebSocket();
 
     return () => {
@@ -300,6 +316,13 @@ export function RunDetail({ user }: Props) {
 
     return () => clearInterval(interval);
   }, [fetchRun, run?.status]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchMcpSessions();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [fetchMcpSessions]);
 
   // Send command
   const sendCommand = async () => {
@@ -504,6 +527,7 @@ export function RunDetail({ user }: Props) {
   const displayTitle = run.label || run.command?.slice(0, 60) || `Run ${run.id}`;
   const pendingCommandCount = run.commands.filter((command) => command.status !== 'completed').length;
   const activity = summarizeRunActivity(run.status, events, pendingCommandCount);
+  const connectivity = buildRunConnectivitySummary(run, activeMcpSessions, connected, reconnecting);
   const activityTone = activity.tone === 'error'
     ? { border: 'var(--accent-red)', bg: 'rgba(248, 81, 73, 0.12)', text: 'var(--accent-red)' }
     : activity.tone === 'success'
@@ -524,7 +548,7 @@ export function RunDetail({ user }: Props) {
               ← Back
             </Link>
             <StatusPill status={run.status as any} />
-            <ConnectionIndicator connected={connected} reconnecting={reconnecting} />
+            <ConnectionIndicator connected={connected} reconnecting={reconnecting} label="Stream" />
           </div>
 
           {/* Action Buttons - Top Right */}
@@ -824,6 +848,40 @@ export function RunDetail({ user }: Props) {
               <div style={{ fontSize: '13px', fontWeight: 600 }}>{events.length > 0 ? formatTime(events[events.length - 1].timestamp) : 'No events yet'}</div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          padding: '14px 16px',
+          background: 'var(--bg-secondary)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '8px',
+          marginBottom: '16px',
+        }}
+      >
+        <div style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '10px' }}>
+          Connection Status
+        </div>
+        <div style={{ display: 'grid', gap: '10px' }}>
+          {connectivity.map((entry) => {
+            const tone = entry.status === 'connected'
+              ? { color: 'var(--accent-green)', icon: '●', label: 'Connected' }
+              : entry.status === 'disconnected'
+                ? { color: 'var(--accent-red)', icon: '○', label: 'Offline' }
+                : { color: 'var(--accent-yellow)', icon: '◌', label: 'Unknown' };
+            return (
+              <div key={entry.label} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 600 }}>{entry.label}</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>{entry.detail}</div>
+                </div>
+                <div style={{ color: tone.color, fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                  {tone.icon} {tone.label}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 

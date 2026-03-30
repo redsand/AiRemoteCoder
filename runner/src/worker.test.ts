@@ -6,6 +6,7 @@ import {
   collectGitChangeReport,
   createBufferedEventSink,
   CodexAppServerExecutor,
+  GeminiCliExecutor,
   handleWorkerCommand,
   isExpectedIdleClaimError,
   PersistentCodexExecutor,
@@ -475,6 +476,92 @@ describe('runner executor helpers', () => {
       expect.any(Object),
     );
     expect(executor.snapshotState?.()).toEqual({ cliSessionId: 'session-restored' });
+  });
+
+  it('uses Gemini CLI with persistent resume semantics and structured tool events', async () => {
+    const spawns: Array<{ command: string; args: string[]; options: Record<string, unknown>; stdin: { end: ReturnType<typeof vi.fn> } }> = [];
+    const stdoutChunks = [
+      [
+        JSON.stringify({ type: 'init', session_id: 'gem-session-1' }),
+        JSON.stringify({ type: 'message', role: 'assistant', content: 'first reply' }),
+        JSON.stringify({ type: 'tool_use', tool_name: 'bash', tool_id: 'bash_1', parameters: { cmd: 'npm test' } }),
+        JSON.stringify({ type: 'tool_result', tool_id: 'bash_1', status: 'success', output: 'Tests passed' }),
+        JSON.stringify({ type: 'result', status: 'success', result: 'done', session_id: 'gem-session-1' }),
+      ],
+      [
+        JSON.stringify({ type: 'message', role: 'assistant', content: 'second reply' }),
+        JSON.stringify({ type: 'result', status: 'success', result: 'done', session_id: 'gem-session-1' }),
+      ],
+    ];
+    const spawnFn = vi.fn((command: string, args: string[], options: Record<string, unknown>) => {
+      const stdin = { end: vi.fn() };
+      spawns.push({ command, args, options, stdin });
+      const child = new EventEmitter() as any;
+      child.stdin = stdin;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      queueMicrotask(() => {
+        const chunkSet = stdoutChunks[spawns.length - 1] ?? [];
+        for (const line of chunkSet) {
+          child.stdout.emit('data', Buffer.from(`${line}\n`));
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const executor = new GeminiCliExecutor({ spawnFn: spawnFn as any, cwd: 'C:/repo' });
+    const events: Array<{ type: string; data: string }> = [];
+
+    await executor.sendInput('first prompt', async (type, data) => {
+      events.push({ type, data });
+    });
+    await executor.sendInput('second prompt', async (type, data) => {
+      events.push({ type, data });
+    });
+
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    expect(spawns[0]?.command).toBe('gemini');
+    expect(spawns[0]?.args).toEqual(expect.arrayContaining([
+      '--output-format',
+      'stream-json',
+      '--include-directories',
+      '.',
+      '--approval-mode',
+      'yolo',
+    ]));
+    expect(spawns[0]?.stdin.end).toHaveBeenCalledWith('first prompt');
+    expect(spawns[1]?.args).toEqual(expect.arrayContaining(['--resume', 'gem-session-1']));
+    expect(spawns[1]?.stdin.end).toHaveBeenCalledWith('second prompt');
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'stdout', data: 'first reply' },
+      { type: 'stdout', data: 'second reply' },
+      { type: 'tool_use', data: JSON.stringify({ phase: 'pre', tool: 'bash npm test', provider: 'gemini', toolId: 'bash_1' }) },
+      { type: 'tool_use', data: JSON.stringify({ phase: 'post', tool: 'bash npm test', provider: 'gemini', toolId: 'bash_1', summary: 'Tests passed' }) },
+    ]));
+    expect(executor.snapshotState?.()).toEqual({ cliSessionId: 'gem-session-1' });
+  });
+
+  it('surfaces Gemini errors with real error text', async () => {
+    const spawnFn = vi.fn(() => {
+      const child = new EventEmitter() as any;
+      child.stdin = { end: vi.fn() };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'result',
+          status: 'error',
+          error: { message: 'Quota exceeded', code: 429 },
+        })}\n`));
+        child.emit('close', 1);
+      });
+      return child;
+    });
+
+    const executor = new GeminiCliExecutor({ spawnFn: spawnFn as any });
+    await expect(executor.sendInput('explode', async () => {})).rejects.toThrow('Quota exceeded');
   });
 
   it('logs Claude launch metadata and completion to the terminal', async () => {

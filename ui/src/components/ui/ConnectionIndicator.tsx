@@ -1,15 +1,16 @@
 interface ConnectionIndicatorProps {
   connected: boolean;
   reconnecting?: boolean;
+  label?: string;
 }
 
-export function ConnectionIndicator({ connected, reconnecting }: ConnectionIndicatorProps) {
+export function ConnectionIndicator({ connected, reconnecting, label = 'Stream' }: ConnectionIndicatorProps) {
   const status = connected ? 'connected' : reconnecting ? 'reconnecting' : 'disconnected';
 
   const config = {
-    connected: { color: 'var(--accent-green)', icon: '●', text: 'Live' },
-    reconnecting: { color: 'var(--accent-yellow)', icon: '○', text: 'Reconnecting...' },
-    disconnected: { color: 'var(--accent-red)', icon: '○', text: 'Disconnected' },
+    connected: { color: 'var(--accent-green)', icon: '●', text: `${label} Live` },
+    reconnecting: { color: 'var(--accent-yellow)', icon: '○', text: `${label} Reconnecting...` },
+    disconnected: { color: 'var(--accent-red)', icon: '○', text: `${label} Disconnected` },
   };
 
   const c = config[status];

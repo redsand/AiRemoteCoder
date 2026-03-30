@@ -4,7 +4,7 @@ export interface RunnerCommandSnippet {
 }
 
 function isNativeRunnerProvider(provider: string): boolean {
-  return provider === 'codex' || provider === 'claude';
+  return provider === 'codex' || provider === 'claude' || provider === 'gemini';
 }
 
 function buildExecTemplatePlaceholder(provider: string): string {
@@ -23,6 +23,8 @@ export function buildRunnerCommandSnippet(
     ? 'export AIREMOTECODER_CODEX_MODE="app-server"\nexport AIREMOTECODER_CODEX_APPROVAL_POLICY="never"\n'
     : normalizedProvider === 'claude'
       ? 'export AIREMOTECODER_CLAUDE_PERMISSION_MODE="bypassPermissions"\n'
+      : normalizedProvider === 'gemini'
+        ? 'export AIREMOTECODER_GEMINI_APPROVAL_MODE="yolo"\n'
     : isNativeRunnerProvider(normalizedProvider)
       ? ''
       : `export AIREMOTECODER_EXEC_TEMPLATE="${buildExecTemplatePlaceholder(normalizedProvider)}"\n`;
@@ -30,6 +32,8 @@ export function buildRunnerCommandSnippet(
     ? '$env:AIREMOTECODER_CODEX_MODE="app-server"\n$env:AIREMOTECODER_CODEX_APPROVAL_POLICY="never"\n'
     : normalizedProvider === 'claude'
       ? '$env:AIREMOTECODER_CLAUDE_PERMISSION_MODE="bypassPermissions"\n'
+      : normalizedProvider === 'gemini'
+        ? '$env:AIREMOTECODER_GEMINI_APPROVAL_MODE="yolo"\n'
     : isNativeRunnerProvider(normalizedProvider)
       ? ''
       : `$env:AIREMOTECODER_EXEC_TEMPLATE="${buildExecTemplatePlaceholder(normalizedProvider)}"\n`;

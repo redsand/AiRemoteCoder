@@ -68,6 +68,18 @@ export function countErrorEvents(events: Array<LogEvent | DisplayEvent>): number
   return events.filter((event) => isErrorEvent(event)).length;
 }
 
+export function shouldDisableAutoScroll(
+  scrollHeight: number,
+  scrollTop: number,
+  clientHeight: number,
+  localAutoScroll: boolean,
+  programmaticScroll: boolean
+): boolean {
+  if (!localAutoScroll || programmaticScroll) return false;
+  const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+  return !isAtBottom;
+}
+
 function shortenPath(rawPath: string): string {
   const normalized = rawPath.replace(/\//g, '\\');
   const marker = '\\source\\repos\\';
@@ -132,6 +144,16 @@ function summarizeDiff(diff: string): FormattedLogEvent {
   };
 }
 
+function genericMcpMethodLabel(method: string): string {
+  const normalized = method
+    .replace(/\//g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return 'Agent activity updated';
+  return `Agent activity: ${normalized}`;
+}
+
 // Color mapping for event types
 const typeColors: Record<string, string> = {
   stdout: 'var(--text-primary)',
@@ -154,6 +176,7 @@ function sanitizeContent(text: string): string {
 export function condenseLogEvents(events: LogEvent[]): DisplayEvent[] {
   const condensed: DisplayEvent[] = [];
   let buffer: DisplayEvent | null = null;
+  let reasoningSummaryBuffer: { id: number; timestamp: number; text: string } | null = null;
   let lineOffset = 0;
 
   const flushBuffer = () => {
@@ -173,7 +196,47 @@ export function condenseLogEvents(events: LogEvent[]): DisplayEvent[] {
     buffer = null;
   };
 
+  const flushReasoningSummaryBuffer = () => {
+    if (!reasoningSummaryBuffer) return;
+    const text = sanitizeContent(reasoningSummaryBuffer.text).trim();
+    if (text) {
+      condensed.push({
+        id: reasoningSummaryBuffer.id,
+        type: 'info',
+        data: `Codex reasoning: ${text}`,
+        timestamp: reasoningSummaryBuffer.timestamp,
+      });
+    }
+    reasoningSummaryBuffer = null;
+  };
+
   for (const event of events) {
+    const payload = event.type === 'info' ? parseInfoPayload(event.data) : null;
+    const isReasoningSummaryDelta = payload?.method === 'item/reasoning/summaryTextDelta';
+    const isReasoningSummaryPartAdded = payload?.method === 'item/reasoning/summaryPartAdded';
+
+    if (isReasoningSummaryDelta) {
+      flushBuffer();
+      const delta = typeof payload?.params?.delta === 'string' ? payload.params.delta : '';
+      if (!reasoningSummaryBuffer) {
+        reasoningSummaryBuffer = {
+          id: event.id,
+          timestamp: event.timestamp,
+          text: delta,
+        };
+      } else {
+        reasoningSummaryBuffer.text += delta;
+      }
+      continue;
+    }
+
+    if (isReasoningSummaryPartAdded) {
+      flushBuffer();
+      continue;
+    }
+
+    flushReasoningSummaryBuffer();
+
     if (event.type === 'stdout' || event.type === 'stderr') {
       if (buffer && buffer.type === event.type) {
         buffer.data += sanitizeContent(event.data);
@@ -190,6 +253,7 @@ export function condenseLogEvents(events: LogEvent[]): DisplayEvent[] {
   }
 
   flushBuffer();
+  flushReasoningSummaryBuffer();
   return condensed;
 }
 
@@ -236,6 +300,9 @@ export function formatLogEventDisplay(event: LogEvent | DisplayEvent): Formatted
     if (event.data.startsWith('Executing Claude prompt')) {
       return { content: 'Prompt delivered to Claude', emphasis: 'info' };
     }
+    if (event.data.startsWith('Codex reasoning:')) {
+      return { content: event.data, emphasis: 'info' };
+    }
     if (event.data.startsWith('Claude reasoning:')) {
       return { content: 'Claude is reasoning', emphasis: 'info' };
     }
@@ -250,6 +317,28 @@ export function formatLogEventDisplay(event: LogEvent | DisplayEvent): Formatted
       return { content: `Tool call started: ${tool}`, emphasis: 'tool' };
     }
     if (event.data.startsWith('Claude tool result:')) {
+      return { content: 'Tool call finished', emphasis: 'success' };
+    }
+    if (event.data.startsWith('Executing Gemini prompt')) {
+      return { content: 'Prompt delivered to Gemini', emphasis: 'info' };
+    }
+    if (event.data.startsWith('Gemini reasoning:')) {
+      return { content: 'Gemini is reasoning', emphasis: 'info' };
+    }
+    if (event.data.startsWith('Gemini status:')) {
+      return { content: event.data, emphasis: 'info' };
+    }
+    if (event.data.startsWith('Gemini session initialized')) {
+      return { content: 'Gemini session started', emphasis: 'info' };
+    }
+    if (event.data.startsWith('Gemini result:')) {
+      return { content: event.data, emphasis: 'success' };
+    }
+    if (event.data.startsWith('Gemini tool started:')) {
+      const tool = event.data.slice('Gemini tool started:'.length).trim();
+      return { content: `Tool call started: ${tool}`, emphasis: 'tool' };
+    }
+    if (event.data.startsWith('Gemini tool result:')) {
       return { content: 'Tool call finished', emphasis: 'success' };
     }
     try {
@@ -336,6 +425,9 @@ export function formatLogEventDisplay(event: LogEvent | DisplayEvent): Formatted
       if (method === 'thread/tokenUsage/updated') {
         return { content: 'Codex token usage updated', emphasis: 'default' };
       }
+      if (typeof method === 'string' && method.length > 0) {
+        return { content: genericMcpMethodLabel(method), emphasis: 'default' };
+      }
     } catch {
       // fall through
     }
@@ -357,6 +449,7 @@ export function LiveLogViewer({
 }: LiveLogViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const programmaticScrollRef = useRef(false);
   const [localAutoScroll, setLocalAutoScroll] = useState(autoScroll);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const processedEvents = condenseLogEvents(events);
@@ -373,9 +466,7 @@ export function LiveLogViewer({
     if (!containerRef.current) return;
 
     const { scrollHeight, scrollTop, clientHeight } = containerRef.current;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
-
-    if (!isAtBottom && localAutoScroll) {
+    if (shouldDisableAutoScroll(scrollHeight, scrollTop, clientHeight, localAutoScroll, programmaticScrollRef.current)) {
       setLocalAutoScroll(false);
       onAutoScrollChange?.(false);
     }
@@ -388,11 +479,18 @@ export function LiveLogViewer({
     // Use requestAnimationFrame to ensure layout is complete
     const animationId = requestAnimationFrame(() => {
       if (containerRef.current) {
+        programmaticScrollRef.current = true;
         containerRef.current.scrollTop = containerRef.current.scrollHeight;
+        requestAnimationFrame(() => {
+          programmaticScrollRef.current = false;
+        });
       }
     });
 
-    return () => cancelAnimationFrame(animationId);
+    return () => {
+      cancelAnimationFrame(animationId);
+      programmaticScrollRef.current = false;
+    };
   }, [filteredEvents.length, localAutoScroll]);
 
   const toggleAutoScroll = () => {
@@ -401,7 +499,11 @@ export function LiveLogViewer({
     onAutoScrollChange?.(newValue);
 
     if (newValue && containerRef.current) {
+      programmaticScrollRef.current = true;
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
+      requestAnimationFrame(() => {
+        programmaticScrollRef.current = false;
+      });
     }
   };
 

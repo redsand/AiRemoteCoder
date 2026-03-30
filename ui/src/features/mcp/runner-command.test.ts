@@ -25,11 +25,13 @@ describe('buildRunnerCommandSnippet', () => {
 
     expect(snippet.bash).toContain('AIREMOTECODER_PROVIDER="gemini"');
     expect(snippet.bash).not.toContain('AIREMOTECODER_CODEX_MODE=');
-    expect(snippet.bash).toContain('AIREMOTECODER_EXEC_TEMPLATE="<SET_GEMINI_COMMAND_WITH_{input}_PLACEHOLDER>"');
+    expect(snippet.bash).toContain('AIREMOTECODER_GEMINI_APPROVAL_MODE="yolo"');
+    expect(snippet.bash).not.toContain('AIREMOTECODER_EXEC_TEMPLATE=');
 
     expect(snippet.powershell).toContain('$env:AIREMOTECODER_PROVIDER="gemini"');
     expect(snippet.powershell).not.toContain('AIREMOTECODER_CODEX_MODE=');
-    expect(snippet.powershell).toContain('$env:AIREMOTECODER_EXEC_TEMPLATE="<SET_GEMINI_COMMAND_WITH_{input}_PLACEHOLDER>"');
+    expect(snippet.powershell).toContain('$env:AIREMOTECODER_GEMINI_APPROVAL_MODE="yolo"');
+    expect(snippet.powershell).not.toContain('AIREMOTECODER_EXEC_TEMPLATE=');
   });
 
   it('does not require an exec template for Claude preview runner commands', () => {

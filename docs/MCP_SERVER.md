@@ -504,7 +504,11 @@ Claude now has a preview native runner path through `airc-mcp-runner`, so it doe
 Use `AIREMOTECODER_CLAUDE_PERMISSION_MODE=bypassPermissions` for the current preview path unless you have implemented a full approval bridge.
 The helper also prints Claude status/tool/stderr activity locally so runner-side stalls are diagnosable without relying only on the web UI.
 Claude tool activity is normalized into the same started/finished tool timeline model the UI uses for Codex, and synthesized diff events continue to feed the shared **Changes** view.
-For Gemini/OpenCode/Zenflow/Rev the runner currently supports only manual `execTemplate` fallback:
+Gemini now has a preview native runner path through `airc-mcp-runner`, so it does not require `AIREMOTECODER_EXEC_TEMPLATE`.
+Use `AIREMOTECODER_GEMINI_APPROVAL_MODE=yolo` for the current preview path.
+The helper also prints Gemini session/tool/result activity locally so runner-side stalls and quota failures are diagnosable without relying only on the web UI.
+Gemini tool activity is normalized into the same started/finished tool timeline model the UI uses for Codex and Claude, and synthesized diff events continue to feed the shared **Changes** view.
+For OpenCode/Zenflow/Rev the runner currently supports only manual `execTemplate` fallback:
 
 ```bash
 export AIREMOTECODER_PROVIDER=<provider>
@@ -513,7 +517,7 @@ export AIREMOTECODER_EXEC_TEMPLATE="<provider-cli> ... {input}"
 
 `{input}` is required and is replaced with the queued prompt payload.
 This is not equivalent to the Codex app-server path and should not be treated as production-ready runner support yet.
-Claude remains preview-only until its helper path is validated end to end.
+Claude and Gemini remain preview-only until their helper paths are validated end to end.
 
 Worker endpoints used:
 

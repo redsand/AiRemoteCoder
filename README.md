@@ -76,7 +76,7 @@ AiRemoteCoder is now **MCP-first**:
 - **Secure Human Channel (Primary)**: Existing UI + `/api/*` + WebSocket for approvals, status, artifacts
 - **Real-time Monitoring**: Stream normalized run/session events to your phone/browser
 - **Multi-Provider MCP Setup**: Claude, Codex, Gemini, OpenCode, Zenflow, and Rev can connect to the gateway MCP server
-- **Runner MVP**: `airc-mcp-runner` is production-ready for Codex today, with Claude available as a preview runner path for active testing
+- **Runner MVP**: `airc-mcp-runner` is production-ready for Codex today, with Claude and Gemini available as preview runner paths for active testing
 - **Command Execution**: Run allowlisted local commands (tests, git operations) from the UI through the helper; prompts still go to the agent
 - **Secure Authentication**: Scoped MCP tokens, session auth, optional TOTP 2FA, Cloudflare Access
 - **Connect-Back Only**: Agents initiate outbound connections — no inbound ports required
@@ -168,15 +168,18 @@ airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"
 Claude preview runs now use the native helper transport and no longer require `AIREMOTECODER_EXEC_TEMPLATE`.
 For the current preview path, use `AIREMOTECODER_CLAUDE_PERMISSION_MODE=bypassPermissions`; `acceptEdits` still allows bash/tool approval stalls and is not the deterministic MVP setting.
 `airc-mcp-runner` now also prints Claude status/tool/stderr activity locally so blocked turns can be diagnosed from the helper terminal.
-Other non-Codex providers are not production-ready runner targets yet. The current helper still offers manual `execTemplate` fallback for them:
+Gemini preview runs now use the native helper transport and no longer require `AIREMOTECODER_EXEC_TEMPLATE`.
+For the current preview path, use `AIREMOTECODER_GEMINI_APPROVAL_MODE=yolo`.
+`airc-mcp-runner` now also prints Gemini session/tool/result activity locally so blocked or quota-limited turns can be diagnosed from the helper terminal.
+OpenCode, Zenflow, and Rev are still not production-ready runner targets. The current helper still offers manual `execTemplate` fallback for them:
 
 ```bash
 export AIREMOTECODER_PROVIDER=gemini
-export AIREMOTECODER_EXEC_TEMPLATE="gemini run {input}"
+export AIREMOTECODER_GEMINI_APPROVAL_MODE=yolo
 airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"
 ```
 
-Do not treat that path as equivalent to the Codex app-server transport. Gemini, OpenCode, Zenflow, and Rev still need native runner executors before they should be considered reliable production runner targets. Claude remains preview-only until its runner path is validated end to end.
+Do not treat preview paths as equivalent to the Codex app-server transport. OpenCode, Zenflow, and Rev still need native runner executors before they should be considered reliable production runner targets. Claude and Gemini remain preview-only until their runner paths are validated end to end.
 
 ## Remote Access
 

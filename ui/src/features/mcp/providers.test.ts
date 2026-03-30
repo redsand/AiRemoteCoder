@@ -11,11 +11,12 @@ describe('MCP provider metadata', () => {
     expect(isProductionReadyRunnerProvider('rev')).toBe(false);
   });
 
-  it('annotates non-codex providers as preview/manual runner support', () => {
+  it('annotates preview runner providers accurately', () => {
     expect(getMcpProvider('codex')?.runnerSupport).toBe('production');
     expect(getMcpProvider('gemini')?.runnerSupport).toBe('preview');
     expect(getMcpProvider('claude')?.configFile).toBe('.mcp.json');
     expect(getMcpProvider('claude')?.runnerSupportNote).toContain('preview testing');
+    expect(getMcpProvider('gemini')?.runnerSupportNote).toContain('Native Gemini CLI execution is supported');
   });
 
   it('allows known preview providers to be used for runner testing', () => {

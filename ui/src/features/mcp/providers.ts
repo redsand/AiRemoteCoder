@@ -38,7 +38,7 @@ export const MCP_PROVIDERS: McpProviderDefinition[] = [
     configFile: '.gemini/settings.json',
     docsKey: 'gemini_cli',
     runnerSupport: 'preview',
-    runnerSupportNote: 'Runner pairing is not production-ready yet. Current support is manual exec-template fallback only.',
+    runnerSupportNote: 'Runner pairing is available for preview testing through the helper. Native Gemini CLI execution is supported, but Codex remains the only production-ready runner path today.',
   },
   {
     key: 'opencode',

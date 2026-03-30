@@ -23,6 +23,7 @@ Environment variables are also supported:
 - `AIREMOTECODER_CODEX_MODE` (`app-server`, `exec`, or legacy `interactive`)
 - `AIREMOTECODER_CODEX_APPROVAL_POLICY` (defaults to `never` for the current MVP path)
 - `AIREMOTECODER_CLAUDE_PERMISSION_MODE` (defaults to `bypassPermissions` for the current Claude preview path)
+- `AIREMOTECODER_GEMINI_APPROVAL_MODE` (defaults to `yolo` for the current Gemini preview path)
 - `AIREMOTECODER_EXEC_TEMPLATE` (manual fallback for providers without native executors)
 
 The helper automatically reports its current working directory to the gateway.
@@ -49,10 +50,13 @@ For Codex, `app-server` is the primary mode.
   - Default permission mode is `bypassPermissions` for the current MVP debugging path.
   - The helper now prints Claude status/tool/stderr activity locally so a blocked turn is visible in the runner terminal.
   - Claude tool activity is normalized onto the same timeline-style tool start/finish events used by the UI for Codex so the run experience is provider-consistent.
-- `gemini`: not production-ready in the runner yet
+- `gemini`: preview runner path using Gemini CLI `--output-format stream-json`
+  - Default approval mode is `yolo` for the current Gemini preview path.
+  - The helper now prints Gemini session/tool/result activity locally so blocked or quota-limited turns are visible in the runner terminal.
+  - Gemini tool activity is normalized onto the same timeline-style tool start/finish events used by the UI for Codex and Claude.
 - `opencode`: not production-ready in the runner yet
 - `zenflow`: not production-ready in the runner yet
 - `rev`: not production-ready in the runner yet
 
-Claude no longer requires `AIREMOTECODER_EXEC_TEMPLATE`.
-Gemini, OpenCode, Zenflow, and Rev still use manual `AIREMOTECODER_EXEC_TEMPLATE` fallback until native executors land.
+Claude and Gemini no longer require `AIREMOTECODER_EXEC_TEMPLATE`.
+OpenCode, Zenflow, and Rev still use manual `AIREMOTECODER_EXEC_TEMPLATE` fallback until native executors land.

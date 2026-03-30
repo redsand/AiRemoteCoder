@@ -112,6 +112,30 @@ export interface WorkerExecutor {
   shutdown?(): Promise<void>;
 }
 
+function summarizeGeminiToolInput(parameters: unknown): string {
+  if (!parameters || typeof parameters !== 'object') return '';
+  const record = parameters as Record<string, unknown>;
+  const value = record.cmd ?? record.command ?? record.path ?? record.file_path ?? record.pattern ?? record.query;
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function extractGeminiErrorMessage(event: any): string {
+  const nested = event?.error;
+  if (typeof nested?.message === 'string' && nested.message.trim().length > 0) {
+    return nested.message.trim();
+  }
+  if (typeof event?.message === 'string' && event.message.trim().length > 0) {
+    return event.message.trim();
+  }
+  if (typeof event?.result === 'string' && event.result.trim().length > 0) {
+    return event.result.trim();
+  }
+  if (typeof event?.response === 'string' && event.response.trim().length > 0) {
+    return event.response.trim();
+  }
+  return 'Gemini CLI reported an error';
+}
+
 type SpawnFn = typeof spawn;
 
 function extractErrorMessage(errorPayload: unknown): string {
@@ -771,6 +795,235 @@ export class ClaudeCliExecutor implements WorkerExecutor {
   }
 }
 
+export class GeminiCliExecutor implements WorkerExecutor {
+  private cliSessionId: string | null = null;
+  private readonly toolNames = new Map<string, string>();
+
+  constructor(
+    private readonly options: {
+      spawnFn?: SpawnFn;
+      cwd?: string;
+      command?: string;
+      approvalMode?: string;
+      model?: string;
+    } = {},
+  ) {}
+
+  private get spawnFn(): SpawnFn {
+    return this.options.spawnFn ?? spawn;
+  }
+
+  private buildArgs(): string[] {
+    const args = [
+      '--output-format',
+      'stream-json',
+      '--include-directories',
+      '.',
+      '--approval-mode',
+      this.options.approvalMode ?? 'yolo',
+    ];
+    if (this.options.model) {
+      args.push('--model', this.options.model);
+    }
+    if (this.cliSessionId) {
+      args.push('--resume', this.cliSessionId);
+    }
+    return args;
+  }
+
+  private parseStreamJsonLine(
+    line: string,
+    emit: (type: EventType, data: string) => Promise<void>,
+    result: { ok: boolean; error?: Error },
+  ): void {
+    let event: any;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      if (line.trim().length > 0) void emit('stderr', line);
+      return;
+    }
+
+    if (typeof event?.session_id === 'string' && event.session_id.trim().length > 0) {
+      this.cliSessionId = event.session_id.trim();
+    }
+
+    if (event?.type === 'init') {
+      void emit('info', 'Gemini session initialized');
+      return;
+    }
+
+    if (event?.type === 'message') {
+      const role = typeof event.role === 'string' ? event.role.toLowerCase() : '';
+      if (role === 'assistant' || role === 'model') {
+        if (typeof event.content === 'string' && event.content.trim().length > 0) {
+          void emit('stdout', event.content);
+          return;
+        }
+        if (Array.isArray(event.content)) {
+          for (const part of event.content) {
+            if (part?.type === 'text' && typeof part.text === 'string' && part.text.trim().length > 0) {
+              void emit('stdout', part.text);
+              continue;
+            }
+            if (part?.type === 'tool_use') {
+              const toolName = typeof part.name === 'string' ? part.name.trim() : 'tool';
+              const detail = summarizeGeminiToolInput(part.input);
+              const toolLabel = `${toolName}${detail ? ` ${detail}` : ''}`.trim();
+              if (typeof part.id === 'string' && part.id.trim().length > 0) {
+                this.toolNames.set(part.id, toolLabel);
+              }
+              void emit('tool_use', JSON.stringify({
+                phase: 'pre',
+                tool: toolLabel,
+                provider: 'gemini',
+                toolId: typeof part.id === 'string' ? part.id : null,
+              }));
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    if (event?.type === 'tool_use') {
+      const toolName = typeof event.tool_name === 'string' ? event.tool_name.trim() : 'tool';
+      const detail = summarizeGeminiToolInput(event.parameters);
+      const toolLabel = `${toolName}${detail ? ` ${detail}` : ''}`.trim();
+      if (typeof event.tool_id === 'string' && event.tool_id.trim().length > 0) {
+        this.toolNames.set(event.tool_id, toolLabel);
+      }
+      void emit('tool_use', JSON.stringify({
+        phase: 'pre',
+        tool: toolLabel,
+        provider: 'gemini',
+        toolId: typeof event.tool_id === 'string' ? event.tool_id : null,
+      }));
+      return;
+    }
+
+    if (event?.type === 'tool_result') {
+      const toolId = typeof event.tool_id === 'string' ? event.tool_id : '';
+      const toolLabel = (toolId && this.toolNames.get(toolId)) || 'Tool';
+      const summary = typeof event.output === 'string' && event.output.trim().length > 0
+        ? event.output.trim()
+        : typeof event.status === 'string' && event.status.trim().length > 0
+          ? event.status.trim()
+          : 'completed';
+      void emit('tool_use', JSON.stringify({
+        phase: 'post',
+        tool: toolLabel,
+        provider: 'gemini',
+        toolId: toolId || null,
+        summary,
+      }));
+      return;
+    }
+
+    if (event?.type === 'error') {
+      result.ok = false;
+      result.error = new Error(extractGeminiErrorMessage(event));
+      return;
+    }
+
+    if (event?.type === 'result') {
+      const status = typeof event.status === 'string' ? event.status.toLowerCase() : '';
+      if (status === 'error' || event.is_error) {
+        result.ok = false;
+        result.error = new Error(extractGeminiErrorMessage(event));
+        return;
+      }
+      const output = typeof event.result === 'string' ? event.result.trim()
+        : typeof event.response === 'string' ? event.response.trim()
+          : '';
+      if (output) {
+        void emit('info', `Gemini result: ${output}`);
+      }
+    }
+  }
+
+  restoreState(state: Record<string, unknown> | null): void {
+    const sessionId = state?.cliSessionId;
+    if (typeof sessionId === 'string' && sessionId.trim().length > 0) {
+      this.cliSessionId = sessionId.trim();
+    }
+  }
+
+  snapshotState(): Record<string, unknown> | null {
+    return this.cliSessionId ? { cliSessionId: this.cliSessionId } : null;
+  }
+
+  async sendInput(input: string, emit: (type: EventType, data: string) => Promise<void>): Promise<void> {
+    const localEmit = async (type: EventType, data: string) => {
+      logStreamEvent(type, data);
+      await emit(type, data);
+    };
+    const args = this.buildArgs();
+    const command = this.options.command ?? 'gemini';
+    const sessionFlag = this.cliSessionId ? `resume=${this.cliSessionId}` : 'session=new';
+
+    await localEmit('info', `Executing Gemini prompt (${input.length} chars)`);
+    logRunnerInfo(`launching Gemini (${sessionFlag}, approvalMode=${this.options.approvalMode ?? 'yolo'})`);
+
+    await new Promise<void>((resolve, reject) => {
+      const child = this.spawnFn(command, args, {
+        shell: false,
+        windowsHide: true,
+        cwd: this.options.cwd ?? process.cwd(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      const result: { ok: boolean; error?: Error } = { ok: true };
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
+
+      child.stdout?.on('data', (chunk: Buffer | string) => {
+        stdoutBuffer += chunk.toString();
+        const lines = stdoutBuffer.split(/\r?\n/);
+        stdoutBuffer = lines.pop() ?? '';
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          this.parseStreamJsonLine(line, localEmit, result);
+        }
+      });
+
+      child.stderr?.on('data', (chunk: Buffer | string) => {
+        const text = chunk.toString();
+        stderrBuffer += text;
+        void localEmit('stderr', text);
+      });
+
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (stdoutBuffer.trim().length > 0) {
+          this.parseStreamJsonLine(stdoutBuffer.trim(), localEmit, result);
+          stdoutBuffer = '';
+        }
+        if (result.ok && code === 0) {
+          logRunnerInfo('Gemini turn completed successfully');
+          resolve();
+          return;
+        }
+        if (result.error) {
+          logRunnerError(`Gemini turn failed: ${result.error.message}`);
+          reject(result.error);
+          return;
+        }
+        const stderrText = stderrBuffer.trim();
+        logRunnerError(`Gemini exited with code ${code}${stderrText ? `: ${stderrText}` : ''}`);
+        reject(new Error(stderrText || `gemini exited with code ${code}`));
+      });
+
+      child.stdin?.end(input);
+    });
+  }
+
+  async interrupt(): Promise<void> {
+    return;
+  }
+}
+
 export async function executeShellCommand(
   command: string,
   emit: (type: EventType, data: string) => Promise<void>,
@@ -1062,6 +1315,7 @@ export interface RunnerOptions {
   codexMode: 'app-server' | 'interactive' | 'exec';
   codexApprovalPolicy: string;
   claudePermissionMode?: string;
+  geminiApprovalMode?: string;
   execTemplate?: string;
   pollIdleMs?: number;
   pollCommandsMs?: number;
@@ -1083,6 +1337,11 @@ function createExecutor(options: RunnerOptions): WorkerExecutor {
   if (options.provider === 'claude') {
     return new ClaudeCliExecutor({
       permissionMode: options.claudePermissionMode,
+    });
+  }
+  if (options.provider === 'gemini') {
+    return new GeminiCliExecutor({
+      approvalMode: options.geminiApprovalMode,
     });
   }
   return new TemplateExecExecutor(options.execTemplate ?? '');
