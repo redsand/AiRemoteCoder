@@ -165,7 +165,7 @@ export function resolvePath(inputPath: string): string {
 
 function buildConfig(): AppConfig {
   const port = parsePort(process.env.GATEWAY_PORT, 3000);
-  const host = trimOrEmpty(process.env.GATEWAY_HOST) || 'localhost';
+  const host = trimOrEmpty(process.env.GATEWAY_HOST) || '0.0.0.0';
   const databaseType = parseDatabaseType(process.env.DATABASE_TYPE);
   const databasePath = trimOrEmpty(process.env.DATABASE_PATH) || './data/gateway.db';
   const dbPath = resolvePath(databasePath);

@@ -48,8 +48,8 @@ describe('Configuration Module', () => {
       expect(config.port).toBe(3000);
     });
 
-    it('should have default host localhost', () => {
-      expect(config.host).toBe('localhost');
+    it('should have default host 0.0.0.0', () => {
+      expect(config.host).toBe('0.0.0.0');
     });
 
     it('should have default database path ./data/gateway.db', () => {
@@ -169,7 +169,7 @@ describe('Configuration Module', () => {
     it('should use default host for empty string', () => {
       process.env.GATEWAY_HOST = '';
       loadConfig();
-      expect(config.host).toBe('localhost');
+      expect(config.host).toBe('0.0.0.0');
     });
   });
 
@@ -739,7 +739,7 @@ describe('Configuration Module', () => {
       loadConfig();
 
       expect(config.port).toBe(3000);
-      expect(config.host).toBe('localhost');
+      expect(config.host).toBe('0.0.0.0');
       expect(config.database.path).toBe('./data/gateway.db');
       expect(config.database.type).toBe('sqlite');
       expect(config.logLevel).toBe('info');
@@ -762,7 +762,7 @@ describe('Configuration Module', () => {
 
       expect(config.port).toBe(5000);
       expect(config.logLevel).toBe('error');
-      expect(config.host).toBe('localhost');
+      expect(config.host).toBe('0.0.0.0');
       expect(config.database.type).toBe('sqlite');
       expect(config.env).toBe('development');
     });

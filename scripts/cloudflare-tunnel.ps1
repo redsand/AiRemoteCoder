@@ -1,13 +1,85 @@
 #!/usr/bin/env pwsh
 $ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $false
 
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Blue
-Write-Host "║         Cloudflare Tunnel Setup                               ║" -ForegroundColor Blue
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Blue
+function Resolve-CloudflaredPath {
+    $command = Get-Command cloudflared -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $fallbackPaths = @(
+        "C:\Program Files\cloudflared\cloudflared.exe",
+        "C:\Program Files (x86)\cloudflared\cloudflared.exe",
+        "$env:LOCALAPPDATA\Programs\cloudflared\cloudflared.exe"
+    )
+
+    foreach ($path in $fallbackPaths) {
+        if (Test-Path $path) {
+            return $path
+        }
+    }
+
+    return $null
+}
+
+function Invoke-Cloudflared {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+        [switch]$AllowFailure,
+        [switch]$Quiet
+    )
+
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+
+    try {
+        & $script:cloudflared @Arguments 1> $stdoutPath 2> $stderrPath
+        $exitCode = $LASTEXITCODE
+        $stdout = if (Test-Path $stdoutPath) { [System.IO.File]::ReadAllText($stdoutPath) } else { "" }
+        $stderr = if (Test-Path $stderrPath) { [System.IO.File]::ReadAllText($stderrPath) } else { "" }
+    } finally {
+        Remove-Item $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+
+    $stdout = $stdout.Trim()
+    $stderr = $stderr.Trim()
+
+    if (-not $AllowFailure -and -not $Quiet) {
+        foreach ($line in @($stdout, $stderr)) {
+            if ($line) {
+                foreach ($text in ($line -split "`r?`n")) {
+                    if ($text -and $text.Trim() -ne "null" -and -not $text.TrimStart().StartsWith('{')) {
+                        Write-Host $text
+                    }
+                }
+            }
+        }
+    }
+
+    if ($exitCode -ne 0 -and -not $AllowFailure) {
+        if ($stderr) {
+            throw $stderr
+        }
+
+        throw "cloudflared exited with code $exitCode"
+    }
+
+    return @{
+        Stdout = $stdout
+        Stderr = $stderr
+        ExitCode = $exitCode
+    }
+}
+
+Write-Host "+------------------------------------------------------------+" -ForegroundColor Blue
+Write-Host "| Cloudflare Tunnel Setup                                    |" -ForegroundColor Blue
+Write-Host "+------------------------------------------------------------+" -ForegroundColor Blue
 Write-Host
 
 # Check for cloudflared
-$cloudflared = Get-Command cloudflared -ErrorAction SilentlyContinue
+$cloudflared = Resolve-CloudflaredPath
 if (-not $cloudflared) {
     Write-Host "cloudflared is not installed." -ForegroundColor Red
     Write-Host
@@ -20,11 +92,10 @@ if (-not $cloudflared) {
 }
 
 # Check if authenticated
-try {
-    cloudflared tunnel list 2>&1 | Out-Null
-} catch {
+$originCertPath = Join-Path $HOME ".cloudflared\cert.pem"
+if (-not (Test-Path $originCertPath)) {
     Write-Host "Not authenticated with Cloudflare. Running login..." -ForegroundColor Yellow
-    cloudflared tunnel login
+    Invoke-Cloudflared -Arguments @("tunnel", "--loglevel", "error", "login")
 }
 
 $TunnelName = "airemotecoder-$env:COMPUTERNAME"
@@ -33,12 +104,19 @@ $LocalUrl = "https://localhost:3100"
 Write-Host "Checking for existing tunnel..."
 
 # Get tunnel list
-$tunnels = cloudflared tunnel list --output json 2>$null | ConvertFrom-Json
+$tunnelListOutput = Invoke-Cloudflared -Arguments @("tunnel", "--loglevel", "error", "list", "--output", "json") -Quiet
+$tunnelListJson = $tunnelListOutput.Stdout.Trim()
+
+if ($tunnelListJson -eq "null" -or [string]::IsNullOrWhiteSpace($tunnelListJson)) {
+    $tunnels = @()
+} else {
+    $tunnels = $tunnelListJson | ConvertFrom-Json
+}
 $existingTunnel = $tunnels | Where-Object { $_.name -eq $TunnelName } | Select-Object -First 1
 
 if (-not $existingTunnel) {
     Write-Host "Creating new tunnel: $TunnelName" -ForegroundColor Green
-    cloudflared tunnel create $TunnelName
+    Invoke-Cloudflared -Arguments @("tunnel", "--loglevel", "error", "create", $TunnelName)
 }
 
 Write-Host
@@ -53,4 +131,4 @@ Write-Host "  4. Set up your identity provider and access policies"
 Write-Host
 
 # Run the tunnel
-cloudflared tunnel --url $LocalUrl run $TunnelName
+Invoke-Cloudflared -Arguments @("tunnel", "--loglevel", "error", "--url", $LocalUrl, "run", $TunnelName)
