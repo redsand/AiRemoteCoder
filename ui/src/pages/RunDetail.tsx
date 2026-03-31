@@ -89,7 +89,7 @@ const ALLOWED_COMMANDS = [
   'pwd',
 ];
 
-type Tab = 'log' | 'timeline' | 'changes' | 'artifacts' | 'commands' | 'vnc';
+type Tab = 'log' | 'timeline' | 'changes' | 'artifacts' | 'commands' | 'setup' | 'vnc';
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -885,11 +885,6 @@ export function RunDetail({ user }: Props) {
         </div>
       </div>
 
-      <PendingRunnerPanel
-        workerType={run.worker_type}
-        runnerId={typeof run.metadata?.mcpRunnerId === 'string' ? run.metadata.mcpRunnerId : null}
-      />
-
       {/* Prompt Waiting Banner */}
       {promptWaiting && (
         <div
@@ -1024,6 +1019,12 @@ export function RunDetail({ user }: Props) {
             <span className="tab-badge">{run.commands.length}</span>
           )}
         </button>
+        <button
+          className={`tab ${activeTab === 'setup' ? 'tab-active' : ''}`}
+          onClick={() => setActiveTab('setup')}
+        >
+          Setup
+        </button>
         {isVncRun && (
           <button
             className={`tab ${activeTab === 'vnc' ? 'tab-active' : ''}`}
@@ -1057,6 +1058,13 @@ export function RunDetail({ user }: Props) {
 
         {activeTab === 'commands' && (
           <CommandsList commands={run.commands} />
+        )}
+
+        {activeTab === 'setup' && (
+          <PendingRunnerPanel
+            workerType={run.worker_type}
+            runnerId={typeof run.metadata?.mcpRunnerId === 'string' ? run.metadata.mcpRunnerId : null}
+          />
         )}
 
         {activeTab === 'vnc' && isVncRun && (

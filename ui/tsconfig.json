@@ -17,5 +17,6 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src"],
+  "exclude": ["src/vite-config.test.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

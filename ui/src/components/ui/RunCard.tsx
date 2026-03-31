@@ -13,6 +13,10 @@ export interface Run {
   finished_at?: number | null;
   waiting_approval?: number;
   artifact_count?: number;
+  command_count?: number;
+  changed_file_count?: number;
+  event_cwd?: string | null;
+  task_preview?: string | null;
   hasAssist?: boolean;
   duration?: number | null;
   worker_type?: string | null;
@@ -80,7 +84,7 @@ export function RunCard({ run, compact = false, onClick }: RunCardProps) {
   const navigate = useNavigate();
   const handleClick = onClick || (() => navigate(`/runs/${run.id}`));
 
-  const displayTitle = run.label || run.command?.slice(0, 60) || `Run ${run.id}`;
+  const displayTitle = run.label || run.command?.slice(0, 80) || run.task_preview?.slice(0, 100) || `Run ${run.id}`;
   const needsApproval = run.waiting_approval === 1;
   const workerType = run.worker_type || run.metadata?.workerType || 'claude';
   const workerIcon = getWorkerIcon(workerType);
@@ -90,6 +94,19 @@ export function RunCard({ run, compact = false, onClick }: RunCardProps) {
     .split('-')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
+  const repoDisplay = (() => {
+    const path = run.repo_path || run.event_cwd;
+    if (path) {
+      const parts = path.replace(/\\/g, '/').replace(/\/$/, '').split('/');
+      return parts.length >= 2 ? `${parts[parts.length - 2]}/${parts[parts.length - 1]}` : parts[parts.length - 1];
+    }
+    return run.repo_name || null;
+  })();
+
+  const elapsedSeconds = run.finished_at && run.started_at
+    ? run.finished_at - run.started_at
+    : run.duration ?? null;
+
   const claimText = run.claimed_by
     ? (() => {
       const claimedAt = run.claimed_at ? ` (${formatRelativeTime(run.claimed_at)})` : '';
@@ -219,16 +236,26 @@ export function RunCard({ run, compact = false, onClick }: RunCardProps) {
                 alignItems: 'center',
               }}
             >
-              {run.repo_name && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              {repoDisplay && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-primary)', fontWeight: 500 }}>
                   <span style={{ fontSize: '10px' }}>\uD83D\uDCC1</span>
-                  {run.repo_name}
+                  {repoDisplay}
                 </span>
               )}
               <span>{formatRelativeTime(run.created_at)}</span>
-              {run.duration && run.status === 'running' && (
-                <span style={{ color: 'var(--accent-green)' }}>
-                  {formatDuration(run.duration)}
+              {elapsedSeconds !== null && (
+                <span style={{ color: run.status === 'running' ? 'var(--accent-green)' : 'var(--text-secondary)' }}>
+                  {formatDuration(elapsedSeconds)}
+                </span>
+              )}
+              {(run.changed_file_count ?? 0) > 0 && (
+                <span title={`${run.changed_file_count} files changed`} style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                  \uD83D\uDCDD {run.changed_file_count} {run.changed_file_count === 1 ? 'file' : 'files'}
+                </span>
+              )}
+              {(run.command_count ?? 0) > 0 && (
+                <span title={`${run.command_count} commands`} style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                  \u26A1 {run.command_count} {run.command_count === 1 ? 'cmd' : 'cmds'}
                 </span>
               )}
             </div>

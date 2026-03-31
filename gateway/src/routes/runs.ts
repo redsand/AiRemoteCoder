@@ -301,6 +301,10 @@ export async function runsRoutes(fastify: FastifyInstance) {
              r.exit_code, r.error_message, r.metadata, r.tags,
              (SELECT COUNT(*) FROM artifacts WHERE run_id = r.id) as artifact_count,
              (SELECT data FROM events WHERE run_id = r.id AND type = 'assist' LIMIT 1) as assist_data,
+             (SELECT COUNT(*) FROM commands WHERE run_id = r.id) as command_count,
+             (SELECT COUNT(*) FROM events WHERE run_id = r.id AND type = 'info' AND data LIKE '%"item/completed"%' AND data LIKE '%"fileChange"%') as changed_file_count,
+             (SELECT json_extract(data, '$.params.thread.cwd') FROM events WHERE run_id = r.id AND type = 'info' AND data LIKE '%thread/started%' ORDER BY id LIMIT 1) as event_cwd,
+             (SELECT json_extract(data, '$.params.item.content[0].text') FROM events WHERE run_id = r.id AND type = 'info' AND data LIKE '%userMessage%' ORDER BY id LIMIT 1) as task_preview,
              r.worker_type, r.claimed_by, r.claimed_at
       FROM runs r
       WHERE 1=1
