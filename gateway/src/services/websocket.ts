@@ -137,10 +137,10 @@ export function setupWebSocket(fastify: FastifyInstance): void {
       const { runId } = request.params;
       const socket = connection;
 
-      // Verify run exists and is VNC type
+      // Verify run exists
       const run = db.prepare('SELECT id, worker_type FROM runs WHERE id = ?').get(runId) as { id: string; worker_type: string } | undefined;
-      if (!run || run.worker_type !== 'vnc') {
-        socket.close(1008, 'Invalid run or not VNC type');
+      if (!run) {
+        socket.close(1008, 'Run not found');
         return;
       }
 
@@ -161,6 +161,79 @@ export function setupWebSocket(fastify: FastifyInstance): void {
 
       // Note: Handlers are setup in vnc-tunnel.ts
       // Messages are forwarded bidirectionally between client and viewer
+    }
+  );
+
+  /**
+   * VNC TCP proxy endpoint — bridges noVNC browser to a real VNC TCP server.
+   * /ws/vnc-proxy/:runId
+   * The run's metadata.vncHost must be set to "host:port" (e.g. "192.168.1.10:5900").
+   */
+  fastify.get<{ Params: { runId: string } }>(
+    '/ws/vnc-proxy/:runId',
+    { websocket: true },
+    (connection, request) => {
+      const { runId } = request.params;
+      const socket = connection;
+
+      const run = db.prepare('SELECT id, metadata FROM runs WHERE id = ?').get(runId) as { id: string; metadata: string | null } | undefined;
+      if (!run) {
+        socket.close(1008, 'Run not found');
+        return;
+      }
+
+      let vncHost = 'localhost';
+      let vncPort = 5900;
+      try {
+        const meta = run.metadata ? JSON.parse(run.metadata) : {};
+        const configured: string = meta.vncHost || '';
+        if (configured) {
+          const lastColon = configured.lastIndexOf(':');
+          if (lastColon > 0) {
+            vncHost = configured.slice(0, lastColon);
+            vncPort = parseInt(configured.slice(lastColon + 1), 10) || 5900;
+          } else {
+            vncHost = configured;
+          }
+        }
+      } catch { /* use defaults */ }
+
+      // Open TCP connection to VNC server
+      const net = require('net') as typeof import('net');
+      const tcp = net.createConnection({ host: vncHost, port: vncPort });
+
+      tcp.on('connect', () => {
+        fastify.log.info(`VNC proxy connected to ${vncHost}:${vncPort} for run ${runId}`);
+      });
+
+      tcp.on('data', (chunk: Buffer) => {
+        try {
+          if (socket.readyState === socket.OPEN) socket.send(chunk);
+        } catch { tcp.destroy(); }
+      });
+
+      tcp.on('error', (err) => {
+        fastify.log.error(`VNC TCP error for run ${runId}: ${err.message}`);
+        socket.close(1011, `VNC server error: ${err.message}`);
+      });
+
+      tcp.on('close', () => {
+        socket.close(1000, 'VNC server disconnected');
+      });
+
+      socket.on('message', (data: Buffer) => {
+        try {
+          if (!tcp.destroyed) tcp.write(data);
+        } catch { /* ignore */ }
+      });
+
+      socket.on('close', () => {
+        tcp.destroy();
+      });
+
+      socket.on('error', () => {
+        tcp.destroy();
+      });
     }
   );
 

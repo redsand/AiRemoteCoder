@@ -109,11 +109,15 @@ export function RunCard({ run, compact = false, onClick }: RunCardProps) {
 
   const claimText = run.claimed_by
     ? (() => {
-      const claimedAt = run.claimed_at ? ` (${formatRelativeTime(run.claimed_at)})` : '';
-      if (run.claimed_by.startsWith('mcp:')) {
-        return `MCP worker attached${claimedAt}`;
+      const claimedAt = run.claimed_at ? ` · ${formatRelativeTime(run.claimed_at)}` : '';
+      const cb = run.claimed_by;
+      if (cb.startsWith('mcp-runner:') || cb.startsWith('mcp:')) {
+        const parts = cb.split(':');
+        const shortId = parts[parts.length - 1]?.slice(-6) ?? '';
+        return `MCP ···${shortId}${claimedAt}`;
       }
-      return `Claimed by ${run.claimed_by}${claimedAt}`;
+      const short = cb.length > 16 ? `${cb.slice(0, 6)}···${cb.slice(-6)}` : cb;
+      return `Claimed: ${short}${claimedAt}`;
     })()
     : null;
 

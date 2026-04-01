@@ -30,18 +30,19 @@ export async function vncRoutes(fastify: FastifyInstance) {
 
       try {
         // Verify run exists
-        const run = db.prepare('SELECT id, worker_type FROM runs WHERE id = ?').get(runId) as Run | undefined;
+        const run = db.prepare('SELECT id, worker_type, metadata FROM runs WHERE id = ?').get(runId) as (Run & { metadata: string | null }) | undefined;
         if (!run) {
           return reply.code(404).send({ error: 'Run not found' });
         }
 
-        // Only VNC workers have VNC access
-        if (run.worker_type !== 'vnc') {
-          return reply.code(400).send({ error: 'Run is not a VNC worker' });
-        }
-
         const tunnel = vncTunnelManager.getTunnel(runId);
         const stats = vncTunnelManager.getTunnelStats(runId);
+
+        let vncHost = '';
+        try {
+          const meta = (run as any).metadata ? JSON.parse((run as any).metadata) : {};
+          vncHost = meta.vncHost || '';
+        } catch { /* ignore */ }
 
         return {
           runId,
@@ -50,6 +51,8 @@ export async function vncRoutes(fastify: FastifyInstance) {
           clientConnected: stats?.clientConnected || false,
           viewerConnected: stats?.viewerConnected || false,
           wsUrl: `/ws/vnc/${runId}`,
+          proxyWsUrl: `/ws/vnc-proxy/${runId}`,
+          vncHost,
           stats: stats || null
         };
       } catch (err: any) {
@@ -73,11 +76,6 @@ export async function vncRoutes(fastify: FastifyInstance) {
         const run = db.prepare('SELECT id, worker_type FROM runs WHERE id = ?').get(runId) as Run | undefined;
         if (!run) {
           return reply.code(404).send({ error: 'Run not found' });
-        }
-
-        // Only VNC workers can start streaming
-        if (run.worker_type !== 'vnc') {
-          return reply.code(400).send({ error: 'Run is not a VNC worker' });
         }
 
         // Create tunnel if it doesn't exist
@@ -113,6 +111,24 @@ export async function vncRoutes(fastify: FastifyInstance) {
         fastify.log.error(`Error starting VNC streaming: ${err.message}`);
         return reply.code(500).send({ error: 'Internal server error' });
       }
+    }
+  );
+
+  /**
+   * PATCH /api/runs/:runId/vnc
+   * Update VNC configuration (host:port for the TCP proxy)
+   */
+  fastify.patch<{ Params: { runId: string } }>(
+    '/api/runs/:runId/vnc',
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { runId } = request.params as { runId: string };
+      const body = request.body as { vncHost?: string };
+      const run = db.prepare('SELECT id, metadata FROM runs WHERE id = ?').get(runId) as { id: string; metadata: string | null } | undefined;
+      if (!run) return reply.code(404).send({ error: 'Run not found' });
+      const meta = run.metadata ? JSON.parse(run.metadata) : {};
+      if (body.vncHost !== undefined) meta.vncHost = body.vncHost;
+      db.prepare('UPDATE runs SET metadata = ? WHERE id = ?').run(JSON.stringify(meta), runId);
+      return { ok: true, vncHost: meta.vncHost };
     }
   );
 

@@ -275,4 +275,72 @@ export async function authRoutes(fastify: FastifyInstance) {
 
     return { ok: true, userId };
   });
+
+  // Get current user's API keys (masked)
+  fastify.get('/api/auth/me/api-keys', {
+    preHandler: [uiAuth]
+  }, async (request: AuthenticatedRequest) => {
+    const userId = request.user!.id;
+    const row = db.prepare(`
+      SELECT anthropic_api_key, zencoder_access_code, zencoder_secret_key
+      FROM user_preferences WHERE user_id = ?
+    `).get(userId) as { anthropic_api_key: string | null; zencoder_access_code: string | null; zencoder_secret_key: string | null } | undefined;
+
+    function mask(v: string | null): string {
+      if (!v) return '';
+      if (v.length <= 8) return '••••••••';
+      return v.slice(0, 4) + '••••' + v.slice(-4);
+    }
+
+    return {
+      anthropicApiKey: mask(row?.anthropic_api_key ?? null),
+      zencoderAccessCode: mask(row?.zencoder_access_code ?? null),
+      zencoderSecretKey: mask(row?.zencoder_secret_key ?? null),
+      hasAnthropicApiKey: !!(row?.anthropic_api_key),
+      hasZencoderAccessCode: !!(row?.zencoder_access_code),
+      hasZencoderSecretKey: !!(row?.zencoder_secret_key),
+    };
+  });
+
+  // Save current user's API keys
+  fastify.post('/api/auth/me/api-keys', {
+    preHandler: [uiAuth]
+  }, async (request: AuthenticatedRequest) => {
+    const userId = request.user!.id;
+    const body = request.body as Partial<{ anthropicApiKey: string; zencoderAccessCode: string; zencoderSecretKey: string }>;
+
+    db.prepare(`
+      INSERT INTO user_preferences (user_id, anthropic_api_key, zencoder_access_code, zencoder_secret_key, updated_at)
+      VALUES (?, ?, ?, ?, unixepoch())
+      ON CONFLICT(user_id) DO UPDATE SET
+        anthropic_api_key = COALESCE(excluded.anthropic_api_key, user_preferences.anthropic_api_key),
+        zencoder_access_code = COALESCE(excluded.zencoder_access_code, user_preferences.zencoder_access_code),
+        zencoder_secret_key = COALESCE(excluded.zencoder_secret_key, user_preferences.zencoder_secret_key),
+        updated_at = unixepoch()
+    `).run(
+      userId,
+      body.anthropicApiKey ?? null,
+      body.zencoderAccessCode ?? null,
+      body.zencoderSecretKey ?? null,
+    );
+
+    logAudit(userId, 'user.api_keys_updated', 'user', userId, {}, request.ip);
+    return { ok: true };
+  });
+
+  // Get raw API keys for orchestrator use (server-side only — same user)
+  fastify.get('/api/auth/me/api-keys/raw', {
+    preHandler: [uiAuth]
+  }, async (request: AuthenticatedRequest) => {
+    const userId = request.user!.id;
+    const row = db.prepare(`
+      SELECT anthropic_api_key, zencoder_access_code, zencoder_secret_key
+      FROM user_preferences WHERE user_id = ?
+    `).get(userId) as { anthropic_api_key: string | null; zencoder_access_code: string | null; zencoder_secret_key: string | null } | undefined;
+    return {
+      anthropicApiKey: row?.anthropic_api_key ?? null,
+      zencoderAccessCode: row?.zencoder_access_code ?? null,
+      zencoderSecretKey: row?.zencoder_secret_key ?? null,
+    };
+  });
 }

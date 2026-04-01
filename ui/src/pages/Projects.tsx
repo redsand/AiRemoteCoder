@@ -81,7 +81,7 @@ export function Projects({ user: _user }: Props) {
         {projects.map((proj) => (
           <div
             key={proj.path}
-            onClick={() => navigate(`/runs?search=${encodeURIComponent(proj.path)}`)}
+            onClick={() => navigate(`/runs?repo=${encodeURIComponent(proj.path)}`)}
             style={{
               background: 'var(--bg-secondary)',
               border: '1px solid var(--border-color)',

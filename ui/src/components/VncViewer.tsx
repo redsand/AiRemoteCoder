@@ -12,13 +12,15 @@ interface VncViewerProps {
   onDisconnect?: () => void;
   onConnect?: () => void;
   autoConnect?: boolean;
+  wsUrl?: string; // Override WebSocket URL (e.g. for TCP proxy endpoint)
 }
 
 export const VncViewer: React.FC<VncViewerProps> = ({
   runId,
   onDisconnect,
   onConnect,
-  autoConnect = true
+  autoConnect = true,
+  wsUrl: wsUrlProp,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<any>(null);
@@ -47,7 +49,9 @@ export const VncViewer: React.FC<VncViewerProps> = ({
         }
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/vnc/${runId}`;
+        const wsUrl = wsUrlProp
+          ? `${protocol}//${window.location.host}${wsUrlProp}`
+          : `${protocol}//${window.location.host}/ws/vnc/${runId}`;
 
         setStatus('Connecting to VNC server...');
         const rfb = new RFB(containerRef.current as HTMLElement, wsUrl, {

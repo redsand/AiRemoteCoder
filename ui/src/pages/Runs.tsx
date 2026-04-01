@@ -81,6 +81,7 @@ export function Runs({ user }: Props) {
   // Filters from URL
   const status = searchParams.get('status') || 'all';
   const search = searchParams.get('search') || '';
+  const repo = searchParams.get('repo') || '';
   const waitingApproval = searchParams.get('waitingApproval') === 'true';
   const workerType = searchParams.get('workerType') || 'all';
   const claim = searchParams.get('claim') || 'all';
@@ -111,6 +112,7 @@ export function Runs({ user }: Props) {
 
     if (status !== 'all') params.set('status', status);
     if (search) params.set('search', search);
+    if (repo) params.set('repo', repo);
     if (waitingApproval) params.set('waitingApproval', 'true');
     if (workerType !== 'all') params.set('workerType', workerType);
     if (claim !== 'all') params.set('claim', claim);
@@ -154,7 +156,7 @@ export function Runs({ user }: Props) {
   useEffect(() => {
     fetchRuns();
     fetchMcpSessions();
-  }, [status, search, waitingApproval, workerType, claim]);
+  }, [status, search, repo, waitingApproval, workerType, claim]);
 
   // Open create modal pre-filled when navigated with ?clone=runId
   useEffect(() => {

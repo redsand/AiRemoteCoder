@@ -272,6 +272,9 @@ ensureColumn('runs', 'claimed_by', 'TEXT');
 ensureColumn('runs', 'claimed_at', 'INTEGER');
 ensureColumn('commands', 'arguments', 'TEXT');
 ensureColumn('run_state', 'provider_state', 'TEXT');
+ensureColumn('user_preferences', 'anthropic_api_key', 'TEXT');
+ensureColumn('user_preferences', 'zencoder_access_code', 'TEXT');
+ensureColumn('user_preferences', 'zencoder_secret_key', 'TEXT');
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_runs_claimed_by ON runs(claimed_by);

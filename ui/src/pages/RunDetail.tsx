@@ -47,6 +47,8 @@ interface Run {
   claimed_at?: number | null;
   worker_type?: string | null;
   metadata?: RunMetadata | null;
+  task_preview?: string | null;
+  event_cwd?: string | null;
 }
 
 interface Artifact {
@@ -153,6 +155,23 @@ export function RunDetail({ user }: Props) {
   const [showActionMenu, setShowActionMenu] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
+  // Orchestrator settings
+  const [orchestratorSettings, setOrchestratorSettings] = useState<{
+    enabled: boolean;
+    provider: 'ollama' | 'anthropic' | 'zencoder';
+    model: string;
+    ollamaHost: string;
+    anthropicApiKey?: string;
+    zencoderAccessCode?: string;
+    zencoderSecretKey?: string;
+  } | null>(null);
+  const [orchSaving, setOrchSaving] = useState(false);
+  const [userApiKeys, setUserApiKeys] = useState<{
+    hasAnthropicApiKey: boolean;
+    hasZencoderAccessCode: boolean;
+    hasZencoderSecretKey: boolean;
+  } | null>(null);
+
   // Detect mobile/responsive changes
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -182,7 +201,7 @@ export function RunDetail({ user }: Props) {
   } = useVncConnection({
     runId: runId || '',
     pollInterval: 2000,
-    autoStart: false
+    autoStart: false,
   });
   const isPending = run?.status === 'pending';
   const changedFiles = buildRunChangeReport(events);
@@ -230,6 +249,33 @@ export function RunDetail({ user }: Props) {
       // ignore
     }
   }, []);
+
+  const fetchOrchestratorSettings = useCallback(async () => {
+    if (!runId) return;
+    try {
+      const [orchRes, keysRes] = await Promise.all([
+        fetch(`/api/runs/${runId}/orchestrator`),
+        fetch('/api/auth/me/api-keys'),
+      ]);
+      if (orchRes.ok) setOrchestratorSettings(await orchRes.json());
+      if (keysRes.ok) setUserApiKeys(await keysRes.json());
+    } catch { /* ignore */ }
+  }, [runId]);
+
+  const saveOrchestratorSettings = useCallback(async (updates: Partial<typeof orchestratorSettings>) => {
+    if (!runId) return;
+    setOrchSaving(true);
+    try {
+      const res = await fetch(`/api/runs/${runId}/orchestrator`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      if (res.ok) setOrchestratorSettings(await res.json());
+    } catch { /* ignore */ } finally {
+      setOrchSaving(false);
+    }
+  }, [runId, orchestratorSettings]);
 
   // Connect WebSocket
   const connectWebSocket = useCallback(() => {
@@ -301,6 +347,7 @@ export function RunDetail({ user }: Props) {
     fetchRun();
     fetchEvents();
     fetchMcpSessions();
+    fetchOrchestratorSettings();
     connectWebSocket();
 
     return () => {
@@ -592,7 +639,11 @@ export function RunDetail({ user }: Props) {
     );
   }
 
-  const displayTitle = run.label || run.command?.slice(0, 60) || `Run ${run.id}`;
+  const displayTitle = run.label || run.command?.slice(0, 60) || run.task_preview?.slice(0, 80) || `Run ${run.id}`;
+  const repoPath = run.repo_path || run.event_cwd;
+  const repoDisplay = repoPath
+    ? repoPath.replace(/\\/g, '/').replace(/\/$/, '').split('/').slice(-2).join('/')
+    : null;
   const pendingCommandCount = run.commands.filter((command) => command.status !== 'completed').length;
   const activity = summarizeRunActivity(run.status, events, pendingCommandCount);
   const connectivity = buildRunConnectivitySummary(run, activeMcpSessions, connected, reconnecting);
@@ -611,7 +662,7 @@ export function RunDetail({ user }: Props) {
       {/* Header with Action Buttons in Top Right */}
       <div className="run-header">
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
             <Link to="/runs" className="btn btn-sm">
               ← Back
             </Link>
@@ -826,6 +877,15 @@ export function RunDetail({ user }: Props) {
           )}
         </div>
 
+        {repoDisplay && (
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <span>📁</span>
+            <Link to={`/runs?repo=${encodeURIComponent(repoPath!)}`} style={{ color: 'var(--accent-blue)', textDecoration: 'none' }}>
+              {repoDisplay}
+            </Link>
+          </div>
+        )}
+
         <h1 style={{ fontSize: '20px', fontWeight: 600, marginBottom: '8px' }}>
           {displayTitle}
         </h1>
@@ -842,22 +902,29 @@ export function RunDetail({ user }: Props) {
           <span>
             <strong>ID:</strong> <code>{run.id}</code>
           </span>
-          {run.repo_name && (
-            <span>
-              <strong>Repo:</strong> {run.repo_name}
-            </span>
-          )}
           {run.duration && (
             <span>
               <strong>Duration:</strong> {formatDuration(run.duration)}
             </span>
           )}
-          {run.claimed_by && (
-            <span>
-              <strong>Claimed By:</strong> {run.claimed_by}
-              {run.claimed_at && ` (${formatTime(run.claimed_at)})`}
-            </span>
-          )}
+          {run.claimed_by && (() => {
+            const cb = run.claimed_by!;
+            const claimedAt = run.claimed_at ? ` · ${formatTime(run.claimed_at)}` : '';
+            let display: string;
+            if (cb.startsWith('mcp-runner:') || cb.startsWith('mcp:')) {
+              const parts = cb.split(':');
+              const shortId = parts[parts.length - 1]?.slice(-6) ?? '';
+              display = `MCP ···${shortId}${claimedAt}`;
+            } else {
+              const short = cb.length > 20 ? `${cb.slice(0, 8)}···${cb.slice(-6)}` : cb;
+              display = `${short}${claimedAt}`;
+            }
+            return (
+              <span title={cb}>
+                <strong>Claimed By:</strong> {display}
+              </span>
+            );
+          })()}
         </div>
       </div>
 
@@ -1106,8 +1173,7 @@ export function RunDetail({ user }: Props) {
         >
           Console
         </button>
-        {isVncRun && (
-          <button
+        <button
             className={`tab ${activeTab === 'vnc' ? 'tab-active' : ''}`}
             onClick={() => setActiveTab('vnc')}
           >
@@ -1116,7 +1182,6 @@ export function RunDetail({ user }: Props) {
               <span className="tab-badge" title="VNC Ready">●</span>
             )}
           </button>
-        )}
       </div>
 
       {/* Tab content */}
@@ -1146,69 +1211,181 @@ export function RunDetail({ user }: Props) {
         )}
 
         {activeTab === 'setup' && (
-          <PendingRunnerPanel
-            workerType={run.worker_type}
-            runnerId={typeof run.metadata?.mcpRunnerId === 'string' ? run.metadata.mcpRunnerId : null}
-          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <PendingRunnerPanel
+              workerType={run.worker_type}
+              runnerId={typeof run.metadata?.mcpRunnerId === 'string' ? run.metadata.mcpRunnerId : null}
+            />
+            {/* Orchestrator settings */}
+            <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: '14px' }}>Auto-Pilot Orchestrator</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    Automatically answer simple agent prompts using a local LLM
+                  </div>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    {orchestratorSettings?.enabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                  <div
+                    onClick={() => canOperate && saveOrchestratorSettings({ enabled: !orchestratorSettings?.enabled })}
+                    style={{
+                      width: '36px', height: '20px', borderRadius: '10px', cursor: canOperate ? 'pointer' : 'not-allowed',
+                      background: orchestratorSettings?.enabled ? 'var(--accent-green)' : 'var(--bg-tertiary)',
+                      border: '1px solid var(--border-color)',
+                      position: 'relative', transition: 'background 0.2s',
+                    }}
+                  >
+                    <div style={{
+                      position: 'absolute', top: '2px',
+                      left: orchestratorSettings?.enabled ? '18px' : '2px',
+                      width: '14px', height: '14px', borderRadius: '50%',
+                      background: 'white', transition: 'left 0.2s',
+                    }} />
+                  </div>
+                </label>
+              </div>
+              {orchestratorSettings && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    <div style={{ flex: '0 0 auto' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Provider</label>
+                      <select
+                        className="input"
+                        style={{ fontSize: '12px', padding: '4px 8px' }}
+                        value={orchestratorSettings.provider}
+                        disabled={!canOperate || orchSaving}
+                        onChange={e => saveOrchestratorSettings({ provider: e.target.value as 'ollama' | 'anthropic' | 'zencoder' })}
+                      >
+                        <option value="ollama">Ollama (local)</option>
+                        <option value="anthropic">Anthropic Claude</option>
+                        <option value="zencoder">Zencoder</option>
+                      </select>
+                    </div>
+                    <div style={{ flex: 1, minWidth: '160px' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Model</label>
+                      <input
+                        className="input"
+                        style={{ fontSize: '12px', padding: '4px 8px', width: '100%' }}
+                        value={orchestratorSettings.model}
+                        disabled={!canOperate || orchSaving}
+                        placeholder={orchestratorSettings.provider === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'glm-5:cloud'}
+                        onBlur={e => saveOrchestratorSettings({ model: e.target.value })}
+                        onChange={e => setOrchestratorSettings(s => s ? { ...s, model: e.target.value } : s)}
+                      />
+                    </div>
+                    {orchestratorSettings.provider === 'ollama' && (
+                      <div style={{ flex: 1, minWidth: '200px' }}>
+                        <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Ollama Host</label>
+                        <input
+                          className="input"
+                          style={{ fontSize: '12px', padding: '4px 8px', width: '100%' }}
+                          value={orchestratorSettings.ollamaHost}
+                          disabled={!canOperate || orchSaving}
+                          placeholder="http://localhost:11434"
+                          onBlur={e => saveOrchestratorSettings({ ollamaHost: e.target.value })}
+                          onChange={e => setOrchestratorSettings(s => s ? { ...s, ollamaHost: e.target.value } : s)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  {orchestratorSettings.provider === 'anthropic' && (
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: '200px' }}>
+                        <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                          Anthropic API Key {userApiKeys?.hasAnthropicApiKey && <span style={{ color: 'var(--accent-green)' }}>✓ saved in profile</span>}
+                        </label>
+                        <input
+                          className="input"
+                          type="password"
+                          style={{ fontSize: '12px', padding: '4px 8px', width: '100%' }}
+                          value={orchestratorSettings.anthropicApiKey ?? ''}
+                          disabled={!canOperate || orchSaving}
+                          placeholder={userApiKeys?.hasAnthropicApiKey ? 'Using saved profile key' : 'sk-ant-...'}
+                          onBlur={e => e.target.value && saveOrchestratorSettings({ anthropicApiKey: e.target.value })}
+                          onChange={e => setOrchestratorSettings(s => s ? { ...s, anthropicApiKey: e.target.value } : s)}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {orchestratorSettings.provider === 'zencoder' && (
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: '180px' }}>
+                        <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                          Access Code {userApiKeys?.hasZencoderAccessCode && <span style={{ color: 'var(--accent-green)' }}>✓ saved</span>}
+                        </label>
+                        <input
+                          className="input"
+                          style={{ fontSize: '12px', padding: '4px 8px', width: '100%' }}
+                          value={orchestratorSettings.zencoderAccessCode ?? ''}
+                          disabled={!canOperate || orchSaving}
+                          placeholder={userApiKeys?.hasZencoderAccessCode ? 'Using saved key' : 'Access code'}
+                          onBlur={e => e.target.value && saveOrchestratorSettings({ zencoderAccessCode: e.target.value })}
+                          onChange={e => setOrchestratorSettings(s => s ? { ...s, zencoderAccessCode: e.target.value } : s)}
+                        />
+                      </div>
+                      <div style={{ flex: 1, minWidth: '180px' }}>
+                        <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                          Secret Key {userApiKeys?.hasZencoderSecretKey && <span style={{ color: 'var(--accent-green)' }}>✓ saved</span>}
+                        </label>
+                        <input
+                          className="input"
+                          type="password"
+                          style={{ fontSize: '12px', padding: '4px 8px', width: '100%' }}
+                          value={orchestratorSettings.zencoderSecretKey ?? ''}
+                          disabled={!canOperate || orchSaving}
+                          placeholder={userApiKeys?.hasZencoderSecretKey ? 'Using saved key' : 'Secret key'}
+                          onBlur={e => e.target.value && saveOrchestratorSettings({ zencoderSecretKey: e.target.value })}
+                          onChange={e => setOrchestratorSettings(s => s ? { ...s, zencoderSecretKey: e.target.value } : s)}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: '4px' }}>
+                    <strong>How it works:</strong> When the AI agent pauses for input, the orchestrator classifies the prompt.
+                    Simple confirmations (install package, continue?) are answered automatically with confidence ≥ 85%.
+                    Destructive or ambiguous prompts are escalated to you.
+                  </div>
+                </div>
+              )}
+              {orchSaving && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '6px' }}>Saving...</div>}
+            </div>
+          </div>
         )}
 
-        {activeTab === 'vnc' && isVncRun && (
+        {activeTab === 'vnc' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div
-              style={{
-                padding: '12px',
-                background: 'var(--bg-tertiary)',
-                borderRadius: '6px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '12px',
-                flexWrap: 'wrap',
-              }}
-            >
+            <div style={{ padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
               <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
                 {vncReady ? '● VNC Connected' : '○ VNC Not Connected'}
                 {vncInfo?.stats?.clientConnectedAt && (
                   <span style={{ marginLeft: '8px' }}>
-                    Client: {new Date(vncInfo.stats.clientConnectedAt).toLocaleString()}
+                    Since: {new Date(vncInfo.stats.clientConnectedAt).toLocaleString()}
                   </span>
                 )}
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 {!vncReady ? (
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => startVnc()}
-                    disabled={vncLoading}
-                  >
-                    {vncLoading ? 'Starting VNC...' : 'Start VNC Streaming'}
+                  <button className="btn btn-primary" onClick={() => startVnc()} disabled={vncLoading}>
+                    {vncLoading ? 'Starting…' : 'Start VNC Streaming'}
                   </button>
                 ) : (
-                  <button className="btn" onClick={() => stopVnc()}>
-                    Stop VNC Streaming
-                  </button>
+                  <button className="btn" onClick={() => stopVnc()}>Stop VNC</button>
                 )}
               </div>
             </div>
             {vncError && (
-              <div
-                style={{
-                  padding: '10px 12px',
-                  background: 'rgba(248, 81, 73, 0.12)',
-                  border: '1px solid var(--accent-red)',
-                  borderRadius: '6px',
-                  fontSize: '12px',
-                  color: 'var(--accent-red)',
-                }}
-              >
+              <div style={{ padding: '10px 12px', background: 'rgba(248,81,73,0.12)', border: '1px solid var(--accent-red)', borderRadius: '6px', fontSize: '12px', color: 'var(--accent-red)' }}>
                 {vncError}
               </div>
             )}
             <VncViewer
               runId={run.id}
               autoConnect={activeTab === 'vnc' && (vncAvailable || vncInfo?.status === 'pending')}
-              onConnect={() => console.log('VNC connected')}
-              onDisconnect={() => console.log('VNC disconnected')}
+              onConnect={() => {}}
+              onDisconnect={() => {}}
             />
           </div>
         )}

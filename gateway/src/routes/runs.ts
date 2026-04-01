@@ -10,6 +10,7 @@ import { uiAuth, requireRole, logAudit, type AuthenticatedRequest } from '../mid
 import { generateCapabilityToken, redactSecrets } from '../utils/crypto.js';
 import { broadcastToRun } from '../services/websocket.js';
 import { createAlert } from './alerts.js';
+import { handlePromptWaiting, setOrchestratorSettings, getOrchestratorSettings, type OrchestratorProvider } from '../services/orchestrator.js';
 import { findLatestMcpSessionByTokenId, getMcpSession, upsertMcpRunnerHost } from '../mcp/session-registry.js';
 import { assertScopes, extractBearerToken, validateMcpSessionAccess, validateMcpToken } from '../mcp/auth.js';
 import type { McpScope } from '../domain/types.js';
@@ -334,8 +335,11 @@ export async function runsRoutes(fastify: FastifyInstance) {
     }
 
     if (repo) {
-      query += ' AND (r.repo_path LIKE ? OR r.repo_name LIKE ?)';
-      params.push(`%${repo}%`, `%${repo}%`);
+      query += ` AND (r.repo_path LIKE ? OR r.repo_name LIKE ?
+        OR (SELECT json_extract(e.data, '$.params.thread.cwd')
+            FROM events e WHERE e.run_id = r.id AND e.type = 'info' AND e.data LIKE '%thread/started%'
+            ORDER BY e.id LIMIT 1) LIKE ?)`;
+      params.push(`%${repo}%`, `%${repo}%`, `%${repo}%`);
     }
 
     if (waitingApproval === 'true') {
@@ -378,8 +382,11 @@ export async function runsRoutes(fastify: FastifyInstance) {
       countParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
     if (repo) {
-      countQuery += ' AND (r.repo_path LIKE ? OR r.repo_name LIKE ?)';
-      countParams.push(`%${repo}%`, `%${repo}%`);
+      countQuery += ` AND (r.repo_path LIKE ? OR r.repo_name LIKE ?
+        OR (SELECT json_extract(e.data, '$.params.thread.cwd')
+            FROM events e WHERE e.run_id = r.id AND e.type = 'info' AND e.data LIKE '%thread/started%'
+            ORDER BY e.id LIMIT 1) LIKE ?)`;
+      countParams.push(`%${repo}%`, `%${repo}%`, `%${repo}%`);
     }
     if (waitingApproval === 'true') {
       countQuery += ' AND r.waiting_approval = 1';
@@ -776,6 +783,21 @@ export async function runsRoutes(fastify: FastifyInstance) {
       VALUES (?, ?, ?, ?)
     `).run(runId, body.type, sanitizedData, body.sequence || 0);
 
+    // Auto-populate repo_path from thread/started event cwd when not already set
+    if (body.type === 'info') {
+      try {
+        const payload = JSON.parse(body.data);
+        if (payload?.method === 'thread/started' && payload?.params?.thread?.cwd) {
+          db.prepare('UPDATE runs SET repo_path = ?, repo_name = ? WHERE id = ? AND repo_path IS NULL')
+            .run(
+              payload.params.thread.cwd,
+              payload.params.thread.cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/').pop() ?? null,
+              runId
+            );
+        }
+      } catch { /* ignore */ }
+    }
+
     if (body.type === 'marker') {
       try {
         const marker = JSON.parse(body.data);
@@ -804,6 +826,11 @@ export async function runsRoutes(fastify: FastifyInstance) {
       data: sanitizedData,
       timestamp: Math.floor(Date.now() / 1000),
     });
+
+    // Orchestrator: attempt to auto-answer agent prompts
+    if (body.type === 'prompt_waiting') {
+      handlePromptWaiting(runId, sanitizedData).catch(() => {});
+    }
 
     return { ok: true, eventId: Number(result.lastInsertRowid) };
   });
@@ -1189,6 +1216,44 @@ export async function runsRoutes(fastify: FastifyInstance) {
       recentEvents: recentEvents.reverse(),
       canResume: run.status === 'done' || run.status === 'failed'
     };
+  });
+
+  // Get / update orchestrator settings for a run
+  fastify.get('/api/runs/:runId/orchestrator', {
+    preHandler: [uiAuth, requireRole('admin', 'operator')]
+  }, async (request: AuthenticatedRequest, reply) => {
+    const { runId } = request.params as { runId: string };
+    const run = db.prepare('SELECT id FROM runs WHERE id = ?').get(runId);
+    if (!run) return reply.code(404).send({ error: 'Run not found' });
+    return getOrchestratorSettings(runId);
+  });
+
+  fastify.post('/api/runs/:runId/orchestrator', {
+    preHandler: [uiAuth, requireRole('admin', 'operator')]
+  }, async (request: AuthenticatedRequest, reply) => {
+    const { runId } = request.params as { runId: string };
+    const run = db.prepare('SELECT id FROM runs WHERE id = ?').get(runId);
+    if (!run) return reply.code(404).send({ error: 'Run not found' });
+    const raw = request.body as Partial<{
+      enabled: boolean; provider: string; model: string; ollamaHost: string;
+      anthropicApiKey: string; zencoderAccessCode: string; zencoderSecretKey: string;
+    }>;
+    const validProviders: OrchestratorProvider[] = ['ollama', 'anthropic', 'zencoder'];
+    const safeProvider: OrchestratorProvider | undefined = raw.provider !== undefined
+      ? (validProviders.includes(raw.provider as OrchestratorProvider) ? raw.provider as OrchestratorProvider : 'ollama')
+      : undefined;
+    const body: Partial<import('../services/orchestrator.js').OrchestratorSettings> = {
+      ...(raw.enabled !== undefined && { enabled: raw.enabled }),
+      ...(safeProvider !== undefined && { provider: safeProvider }),
+      ...(raw.model !== undefined && { model: raw.model }),
+      ...(raw.ollamaHost !== undefined && { ollamaHost: raw.ollamaHost }),
+      ...(raw.anthropicApiKey !== undefined && { anthropicApiKey: raw.anthropicApiKey }),
+      ...(raw.zencoderAccessCode !== undefined && { zencoderAccessCode: raw.zencoderAccessCode }),
+      ...(raw.zencoderSecretKey !== undefined && { zencoderSecretKey: raw.zencoderSecretKey }),
+    };
+    setOrchestratorSettings(runId, body);
+    logAudit(request.user?.id, 'run.orchestrator_updated', 'run', runId, body, request.ip);
+    return getOrchestratorSettings(runId);
   });
 
 }

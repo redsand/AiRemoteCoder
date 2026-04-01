@@ -40,14 +40,23 @@ function summarizeCommand(command: WorkerCommand): string {
   return `${command.command} ${command.id}`;
 }
 
+// Module-level sink set while a run is active — forwards logs as gateway events
+let _runnerLogSink: ((level: 'info' | 'error', msg: string) => void) | null = null;
+
+function setRunnerLogSink(fn: ((level: 'info' | 'error', msg: string) => void) | null): void {
+  _runnerLogSink = fn;
+}
+
 function logRunnerInfo(message: string): void {
   // eslint-disable-next-line no-console
   console.info(`[airc-mcp-runner] ${message}`);
+  _runnerLogSink?.('info', message);
 }
 
 function logRunnerError(message: string): void {
   // eslint-disable-next-line no-console
   console.error(`[airc-mcp-runner] ${message}`);
+  _runnerLogSink?.('error', message);
 }
 
 function logStreamEvent(type: EventType, data: string): void {
@@ -1347,6 +1356,19 @@ function createExecutor(options: RunnerOptions): WorkerExecutor {
   return new TemplateExecExecutor(options.execTemplate ?? '');
 }
 
+function makeRunnerLogSink(
+  runId: string,
+  api: Pick<McpWorkerApi, 'sendEvent'>,
+): (level: 'info' | 'error', msg: string) => void {
+  return (level, msg) => {
+    const data = JSON.stringify({
+      method: 'runner/log',
+      params: { level, message: msg },
+    });
+    api.sendEvent(runId, { type: 'info', data }).catch(() => {});
+  };
+}
+
 export async function runLoop(options: RunnerOptions): Promise<void> {
   const api = new McpWorkerApi(options.gatewayUrl, options.token, options.provider, options.runnerId);
   const executor = createExecutor(options);
@@ -1366,6 +1388,7 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
       }
 
       const runId = claimed.run.id;
+      setRunnerLogSink(makeRunnerLogSink(runId, api));
       logRunnerInfo(`claimed run ${runId} for provider ${options.provider}`);
       if (executor.restoreState) {
         executor.restoreState(claimed.run.resumeState ?? null);
@@ -1405,7 +1428,9 @@ export async function runLoop(options: RunnerOptions): Promise<void> {
         }
       }
       if (executor.shutdown) await executor.shutdown();
+      setRunnerLogSink(null);
     } catch (err: any) {
+      setRunnerLogSink(null);
       if (isExpectedIdleClaimError(err)) {
         const now = Date.now();
         if (now - lastIdleClaimLogAt > 30000) {
@@ -1438,6 +1463,7 @@ export async function runLoopOnce(
   }
 
   const runId = claimed.run.id;
+  setRunnerLogSink(makeRunnerLogSink(runId, api));
   logRunnerInfo(`claimed run ${runId} for provider ${options.provider}`);
   if (executor.restoreState) {
     executor.restoreState(claimed.run.resumeState ?? null);
@@ -1476,5 +1502,6 @@ export async function runLoopOnce(
     await executor.shutdown();
   }
 
+  setRunnerLogSink(null);
   return { claimedRunId: runId, stopRun };
 }

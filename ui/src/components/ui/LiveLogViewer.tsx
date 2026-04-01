@@ -425,6 +425,25 @@ export function formatLogEventDisplay(event: LogEvent | DisplayEvent): Formatted
       if (method === 'thread/tokenUsage/updated') {
         return { content: 'Codex token usage updated', emphasis: 'default' };
       }
+      if (method === 'runner/log') {
+        const level = params?.level as string | undefined;
+        const message = typeof params?.message === 'string' ? params.message : '';
+        return {
+          content: `[runner] ${message}`,
+          emphasis: level === 'error' ? 'error' : 'default',
+        };
+      }
+      if (method === 'orchestrator/decision') {
+        const d = params as { action?: string; answer?: string | null; confidence?: number; reasoning?: string; model?: string };
+        const isAutoAnswer = d.action === 'auto_answer';
+        const pct = d.confidence !== undefined ? ` (${Math.round(d.confidence * 100)}%)` : '';
+        const answerText = isAutoAnswer && d.answer ? ` → answered "${d.answer}"` : '';
+        const reasoning = d.reasoning ? ` — ${d.reasoning}` : '';
+        return {
+          content: `Orchestrator [${d.model ?? ''}]: ${isAutoAnswer ? `auto-answered${answerText}` : 'escalated to user'}${pct}${reasoning}`,
+          emphasis: isAutoAnswer ? 'success' : 'tool',
+        };
+      }
       if (typeof method === 'string' && method.length > 0) {
         return { content: genericMcpMethodLabel(method), emphasis: 'default' };
       }
