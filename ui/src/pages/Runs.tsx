@@ -156,6 +156,20 @@ export function Runs({ user }: Props) {
     fetchMcpSessions();
   }, [status, search, waitingApproval, workerType, claim]);
 
+  // Open create modal pre-filled when navigated with ?clone=runId
+  useEffect(() => {
+    const cloneId = searchParams.get('clone');
+    if (!cloneId) return;
+    fetch(`/api/runs/${cloneId}`).then(r => r.ok ? r.json() : null).then(data => {
+      if (!data) return;
+      if (data.command) setCreateCommand(data.command);
+      if (data.worker_type === 'vnc' || data.worker_type === 'hands-on') setCreateMode(data.worker_type);
+      setShowCreateModal(true);
+      setSearchParams(p => { p.delete('clone'); return p; });
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Auto-refresh
   useEffect(() => {
     const intervalMs = getRunsRefreshInterval(runs.map((run) => run.status));

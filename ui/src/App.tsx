@@ -10,6 +10,7 @@ import {
   Alerts,
   Settings,
   McpSettings,
+  Projects,
 } from './pages';
 import Login from './components/Login';
 import Setup from './components/Setup';
@@ -99,6 +100,9 @@ function App() {
             {/* Runs */}
             <Route path="/runs" element={<Runs user={user} />} />
             <Route path="/runs/:runId" element={<RunDetail user={user} />} />
+
+            {/* Projects */}
+            <Route path="/projects" element={<Projects user={user} />} />
 
             {/* Hosts */}
             <Route path="/hosts" element={<Hosts user={user} />} />

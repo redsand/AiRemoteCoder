@@ -5,3 +5,4 @@ export { Hosts } from './Clients';
 export { Alerts } from './Alerts';
 export { Settings } from './Settings';
 export { McpSettings } from './McpSettings';
+export { Projects } from './Projects';

@@ -6,7 +6,7 @@ import { uiAuth, requireRole, logAudit, type AuthenticatedRequest } from '../mid
 import { broadcastAll } from '../services/websocket.js';
 
 // Alert rule types
-const alertRuleTypes = ['run_failed', 'waiting_approval_timeout'] as const;
+const alertRuleTypes = ['run_failed', 'run_completed', 'waiting_approval_timeout'] as const;
 
 // Validation schemas
 const createAlertRuleSchema = z.object({

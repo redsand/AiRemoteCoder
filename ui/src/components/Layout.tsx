@@ -18,6 +18,7 @@ const navItems: NavItem[] = [
   { path: '/', label: 'Dashboard', icon: '\uD83C\uDFE0', activeIcon: '\uD83C\uDFE0' },
   { path: '/mcp', label: 'MCP', icon: '\uD83D\uDD0C', activeIcon: '\uD83D\uDD0C' },
   { path: '/runs', label: 'Runs', icon: '\uD83D\uDCCB', activeIcon: '\uD83D\uDCCB' },
+  { path: '/projects', label: 'Projects', icon: '\uD83D\uDCC2', activeIcon: '\uD83D\uDCC2' },
   { path: '/hosts', label: 'Hosts', icon: '\uD83D\uDCBB', activeIcon: '\uD83D\uDCBB' },
   { path: '/alerts', label: 'Alerts', icon: '\uD83D\uDD14', activeIcon: '\uD83D\uDD14' },
   { path: '/settings', label: 'Settings', icon: '\u2699\uFE0F', activeIcon: '\u2699\uFE0F' },
@@ -26,6 +27,7 @@ const navItems: NavItem[] = [
 export function Layout({ user, onLogout, children }: LayoutProps) {
   const location = useLocation();
   const [alertCount, setAlertCount] = useState(0);
+  const [activeRunCount, setActiveRunCount] = useState(0);
 
   // Fetch unacknowledged alert count
   useEffect(() => {
@@ -46,12 +48,32 @@ export function Layout({ user, onLogout, children }: LayoutProps) {
     return () => clearInterval(interval);
   }, []);
 
+  // Fetch active run count
+  useEffect(() => {
+    const fetchActiveRuns = async () => {
+      try {
+        const res = await fetch('/api/runs?status=running&limit=1');
+        if (res.ok) {
+          const data = await res.json();
+          setActiveRunCount(data.total || 0);
+        }
+      } catch {
+        // Ignore
+      }
+    };
+
+    fetchActiveRuns();
+    const interval = setInterval(fetchActiveRuns, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Get page title based on route
   const getPageTitle = () => {
     const path = location.pathname;
     if (path === '/') return 'Dashboard';
     if (path.startsWith('/runs/')) return 'Run Details';
     if (path === '/runs') return 'Runs';
+    if (path === '/projects') return 'Projects';
     if (path === '/hosts') return 'Hosts';
     if (path === '/alerts') return 'Alerts';
     if (path === '/mcp') return 'MCP Control Plane';
@@ -85,6 +107,9 @@ export function Layout({ user, onLogout, children }: LayoutProps) {
                 {item.label}
                 {item.path === '/alerts' && alertCount > 0 && (
                   <span className="nav-badge">{alertCount}</span>
+                )}
+                {item.path === '/runs' && activeRunCount > 0 && (
+                  <span className="nav-badge" style={{ background: 'var(--accent-green)' }}>{activeRunCount}</span>
                 )}
               </NavLink>
             ))}
@@ -182,6 +207,26 @@ export function Layout({ user, onLogout, children }: LayoutProps) {
                   }}
                 >
                   {alertCount > 9 ? '9+' : alertCount}
+                </span>
+              )}
+              {item.path === '/runs' && activeRunCount > 0 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '4px',
+                    right: 'calc(50% - 16px)',
+                    width: '16px',
+                    height: '16px',
+                    background: 'var(--accent-green)',
+                    color: 'white',
+                    fontSize: '10px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {activeRunCount > 9 ? '9+' : activeRunCount}
                 </span>
               )}
             </NavLink>

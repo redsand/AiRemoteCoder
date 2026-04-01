@@ -11,6 +11,7 @@ import {
 } from '../components/ui';
 import { VncViewer } from '../components/VncViewer';
 import { PendingRunnerPanel } from '../components/runs/PendingRunnerPanel';
+import { XTermConsole } from '../components/runs/XTermConsole';
 import { useVncConnection } from '../hooks/useVncConnection';
 import { summarizeRunActivity } from '../features/runs/activity';
 import { buildRunChangeReport } from '../features/runs/changes';
@@ -89,7 +90,7 @@ const ALLOWED_COMMANDS = [
   'pwd',
 ];
 
-type Tab = 'log' | 'timeline' | 'changes' | 'artifacts' | 'commands' | 'setup' | 'vnc';
+type Tab = 'log' | 'timeline' | 'changes' | 'artifacts' | 'commands' | 'setup' | 'vnc' | 'console';
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -136,6 +137,13 @@ export function RunDetail({ user }: Props) {
   const [selectedCommand, setSelectedCommand] = useState('');
   const [showPromptModal, setShowPromptModal] = useState(false);
   const [promptInput, setPromptInput] = useState('');
+  const [promptHistory, setPromptHistory] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(`promptHistory_${runId}`) || '[]'); } catch { return []; }
+  });
+  const [reviewedPrompt, setReviewedPrompt] = useState<string | null>(null);
+  const [reviewReasoning, setReviewReasoning] = useState<string | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [selectedVersion, setSelectedVersion] = useState<'original' | 'improved'>('improved');
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [showReleaseConfirm, setShowReleaseConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -324,6 +332,35 @@ export function RunDetail({ user }: Props) {
     return () => clearInterval(interval);
   }, [fetchMcpSessions]);
 
+  // Auto-switch to VNC tab for VNC runs once run data loads
+  useEffect(() => {
+    if (isVncRun) {
+      setActiveTab('vnc');
+    }
+  }, [isVncRun]);
+
+  // Request browser notification permission once
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Fire browser notification when run finishes
+  const prevStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    const curr = run?.status ?? null;
+    if (prev && prev !== curr && (curr === 'done' || curr === 'failed')) {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        const title = curr === 'done' ? `✅ Run ${runId} completed` : `❌ Run ${runId} failed`;
+        const body = run?.label || run?.command?.slice(0, 80) || '';
+        new Notification(title, { body, icon: '/favicon.ico' });
+      }
+    }
+    prevStatusRef.current = curr;
+  }, [run?.status, run?.label, run?.command, runId]);
+
   // Send command
   const sendCommand = async () => {
     if (!selectedCommand) return;
@@ -353,19 +390,26 @@ export function RunDetail({ user }: Props) {
 
   // Send prompt/input
   const sendPrompt = async () => {
-    if (!promptInput.trim()) return;
+    const textToSend = reviewedPrompt && selectedVersion === 'improved' ? reviewedPrompt : promptInput;
+    if (!textToSend.trim()) return;
 
     setPromptLoading(true);
     try {
       const res = await fetch(`/api/runs/${runId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: promptInput + '\n', escape: false }),
+        body: JSON.stringify({ input: textToSend + '\n', escape: false }),
       });
       if (res.ok) {
         addToast('success', 'Prompt sent');
         setShowPromptModal(false);
+        const saved = [textToSend, ...promptHistory.filter(p => p !== textToSend)].slice(0, 10);
+        setPromptHistory(saved);
+        localStorage.setItem(`promptHistory_${runId}`, JSON.stringify(saved));
         setPromptInput('');
+        setReviewedPrompt(null);
+        setReviewReasoning(null);
+        setSelectedVersion('improved');
         fetchRun();
       } else {
         const error = await res.json();
@@ -375,6 +419,30 @@ export function RunDetail({ user }: Props) {
       addToast('error', 'Failed to send prompt');
     } finally {
       setPromptLoading(false);
+    }
+  };
+
+  const reviewPrompt = async () => {
+    if (!promptInput.trim()) return;
+    setReviewLoading(true);
+    try {
+      const res = await fetch('/api/prompt-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: promptInput }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setReviewedPrompt(data.improved);
+        setReviewReasoning(data.reasoning);
+        setSelectedVersion('improved');
+      } else {
+        addToast('error', 'Prompt review unavailable');
+      }
+    } catch {
+      addToast('error', 'Prompt review unavailable');
+    } finally {
+      setReviewLoading(false);
     }
   };
 
@@ -590,6 +658,13 @@ export function RunDetail({ user }: Props) {
                   ↩ Release Claim
                 </button>
               )}
+              <button
+                className="btn btn-sm"
+                onClick={() => navigate(`/runs?clone=${runId}`)}
+                title="Clone this run"
+              >
+                ⧉ Clone
+              </button>
               {canDelete && (
                 <button
                   className="btn btn-sm"
@@ -1025,6 +1100,12 @@ export function RunDetail({ user }: Props) {
         >
           Setup
         </button>
+        <button
+          className={`tab ${activeTab === 'console' ? 'tab-active' : ''}`}
+          onClick={() => setActiveTab('console')}
+        >
+          Console
+        </button>
         {isVncRun && (
           <button
             className={`tab ${activeTab === 'vnc' ? 'tab-active' : ''}`}
@@ -1049,7 +1130,7 @@ export function RunDetail({ user }: Props) {
         )}
 
         {activeTab === 'changes' && (
-          <ChangesView events={events} />
+          <ChangesView events={events} run={run} onApprove={(r) => sendQuickResponse(r as 'y' | 'n' | 'yes' | 'no' | 'enter')} />
         )}
 
         {activeTab === 'artifacts' && (
@@ -1058,6 +1139,10 @@ export function RunDetail({ user }: Props) {
 
         {activeTab === 'commands' && (
           <CommandsList commands={run.commands} />
+        )}
+
+        {activeTab === 'console' && runId && (
+          <XTermConsole runId={runId} />
         )}
 
         {activeTab === 'setup' && (
@@ -1132,34 +1217,95 @@ export function RunDetail({ user }: Props) {
       {/* Prompt Modal */}
       <Modal
         open={showPromptModal}
-        onClose={() => setShowPromptModal(false)}
+        onClose={() => {
+          setShowPromptModal(false);
+          setReviewedPrompt(null);
+          setReviewReasoning(null);
+          setSelectedVersion('improved');
+        }}
         title="Send Prompt"
         footer={
           <>
-            <button className="btn" onClick={() => setShowPromptModal(false)}>
+            <button className="btn" onClick={() => {
+              setShowPromptModal(false);
+              setReviewedPrompt(null);
+              setReviewReasoning(null);
+              setSelectedVersion('improved');
+            }}>
               Cancel
             </button>
+            {!reviewedPrompt && (
+              <button
+                className="btn"
+                onClick={reviewPrompt}
+                disabled={!promptInput.trim() || reviewLoading || promptLoading}
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--accent-blue)', border: '1px solid var(--accent-blue)' }}
+              >
+                {reviewLoading ? '⏳ Reviewing...' : '✨ Review & Improve'}
+              </button>
+            )}
             <button
               className="btn btn-primary"
               onClick={sendPrompt}
               disabled={!promptInput.trim() || promptLoading}
             >
-              {promptLoading ? 'Sending...' : 'Send Prompt'}
+              {promptLoading ? 'Sending...' : reviewedPrompt ? `Send ${selectedVersion === 'improved' ? 'Improved' : 'Original'}` : 'Send Prompt'}
             </button>
           </>
         }
       >
+        {promptHistory.length > 0 && (
+          <div style={{ marginBottom: '10px' }}>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Recent</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+              {promptHistory.map((h, i) => (
+                <button key={i} className="btn btn-sm" onClick={() => { setPromptInput(h); setReviewedPrompt(null); setReviewReasoning(null); }}
+                  style={{ fontSize: '11px', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', background: 'var(--bg-tertiary)' }}
+                  title={h}
+                >
+                  {h.slice(0, 40)}{h.length > 40 ? '…' : ''}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div style={{ marginBottom: '16px' }}>
-          <label className="form-label">Enter Prompt or Command</label>
+          <label className="form-label">Your Prompt</label>
           <textarea
             value={promptInput}
-            onChange={(e) => setPromptInput(e.target.value)}
+            onChange={(e) => { setPromptInput(e.target.value); setReviewedPrompt(null); setReviewReasoning(null); }}
             placeholder="Enter your prompt or command to send to the running process..."
             className="form-input"
-            style={{ minHeight: '120px', fontFamily: 'monospace', fontSize: '13px' }}
-            disabled={promptLoading}
+            style={{ minHeight: '100px', fontFamily: 'monospace', fontSize: '13px' }}
+            disabled={promptLoading || reviewLoading}
           />
         </div>
+
+        {reviewedPrompt && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {reviewReasoning && (
+              <div style={{ padding: '8px 12px', background: 'rgba(47, 129, 247, 0.08)', border: '1px solid var(--accent-blue)', borderRadius: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                <strong style={{ color: 'var(--accent-blue)' }}>✨ What changed: </strong>{reviewReasoning}
+              </div>
+            )}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <div
+                onClick={() => setSelectedVersion('original')}
+                style={{ cursor: 'pointer', borderRadius: '6px', border: `2px solid ${selectedVersion === 'original' ? 'var(--accent-blue)' : 'var(--border-color)'}`, background: selectedVersion === 'original' ? 'rgba(47, 129, 247, 0.06)' : 'var(--bg-tertiary)', padding: '10px', transition: 'all 0.15s' }}
+              >
+                <div style={{ fontSize: '11px', fontWeight: 700, color: selectedVersion === 'original' ? 'var(--accent-blue)' : 'var(--text-secondary)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Original</div>
+                <div style={{ fontSize: '12px', fontFamily: 'monospace', whiteSpace: 'pre-wrap', color: 'var(--text-primary)', maxHeight: '120px', overflowY: 'auto' }}>{promptInput}</div>
+              </div>
+              <div
+                onClick={() => setSelectedVersion('improved')}
+                style={{ cursor: 'pointer', borderRadius: '6px', border: `2px solid ${selectedVersion === 'improved' ? 'var(--accent-blue)' : 'var(--border-color)'}`, background: selectedVersion === 'improved' ? 'rgba(47, 129, 247, 0.06)' : 'var(--bg-tertiary)', padding: '10px', transition: 'all 0.15s' }}
+              >
+                <div style={{ fontSize: '11px', fontWeight: 700, color: selectedVersion === 'improved' ? 'var(--accent-blue)' : 'var(--text-secondary)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>✨ Improved</div>
+                <div style={{ fontSize: '12px', fontFamily: 'monospace', whiteSpace: 'pre-wrap', color: 'var(--text-primary)', maxHeight: '120px', overflowY: 'auto' }}>{reviewedPrompt}</div>
+              </div>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Command Modal */}
@@ -1387,6 +1533,56 @@ function TimelineGroup({
 }
 
 // Artifacts List
+function ArtifactPreview({ artifact }: { artifact: Artifact }) {
+  const [expanded, setExpanded] = useState(false);
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const ext = artifact.name.split('.').pop()?.toLowerCase() ?? '';
+  const isImage = ['png','jpg','jpeg','gif','svg','webp','bmp'].includes(ext);
+  const isText = ['txt','md','log','json','yaml','yml','toml','ts','tsx','js','jsx','py','sh','css','html','xml','csv','env'].includes(ext);
+
+  const loadText = async () => {
+    if (textContent !== null) { setExpanded(e => !e); return; }
+    setLoadingPreview(true);
+    try {
+      const res = await fetch(`/api/artifacts/${artifact.id}`);
+      const text = await res.text();
+      setTextContent(text.slice(0, 8000) + (text.length > 8000 ? '\n… (truncated)' : ''));
+      setExpanded(true);
+    } catch { setTextContent('Failed to load preview.'); setExpanded(true); }
+    finally { setLoadingPreview(false); }
+  };
+
+  return (
+    <li className="artifact-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+        <div>
+          <span className="artifact-name">{artifact.name}</span>
+          <span className="artifact-meta">
+            {artifact.type} • {formatBytes(artifact.size)} • {formatTime(artifact.created_at)}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          {(isImage || isText) && (
+            <button className="btn btn-sm" onClick={isImage ? () => setExpanded(e => !e) : loadText} disabled={loadingPreview}>
+              {loadingPreview ? '…' : expanded ? 'Hide' : 'Preview'}
+            </button>
+          )}
+          <a href={`/api/artifacts/${artifact.id}`} className="btn btn-sm" download>Download</a>
+        </div>
+      </div>
+      {expanded && isImage && (
+        <img src={`/api/artifacts/${artifact.id}`} alt={artifact.name} style={{ maxWidth: '100%', maxHeight: '400px', borderRadius: '6px', border: '1px solid var(--border-color)' }} />
+      )}
+      {expanded && isText && textContent !== null && (
+        <pre style={{ margin: 0, padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '6px', fontSize: '12px', fontFamily: 'monospace', overflowX: 'auto', maxHeight: '400px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+          {ext === 'json' ? (() => { try { return JSON.stringify(JSON.parse(textContent), null, 2); } catch { return textContent; } })() : textContent}
+        </pre>
+      )}
+    </li>
+  );
+}
+
 function ArtifactsList({ artifacts }: { artifacts: Artifact[] }) {
   if (artifacts.length === 0) {
     return (
@@ -1399,22 +1595,7 @@ function ArtifactsList({ artifacts }: { artifacts: Artifact[] }) {
   return (
     <ul className="artifact-list">
       {artifacts.map((artifact) => (
-        <li key={artifact.id} className="artifact-item">
-          <div>
-            <span className="artifact-name">{artifact.name}</span>
-            <span className="artifact-meta">
-              {artifact.type} • {formatBytes(artifact.size)} •{' '}
-              {formatTime(artifact.created_at)}
-            </span>
-          </div>
-          <a
-            href={`/api/artifacts/${artifact.id}`}
-            className="btn btn-sm"
-            download
-          >
-            Download
-          </a>
-        </li>
+        <ArtifactPreview key={artifact.id} artifact={artifact} />
       ))}
     </ul>
   );
@@ -1465,9 +1646,131 @@ function CommandsList({ commands }: { commands: Command[] }) {
   );
 }
 
-function ChangesView({ events }: { events: LogEvent[] }) {
+function tokenizeLine(line: string, ext: string): React.ReactNode {
+  const stripped = line.slice(1); // remove +/-/space prefix
+  const prefix = line[0];
+
+  // Basic token patterns per language
+  const STRING = /(["'`])((?:\\.|(?!\1)[^\\])*)\1/g;
+  const COMMENT_LINE = /(?:\/\/|#).*$/;
+  const COMMENT_BLOCK = /\/\*[\s\S]*?\*\//g;
+  const KEYWORD_MAP: Record<string, string[]> = {
+    ts: ['const','let','var','function','return','import','export','from','class','interface','type','if','else','for','while','async','await','new','null','undefined','true','false','extends','implements'],
+    js: ['const','let','var','function','return','import','export','from','class','if','else','for','while','async','await','new','null','undefined','true','false'],
+    py: ['def','class','return','import','from','if','elif','else','for','while','in','not','and','or','True','False','None','with','as','try','except','finally','raise','yield','lambda'],
+    css: ['@import','@media','@keyframes','@font-face'],
+  };
+  const lang = ['ts','tsx'].includes(ext) ? 'ts' : ['js','jsx'].includes(ext) ? 'js' : ext === 'py' ? 'py' : ext === 'css' || ext === 'scss' ? 'css' : '';
+  const keywords = lang ? (KEYWORD_MAP[lang] ?? []) : [];
+
+  if (!stripped) return <>{prefix}</>;
+
+  const parts: React.ReactNode[] = [];
+  let remaining = stripped;
+  let key = 0;
+
+  // Simple pass: highlight strings and keywords
+  const segments = remaining.split(/(\s+)/);
+  parts.push(<span key={key++} style={{ opacity: 0.5 }}>{prefix}</span>);
+  for (const seg of segments) {
+    if (keywords.includes(seg.trim())) {
+      parts.push(<span key={key++} style={{ color: 'var(--accent-purple)' }}>{seg}</span>);
+    } else if (/^(["'`])/.test(seg)) {
+      parts.push(<span key={key++} style={{ color: 'var(--accent-yellow)' }}>{seg}</span>);
+    } else if (/^\d+$/.test(seg.trim()) && seg.trim()) {
+      parts.push(<span key={key++} style={{ color: 'var(--accent-blue)' }}>{seg}</span>);
+    } else {
+      parts.push(<span key={key++}>{seg}</span>);
+    }
+  }
+  void STRING; void COMMENT_LINE; void COMMENT_BLOCK; // suppress unused warnings
+  return <>{parts}</>;
+}
+
+function DiffLines({ diff, ext, sideBySide }: { diff: string; ext: string; sideBySide: boolean }) {
+  const lines = diff.split('\n');
+  const [collapsedHunks, setCollapsedHunks] = useState<Set<number>>(new Set());
+
+  if (!sideBySide) {
+    const hunkIndices: number[] = [];
+    lines.forEach((l, i) => { if (l.startsWith('@@')) hunkIndices.push(i); });
+
+    return (
+      <pre style={{ margin: 0, padding: '12px', fontFamily: "'Monaco','Menlo','Ubuntu Mono',monospace", fontSize: '12px', lineHeight: '1.5', overflowX: 'auto' }}>
+        {lines.map((line, i) => {
+          const hunkStart = [...hunkIndices].reverse().findIndex((h: number) => h <= i);
+          const resolvedHunkStart = hunkStart === -1 ? -1 : hunkIndices.length - 1 - hunkStart;
+          const hunkIdx = hunkIndices[resolvedHunkStart] ?? -1;
+          const isHunkHeader = line.startsWith('@@');
+          const isCollapsed = hunkIdx >= 0 && collapsedHunks.has(hunkIdx) && !isHunkHeader;
+          if (isCollapsed) return null;
+          const isAdd = line.startsWith('+') && !line.startsWith('+++');
+          const isDel = line.startsWith('-') && !line.startsWith('---');
+          return (
+            <div key={i}
+              onClick={isHunkHeader ? () => setCollapsedHunks(prev => { const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s; }) : undefined}
+              style={{ color: isAdd ? 'var(--accent-green)' : isDel ? 'var(--accent-red)' : line.startsWith('@@') ? 'var(--accent-purple)' : 'var(--text-primary)', background: isAdd ? 'rgba(59,185,80,0.08)' : isDel ? 'rgba(248,81,73,0.08)' : 'transparent', cursor: isHunkHeader ? 'pointer' : 'default', userSelect: isHunkHeader ? 'none' : 'text' }}
+            >
+              {isHunkHeader ? <span title="Click to collapse/expand">{collapsedHunks.has(i) ? '▶' : '▼'} {line}</span> : tokenizeLine(line, ext)}
+            </div>
+          );
+        })}
+      </pre>
+    );
+  }
+
+  // Side-by-side
+  const leftLines: { line: string; type: 'del' | 'ctx' }[] = [];
+  const rightLines: { line: string; type: 'add' | 'ctx' }[] = [];
+  for (const line of lines) {
+    if (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) {
+      leftLines.push({ line, type: 'ctx' });
+      rightLines.push({ line, type: 'ctx' });
+    } else if (line.startsWith('+')) {
+      leftLines.push({ line: '', type: 'ctx' });
+      rightLines.push({ line, type: 'add' });
+    } else if (line.startsWith('-')) {
+      leftLines.push({ line, type: 'del' });
+      rightLines.push({ line: '', type: 'ctx' });
+    } else {
+      leftLines.push({ line, type: 'ctx' });
+      rightLines.push({ line, type: 'ctx' });
+    }
+  }
+  const cellStyle = (type: string): React.CSSProperties => ({
+    fontFamily: "'Monaco','Menlo','Ubuntu Mono',monospace",
+    fontSize: '12px',
+    lineHeight: '1.5',
+    padding: '0 8px',
+    whiteSpace: 'pre',
+    background: type === 'add' ? 'rgba(59,185,80,0.08)' : type === 'del' ? 'rgba(248,81,73,0.08)' : 'transparent',
+    color: type === 'add' ? 'var(--accent-green)' : type === 'del' ? 'var(--accent-red)' : 'var(--text-primary)',
+    width: '50%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  });
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+        <tbody>
+          {leftLines.map((l, i) => (
+            <tr key={i}>
+              <td style={cellStyle(l.type)}>{l.line || ' '}</td>
+              <td style={{ width: '1px', background: 'var(--border-color)' }} />
+              <td style={cellStyle(rightLines[i]?.type ?? 'ctx')}>{rightLines[i]?.line || ' '}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ChangesView({ events, run, onApprove }: { events: LogEvent[]; run: Run | null; onApprove?: (resp: 'y' | 'n' | 'yes' | 'no' | 'enter') => void }) {
   const files = buildRunChangeReport(events);
   const [selectedPath, setSelectedPath] = useState<string | null>(files[0]?.path ?? null);
+  const [sideBySide, setSideBySide] = useState(false);
+  const needsApproval = run?.waiting_approval === 1;
 
   useEffect(() => {
     if (!files.some((entry) => entry.path === selectedPath)) {
@@ -1486,6 +1789,14 @@ function ChangesView({ events }: { events: LogEvent[] }) {
   const selected = files.find((entry) => entry.path === selectedPath) ?? files[0];
 
   return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+    {needsApproval && onApprove && (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', background: 'rgba(163, 113, 247, 0.12)', border: '1px solid var(--accent-purple)', borderRadius: '8px' }}>
+        <span style={{ flex: 1, fontWeight: 600, color: 'var(--accent-purple)' }}>🔔 AI is requesting approval for these changes</span>
+        <button className="btn btn-sm" onClick={() => onApprove('n')} style={{ background: 'var(--accent-red)', color: 'white' }}>✗ Reject</button>
+        <button className="btn btn-sm" onClick={() => onApprove('y')} style={{ background: 'var(--accent-green)', color: 'white' }}>✓ Approve</button>
+      </div>
+    )}
     <div
       style={{
         display: 'grid',
@@ -1543,52 +1854,25 @@ function ChangesView({ events }: { events: LogEvent[] }) {
       >
         <div style={{ padding: '12px', borderBottom: '1px solid var(--border-color)', fontWeight: 600 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
-            <span>{selected.path}</span>
-            <span style={{ display: 'flex', gap: '10px', fontSize: '12px', fontWeight: 700 }}>
-              <span style={{ color: 'var(--accent-green)' }}>+{selected.additions}</span>
-              <span style={{ color: 'var(--accent-red)' }}>-{selected.deletions}</span>
-            </span>
+            <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>{selected.path}</span>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent-green)' }}>+{selected.additions}</span>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent-red)' }}>-{selected.deletions}</span>
+              <button className="btn btn-sm" onClick={() => setSideBySide(s => !s)} style={{ fontSize: '11px', padding: '2px 8px' }}>
+                {sideBySide ? 'Unified' : 'Side-by-side'}
+              </button>
+            </div>
           </div>
         </div>
         {selected.diff ? (
-          <pre
-            style={{
-              margin: 0,
-              padding: '12px',
-              fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
-              fontSize: '12px',
-              lineHeight: '1.5',
-              overflowX: 'auto',
-            }}
-          >
-            {selected.diff.split('\n').map((line, index) => (
-              <div
-                key={`${selected.path}-${index}`}
-                style={{
-                  color: line.startsWith('+') && !line.startsWith('+++')
-                    ? 'var(--accent-green)'
-                    : line.startsWith('-') && !line.startsWith('---')
-                      ? 'var(--accent-red)'
-                      : line.startsWith('@@')
-                        ? 'var(--accent-purple)'
-                        : 'var(--text-primary)',
-                  background: line.startsWith('+') && !line.startsWith('+++')
-                    ? 'rgba(59, 185, 80, 0.08)'
-                    : line.startsWith('-') && !line.startsWith('---')
-                      ? 'rgba(248, 81, 73, 0.08)'
-                      : 'transparent',
-                }}
-              >
-                {line || ' '}
-              </div>
-            ))}
-          </pre>
+          <DiffLines diff={selected.diff} ext={selected.path.split('.').pop() ?? ''} sideBySide={sideBySide} />
         ) : (
           <div style={{ padding: '16px', color: 'var(--text-muted)' }}>
             Diff not available yet for this file.
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 }

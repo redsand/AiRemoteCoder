@@ -32,6 +32,7 @@ interface Props {
 
 const alertTypeLabels: Record<string, string> = {
   run_failed: 'Run Failed',
+  run_completed: 'Run Completed',
   waiting_approval_timeout: 'Waiting Approval Timeout',
 };
 
@@ -414,6 +415,7 @@ export function Alerts({ user }: Props) {
             onChange={(e) => setNewRuleType(e.target.value)}
           >
             <option value="run_failed">When a run fails</option>
+            <option value="run_completed">When a run completes</option>
             <option value="waiting_approval_timeout">When approval times out</option>
           </select>
         </div>

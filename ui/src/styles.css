@@ -1325,7 +1325,14 @@ input:checked + .slider:before {
 
 .client-header,
 .run-header {
-  margin-bottom: 16px;
+  position: sticky;
+  top: var(--header-height, 53px);
+  z-index: 99;
+  background: var(--bg-primary);
+  padding-top: 12px;
+  padding-bottom: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
 }
 
 /* Empty states */

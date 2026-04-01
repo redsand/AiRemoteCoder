@@ -22,6 +22,9 @@ import { healthRoutes } from './routes/health.js';
 import { vncRoutes } from './routes/vnc.js';
 import { mcpPlugin } from './mcp/plugin.js';
 import { mcpSetupRoutes } from './routes/mcp-setup.js';
+import { promptReviewRoutes } from './routes/prompt-review.js';
+import { projectsRoutes } from './routes/projects.js';
+import { consoleRoutes } from './routes/console.js';
 import { shouldBypassRateLimit } from './services/rate-limit.js';
 
 // Validate configuration
@@ -146,6 +149,9 @@ await fastify.register(dashboardRoutes);
 await fastify.register(modelsRoutes);
 await fastify.register(vncRoutes);
 await fastify.register(healthRoutes);
+await fastify.register(promptReviewRoutes);
+await fastify.register(projectsRoutes);
+await fastify.register(consoleRoutes);
 
 // MCP control plane (additive — does nothing if AIRC_MCP_ENABLED=false)
 await fastify.register(mcpPlugin);

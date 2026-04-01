@@ -9,6 +9,7 @@ import { config } from '../config.js';
 import { uiAuth, requireRole, logAudit, type AuthenticatedRequest } from '../middleware/auth.js';
 import { generateCapabilityToken, redactSecrets } from '../utils/crypto.js';
 import { broadcastToRun } from '../services/websocket.js';
+import { createAlert } from './alerts.js';
 import { findLatestMcpSessionByTokenId, getMcpSession, upsertMcpRunnerHost } from '../mcp/session-registry.js';
 import { assertScopes, extractBearerToken, validateMcpSessionAccess, validateMcpToken } from '../mcp/auth.js';
 import type { McpScope } from '../domain/types.js';
@@ -782,8 +783,14 @@ export async function runsRoutes(fastify: FastifyInstance) {
           db.prepare('UPDATE runs SET status = ?, started_at = unixepoch() WHERE id = ?')
             .run('running', runId);
         } else if (marker.event === 'finished') {
+          const finalStatus = marker.exitCode === 0 ? 'done' : 'failed';
           db.prepare('UPDATE runs SET status = ?, finished_at = unixepoch(), exit_code = ? WHERE id = ?')
-            .run(marker.exitCode === 0 ? 'done' : 'failed', marker.exitCode, runId);
+            .run(finalStatus, marker.exitCode, runId);
+          if (finalStatus === 'done') {
+            createAlert('run_completed', `Run ${runId} completed`, { severity: 'info', targetType: 'run', targetId: runId });
+          } else {
+            createAlert('run_failed', `Run ${runId} failed`, { severity: 'critical', targetType: 'run', targetId: runId });
+          }
         }
       } catch {
         // ignore malformed marker payloads
