@@ -197,6 +197,15 @@ describe('runner executor helpers', () => {
     });
 
     expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(spawnFn).toHaveBeenCalledWith(
+      'codex',
+      ['--sandbox', 'danger-full-access', '--search', 'app-server'],
+      expect.objectContaining({
+        shell: process.platform === 'win32',
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }),
+    );
     expect(writes.map((line) => JSON.parse(line.trim()).method)).toEqual([
       'initialize',
       'initialized',
@@ -695,6 +704,8 @@ describe('runner cli parsing', () => {
     expect(options.provider).toBe('codex');
     expect(options.codexMode).toBe('app-server');
     expect(options.codexApprovalPolicy).toBe('never');
+    expect(options.codexSandboxMode).toBe('danger-full-access');
+    expect(options.codexSearchEnabled).toBe(true);
     expect(options.runnerId).toMatch(/^[a-f0-9]{16}$/);
   });
 
@@ -720,7 +731,7 @@ describe('runner cli parsing', () => {
 
   it('allows argv to override env', () => {
     const options = parseRunnerOptions(
-      ['--gateway-url', 'http://other:3100', '--token', 't2', '--provider', 'gemini', '--exec-template', 'gemini run {input}', '--codex-approval-policy', 'on-request', '--claude-permission-mode', 'acceptEdits'],
+      ['--gateway-url', 'http://other:3100', '--token', 't2', '--provider', 'gemini', '--exec-template', 'gemini run {input}', '--codex-approval-policy', 'on-request', '--codex-sandbox', 'workspace-write', '--codex-search', 'false', '--claude-permission-mode', 'acceptEdits'],
       {
         AIREMOTECODER_GATEWAY_URL: 'http://gw:3100',
         AIREMOTECODER_MCP_TOKEN: 'token-123',
@@ -731,6 +742,8 @@ describe('runner cli parsing', () => {
     expect(options.provider).toBe('gemini');
     expect(options.execTemplate).toBe('gemini run {input}');
     expect(options.codexApprovalPolicy).toBe('on-request');
+    expect(options.codexSandboxMode).toBe('workspace-write');
+    expect(options.codexSearchEnabled).toBe(false);
     expect(options.claudePermissionMode).toBe('acceptEdits');
     expect(options.runnerId).toMatch(/^[a-f0-9]{16}$/);
   });
@@ -791,6 +804,8 @@ describe('runner loop integration', () => {
       provider: 'codex',
       codexMode: 'app-server',
       codexApprovalPolicy: 'never',
+      codexSandboxMode: 'danger-full-access',
+      codexSearchEnabled: true,
     }, { api: api as any, executor: executor as any });
 
     expect(result).toEqual({ claimedRunId: 'run-1', stopRun: true });
@@ -851,6 +866,8 @@ describe('runner loop integration', () => {
       provider: 'claude',
       codexMode: 'app-server',
       codexApprovalPolicy: 'never',
+      codexSandboxMode: 'danger-full-access',
+      codexSearchEnabled: true,
     }, { api: api as any, executor: executor as any, spawnFn: spawnFn as any });
 
     expect(spawnFn).toHaveBeenCalled();
@@ -898,6 +915,8 @@ describe('runner loop integration', () => {
       provider: 'claude',
       codexMode: 'app-server',
       codexApprovalPolicy: 'never',
+      codexSandboxMode: 'danger-full-access',
+      codexSearchEnabled: true,
     }, { api: api as any, executor: executor as any });
 
     expect(executor.restoreState).toHaveBeenCalledWith({ cliSessionId: 'session-from-gateway' });

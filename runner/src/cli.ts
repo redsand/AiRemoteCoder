@@ -8,6 +8,15 @@ function normalizeGatewayUrl(raw: string): string {
   return trimmed.replace(/\/mcp$/i, '');
 }
 
+function parseBooleanFlag(raw: string | undefined, defaultValue: boolean): boolean {
+  if (raw === undefined) return defaultValue;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized.length === 0) return defaultValue;
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return defaultValue;
+}
+
 export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): RunnerOptions {
   const args = new Map<string, string>();
   for (let i = 0; i < argv.length; i += 1) {
@@ -41,6 +50,13 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
     ?? env.AIREMOTECODER_CODEX_APPROVAL_POLICY
     ?? env.CODEX_APPROVAL_POLICY
     ?? 'never').trim().toLowerCase();
+  const codexSandboxMode = (args.get('codex-sandbox')
+    ?? env.AIREMOTECODER_CODEX_SANDBOX
+    ?? 'danger-full-access').trim().toLowerCase();
+  const codexSearchEnabled = parseBooleanFlag(
+    args.get('codex-search') ?? env.AIREMOTECODER_CODEX_SEARCH,
+    true,
+  );
   const claudePermissionMode = (args.get('claude-permission-mode')
     ?? env.AIREMOTECODER_CLAUDE_PERMISSION_MODE
     ?? 'bypassPermissions').trim();
@@ -59,6 +75,8 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
     provider,
     codexMode,
     codexApprovalPolicy,
+    codexSandboxMode,
+    codexSearchEnabled,
     claudePermissionMode,
     geminiApprovalMode,
     execTemplate,

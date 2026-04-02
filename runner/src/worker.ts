@@ -147,6 +147,20 @@ function extractGeminiErrorMessage(event: any): string {
 
 type SpawnFn = typeof spawn;
 
+function buildCodexAppServerCommand(options: {
+  sandboxMode?: string;
+  searchEnabled?: boolean;
+  appServerCommand?: string[];
+} = {}): string[] {
+  if (options.appServerCommand) return options.appServerCommand;
+  const args = ['--sandbox', options.sandboxMode?.trim() || 'danger-full-access'];
+  if (options.searchEnabled ?? true) {
+    args.push('--search');
+  }
+  args.push('app-server');
+  return ['codex', ...args];
+}
+
 function extractErrorMessage(errorPayload: unknown): string {
   if (!errorPayload || typeof errorPayload !== 'object') {
     return String(errorPayload ?? 'Unknown Codex app-server error');
@@ -289,6 +303,8 @@ export class CodexAppServerExecutor implements WorkerExecutor {
       appServerCommand?: string[];
       model?: string;
       approvalPolicy?: string;
+      sandboxMode?: string;
+      searchEnabled?: boolean;
     } = {},
   ) {}
 
@@ -300,7 +316,11 @@ export class CodexAppServerExecutor implements WorkerExecutor {
     this.emitFn = emit;
     if (this.process) return;
 
-    const argv = this.options.appServerCommand ?? ['codex', 'app-server'];
+    const argv = buildCodexAppServerCommand({
+      appServerCommand: this.options.appServerCommand,
+      sandboxMode: this.options.sandboxMode,
+      searchEnabled: this.options.searchEnabled,
+    });
     const command = argv[0];
     const args = argv.slice(1);
     const child = this.spawnFn(command, args, {
@@ -1323,6 +1343,8 @@ export interface RunnerOptions {
   provider: string;
   codexMode: 'app-server' | 'interactive' | 'exec';
   codexApprovalPolicy: string;
+  codexSandboxMode: string;
+  codexSearchEnabled: boolean;
   claudePermissionMode?: string;
   geminiApprovalMode?: string;
   execTemplate?: string;
@@ -1341,7 +1363,11 @@ function createExecutor(options: RunnerOptions): WorkerExecutor {
   if (options.provider === 'codex') {
     if (options.codexMode === 'exec') return new CodexExecExecutor();
     if (options.codexMode === 'interactive') return new PersistentCodexExecutor();
-    return new CodexAppServerExecutor({ approvalPolicy: options.codexApprovalPolicy || 'never' });
+    return new CodexAppServerExecutor({
+      approvalPolicy: options.codexApprovalPolicy || 'never',
+      sandboxMode: options.codexSandboxMode,
+      searchEnabled: options.codexSearchEnabled,
+    });
   }
   if (options.provider === 'claude') {
     return new ClaudeCliExecutor({
