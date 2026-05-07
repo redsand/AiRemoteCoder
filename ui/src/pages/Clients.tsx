@@ -81,7 +81,7 @@ export function Hosts(_props: Props) {
       ) : filtered.length === 0 ? (
         <div className="empty-state">
           <h2>No MCP runners connected</h2>
-          <p>Connect Codex/Claude/Gemini/OpenCode/Zenflow/Rev from the MCP page, then start runs.</p>
+          <p>Connect Codex/Claude/Gemini/Qwen/OpenCode/Zenflow/Rev from the MCP page, then start runs.</p>
         </div>
       ) : (
         <div className="client-list">

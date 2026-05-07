@@ -1,5 +1,5 @@
 export interface McpProviderDefinition {
-  key: 'claude' | 'codex' | 'gemini' | 'opencode' | 'zenflow' | 'rev';
+  key: 'claude' | 'codex' | 'gemini' | 'qwen' | 'opencode' | 'zenflow' | 'rev';
   label: string;
   icon: string;
   description: string;
@@ -39,6 +39,16 @@ export const MCP_PROVIDERS: McpProviderDefinition[] = [
     docsKey: 'gemini_cli',
     runnerSupport: 'preview',
     runnerSupportNote: 'Runner pairing is available for preview testing through the helper. Native Gemini CLI execution is supported, but Codex remains the only production-ready runner path today.',
+  },
+  {
+    key: 'qwen',
+    label: 'Qwen Coder',
+    icon: '🪶',
+    description: 'Qwen coding CLI via the local qwen command',
+    configFile: '.qwen/settings.json',
+    docsKey: 'qwen',
+    runnerSupport: 'preview',
+    runnerSupportNote: 'Native MCP configuration is available through .qwen/settings.json. Runner pairing is available for preview testing through the helper using the local qwen CLI command.',
   },
   {
     key: 'opencode',

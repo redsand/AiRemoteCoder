@@ -385,6 +385,53 @@ describe('LiveLogViewer helpers', () => {
     expect(legacyToolResult.emphasis).toBe('success');
   });
 
+  it('formats Qwen runner activity into the same readable timeline style', () => {
+    const prompt = formatLogEventDisplay({
+      id: 1,
+      type: 'info',
+      timestamp: 1,
+      data: 'Executing Qwen prompt (95 chars)',
+    });
+    expect(prompt.content).toBe('Prompt delivered to Qwen');
+    expect(prompt.emphasis).toBe('info');
+
+    const sessionStarted = formatLogEventDisplay({
+      id: 2,
+      type: 'info',
+      timestamp: 1,
+      data: 'Qwen session initialized',
+    });
+    expect(sessionStarted.content).toBe('Qwen session started');
+    expect(sessionStarted.emphasis).toBe('info');
+
+    const reasoning = formatLogEventDisplay({
+      id: 3,
+      type: 'info',
+      timestamp: 1,
+      data: 'Qwen reasoning: Planning file updates',
+    });
+    expect(reasoning.content).toBe('Qwen is reasoning');
+    expect(reasoning.emphasis).toBe('info');
+
+    const result = formatLogEventDisplay({
+      id: 4,
+      type: 'info',
+      timestamp: 1,
+      data: 'Qwen result: Completed successfully',
+    });
+    expect(result.content).toBe('Qwen result: Completed successfully');
+    expect(result.emphasis).toBe('success');
+
+    const legacyToolResult = formatLogEventDisplay({
+      id: 5,
+      type: 'info',
+      timestamp: 1,
+      data: 'Qwen tool result: Tests passed',
+    });
+    expect(legacyToolResult.content).toBe('Tool call finished');
+    expect(legacyToolResult.emphasis).toBe('success');
+  });
+
   it('counts only real error events instead of matching generic diff text', () => {
     const events: LogEvent[] = [
       {

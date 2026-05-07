@@ -50,6 +50,7 @@ const workerTypeOptions: FilterOption[] = [
   { value: 'ollama-launch', label: 'Ollama Launch' },
   { value: 'codex', label: 'Codex' },
   { value: 'gemini', label: 'Gemini' },
+  { value: 'qwen', label: 'Qwen' },
   { value: 'rev', label: 'Rev' },
   { value: 'vnc', label: 'VNC (Remote Desktop)' },
   { value: 'hands-on', label: 'Hands-On' },
@@ -601,7 +602,7 @@ export function Runs({ user }: Props) {
               )}
               {activeMcpSessions.length === 0 && (
                 <div className="text-muted" style={{ marginTop: '8px', fontSize: '12px' }}>
-                  Connect Codex/Claude/Gemini/OpenCode/Zenflow/Rev to MCP first from the MCP page.
+                  Connect Codex/Claude/Gemini/Qwen/OpenCode/Zenflow/Rev to MCP first from the MCP page.
                 </div>
               )}
               {selectedHost && !canUseAgentMode && (

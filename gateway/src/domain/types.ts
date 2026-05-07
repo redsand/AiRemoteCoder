@@ -70,6 +70,7 @@ export type ProviderName =
   | 'claude'
   | 'codex'
   | 'gemini'
+  | 'qwen'
   | 'opencode'
   | 'zenflow'
   | 'rev';

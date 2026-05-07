@@ -179,7 +179,7 @@ export function Settings({ user, onLogout }: Props) {
           </div>
           <div className="settings-row">
             <span className="settings-label">Coding environments</span>
-            <span className="settings-value">Claude, Codex, Gemini, OpenCode, Zenflow, Rev</span>
+            <span className="settings-value">Claude, Codex, Gemini, Qwen, OpenCode, Zenflow, Rev</span>
           </div>
           <div className="settings-row" style={{ borderBottom: 'none' }}>
             <button className="btn btn-primary" onClick={() => navigate('/mcp')}>

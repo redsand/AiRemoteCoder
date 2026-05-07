@@ -341,6 +341,28 @@ export function formatLogEventDisplay(event: LogEvent | DisplayEvent): Formatted
     if (event.data.startsWith('Gemini tool result:')) {
       return { content: 'Tool call finished', emphasis: 'success' };
     }
+    if (event.data.startsWith('Executing Qwen prompt')) {
+      return { content: 'Prompt delivered to Qwen', emphasis: 'info' };
+    }
+    if (event.data.startsWith('Qwen reasoning:')) {
+      return { content: 'Qwen is reasoning', emphasis: 'info' };
+    }
+    if (event.data.startsWith('Qwen status:')) {
+      return { content: event.data, emphasis: 'info' };
+    }
+    if (event.data.startsWith('Qwen session initialized')) {
+      return { content: 'Qwen session started', emphasis: 'info' };
+    }
+    if (event.data.startsWith('Qwen result:')) {
+      return { content: event.data, emphasis: 'success' };
+    }
+    if (event.data.startsWith('Qwen tool started:')) {
+      const tool = event.data.slice('Qwen tool started:'.length).trim();
+      return { content: `Tool call started: ${tool}`, emphasis: 'tool' };
+    }
+    if (event.data.startsWith('Qwen tool result:')) {
+      return { content: 'Tool call finished', emphasis: 'success' };
+    }
     try {
       const payload = JSON.parse(event.data);
       const method = payload?.method;

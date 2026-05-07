@@ -6,6 +6,7 @@ describe('MCP provider metadata', () => {
     expect(isProductionReadyRunnerProvider('codex')).toBe(true);
     expect(isProductionReadyRunnerProvider('claude')).toBe(false);
     expect(isProductionReadyRunnerProvider('gemini')).toBe(false);
+    expect(isProductionReadyRunnerProvider('qwen')).toBe(false);
     expect(isProductionReadyRunnerProvider('opencode')).toBe(false);
     expect(isProductionReadyRunnerProvider('zenflow')).toBe(false);
     expect(isProductionReadyRunnerProvider('rev')).toBe(false);
@@ -15,6 +16,8 @@ describe('MCP provider metadata', () => {
     expect(getMcpProvider('codex')?.runnerSupport).toBe('production');
     expect(getMcpProvider('gemini')?.runnerSupport).toBe('preview');
     expect(getMcpProvider('claude')?.configFile).toBe('.mcp.json');
+    expect(getMcpProvider('qwen')?.configFile).toBe('.qwen/settings.json');
+    expect(getMcpProvider('qwen')?.description).toContain('Qwen');
     expect(getMcpProvider('claude')?.runnerSupportNote).toContain('preview testing');
     expect(getMcpProvider('gemini')?.runnerSupportNote).toContain('Native Gemini CLI execution is supported');
   });
@@ -23,6 +26,7 @@ describe('MCP provider metadata', () => {
     expect(supportsRunnerProvider('codex')).toBe(true);
     expect(supportsRunnerProvider('claude')).toBe(true);
     expect(supportsRunnerProvider('gemini')).toBe(true);
+    expect(supportsRunnerProvider('qwen')).toBe(true);
     expect(supportsRunnerProvider('unknown')).toBe(false);
   });
 });

@@ -3,7 +3,7 @@
  *
  * Exposes the AiRemoteCoder control plane as a remote MCP server using the
  * streamable HTTP transport. AI agent runtimes (Claude Code, Codex, Gemini CLI,
- * OpenCode, Rev, etc.) connect here to manage runs, sessions, artifacts, and
+ * Qwen, OpenCode, Rev, etc.) connect here to manage runs, sessions, artifacts, and
  * approvals without relying on subprocess stdio/pipe parsing.
  *
  * Transport: POST /mcp  (streamable HTTP — may return SSE for subscriptions)
@@ -162,7 +162,7 @@ export function createMcpServer(getAuthContext: () => McpAuthContext | null): Mc
     {
       label: z.string().optional().describe('Human-readable label'),
       command: z.string().optional().describe('Initial command or prompt for the agent'),
-      worker_type: z.enum(['claude', 'codex', 'gemini', 'opencode', 'zenflow', 'rev', 'hands-on', 'vnc']).default('claude')
+      worker_type: z.enum(['claude', 'codex', 'gemini', 'qwen', 'opencode', 'zenflow', 'rev', 'hands-on', 'vnc']).default('claude')
         .describe('Agent runtime to use'),
       repo_path: z.string().optional().describe('Working directory / repository path on the agent machine'),
       repo_name: z.string().optional().describe('Repository name (display only)'),
@@ -988,6 +988,20 @@ function buildCapabilityMatrix() {
       supportsToolUseEvents: false,
       supportsStreaming: true,
       supportsModelSelection: true,
+      nativeMcp: false,
+      version: '1.0.0',
+    };
+  }
+  if (config.providers.qwen) {
+    matrix.qwen = {
+      provider: 'qwen',
+      supportsInteractiveInput: true,
+      supportsResume: false,
+      supportsCheckpoint: false,
+      supportsApprovalGating: false,
+      supportsToolUseEvents: false,
+      supportsStreaming: true,
+      supportsModelSelection: false,
       nativeMcp: false,
       version: '1.0.0',
     };

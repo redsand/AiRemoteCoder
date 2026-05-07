@@ -48,7 +48,7 @@ describe('ProviderAdapter contract', async () => {
       });
 
       it('provider is a known ProviderName', () => {
-        const known: ProviderName[] = ['claude', 'codex', 'gemini', 'opencode', 'zenflow', 'rev'];
+        const known: ProviderName[] = ['claude', 'codex', 'gemini', 'qwen', 'opencode', 'zenflow', 'rev'];
         expect(known).toContain(adapter.provider);
       });
 

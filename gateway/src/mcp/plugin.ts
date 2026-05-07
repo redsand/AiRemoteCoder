@@ -526,6 +526,18 @@ bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
         },
       },
     },
+    qwen: {
+      description: 'Add to .qwen/settings.json',
+      config: {
+        mcpServers: {
+          airemotecoder: {
+            httpUrl: mcpUrl,
+            headers: { Authorization: 'Bearer <YOUR_MCP_TOKEN>' },
+          },
+        },
+      },
+      note: 'Qwen Code project scope is .qwen/settings.json. Native MCP configuration uses streamable HTTP via httpUrl.',
+    },
     opencode: {
       description: 'Add to opencode config',
       config: {

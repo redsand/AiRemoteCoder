@@ -1053,6 +1053,248 @@ export class GeminiCliExecutor implements WorkerExecutor {
   }
 }
 
+function summarizeQwenToolInput(input: unknown): string {
+  if (typeof input === 'string') return input.trim();
+  if (!input || typeof input !== 'object') return '';
+  const record = input as Record<string, unknown>;
+  const value = record.command ?? record.cmd ?? record.path ?? record.file_path ?? record.pattern ?? record.query;
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function extractQwenErrorMessage(event: any, lastToolError: string | null): string {
+  const directError = typeof event?.error === 'string' ? event.error.trim() : '';
+  if (directError) return directError;
+
+  const resultText = typeof event?.result === 'string' ? stripClaudeToolUseErrorMarkup(event.result) : '';
+  if (resultText) return resultText;
+
+  if (lastToolError) return lastToolError;
+
+  const returnCode = event?.return_code ?? event?.code;
+  if (typeof returnCode === 'number') return `Qwen CLI exited with code ${returnCode}`;
+  return 'Qwen CLI reported an error';
+}
+
+export class QwenCliExecutor implements WorkerExecutor {
+  private cliSessionId: string | null = null;
+  private readonly toolNames = new Map<string, string>();
+  private lastToolError: string | null = null;
+
+  constructor(
+    private readonly options: {
+      spawnFn?: SpawnFn;
+      cwd?: string;
+      command?: string;
+      approvalMode?: string;
+      model?: string;
+      platform?: NodeJS.Platform;
+    } = {},
+  ) {}
+
+  private get spawnFn(): SpawnFn {
+    return this.options.spawnFn ?? spawn;
+  }
+
+  private get platform(): NodeJS.Platform {
+    return this.options.platform ?? process.platform;
+  }
+
+  private buildArgs(): string[] {
+    const args = [
+      '-p',
+      '--output-format',
+      'stream-json',
+      '--include-partial-messages',
+      '--approval-mode',
+      this.options.approvalMode ?? 'yolo',
+    ];
+    if (this.options.model) {
+      args.push('--model', this.options.model);
+    }
+    if (this.cliSessionId) {
+      args.push('--resume', this.cliSessionId);
+    }
+    return args;
+  }
+
+  private parseStreamJsonLine(
+    line: string,
+    emit: (type: EventType, data: string) => Promise<void>,
+    result: ClaudeResultState,
+  ): void {
+    let event: any;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      if (line.trim().length > 0) void emit('stderr', line);
+      return;
+    }
+
+    if (typeof event?.session_id === 'string' && event.session_id.trim().length > 0) {
+      this.cliSessionId = event.session_id;
+    }
+
+    if (event?.type === 'assistant') {
+      const content = Array.isArray(event.message?.content) ? event.message.content : [];
+      for (const part of content) {
+        if (part?.type === 'text' && typeof part.text === 'string' && part.text.length > 0) {
+          void emit('stdout', part.text);
+          continue;
+        }
+        if (part?.type === 'thinking' && typeof part.text === 'string' && part.text.trim().length > 0) {
+          void emit('info', `Qwen reasoning: ${part.text.trim()}`);
+          continue;
+        }
+        if (part?.type === 'tool_use') {
+          const toolName = typeof part.name === 'string' && part.name.trim().length > 0 ? part.name.trim() : 'tool';
+          const details = summarizeQwenToolInput(part.input);
+          const toolLabel = `${toolName}${details ? ` ${details}` : ''}`.trim();
+          if (typeof part.id === 'string' && part.id.trim().length > 0) {
+            this.toolNames.set(part.id, toolLabel);
+          }
+          void emit('tool_use', JSON.stringify({
+            phase: 'pre',
+            tool: toolLabel,
+            provider: 'qwen',
+            toolId: typeof part.id === 'string' ? part.id : null,
+          }));
+        }
+      }
+      return;
+    }
+
+    if (event?.type === 'user') {
+      const content = Array.isArray(event.message?.content) ? event.message.content : [];
+      for (const part of content) {
+        if (part?.type === 'tool_result') {
+          const details = summarizeClaudeToolResultContent(part.content);
+          const normalizedDetails = stripClaudeToolUseErrorMarkup(details);
+          const toolId = typeof part.tool_use_id === 'string' ? part.tool_use_id : '';
+          const toolLabel = (toolId && this.toolNames.get(toolId)) || 'Tool';
+          const isToolError = /<tool_use_error>/i.test(String(part.content ?? '')) || /\btool_use_error\b/i.test(details);
+          if (isToolError && normalizedDetails) {
+            this.lastToolError = normalizedDetails;
+          }
+          void emit('tool_use', JSON.stringify({
+            phase: 'post',
+            tool: toolLabel,
+            provider: 'qwen',
+            toolId: toolId || null,
+            summary: normalizedDetails || 'completed',
+          }));
+        }
+      }
+      return;
+    }
+
+    if (event?.type === 'result') {
+      if (event.is_error || event.subtype === 'error') {
+        result.ok = false;
+        result.error = new Error(extractQwenErrorMessage(event, this.lastToolError));
+        return;
+      }
+      if (typeof event.result === 'string' && event.result.trim().length > 0) {
+        void emit('info', `Qwen result: ${event.result.trim()}`);
+      }
+      return;
+    }
+
+    if (event?.type === 'system') {
+      if (event.subtype === 'status' && typeof event.status === 'string' && event.status.trim().length > 0) {
+        void emit('info', `Qwen status: ${event.status.trim()}`);
+        return;
+      }
+      if (event.subtype === 'session_start') {
+        void emit('info', 'Qwen session initialized');
+      }
+      return;
+    }
+  }
+
+  restoreState(state: Record<string, unknown> | null): void {
+    const sessionId = state?.cliSessionId;
+    if (typeof sessionId === 'string' && sessionId.trim().length > 0) {
+      this.cliSessionId = sessionId.trim();
+    }
+  }
+
+  snapshotState(): Record<string, unknown> | null {
+    return this.cliSessionId ? { cliSessionId: this.cliSessionId } : null;
+  }
+
+  async sendInput(input: string, emit: (type: EventType, data: string) => Promise<void>): Promise<void> {
+    const localEmit = async (type: EventType, data: string) => {
+      logStreamEvent(type, data);
+      await emit(type, data);
+    };
+    const args = this.buildArgs();
+    const command = this.options.command ?? 'qwen';
+    const sessionFlag = this.cliSessionId ? `resume=${this.cliSessionId}` : 'session=new';
+
+    await localEmit('info', `Executing Qwen prompt (${input.length} chars)`);
+    logRunnerInfo(`launching Qwen (${sessionFlag}, approvalMode=${this.options.approvalMode ?? 'yolo'})`);
+
+    await new Promise<void>((resolve, reject) => {
+      const child = this.spawnFn(command, [...args, ...(this.platform === 'win32' ? ['--', input] : [input])], {
+        shell: false,
+        windowsHide: true,
+        cwd: this.options.cwd ?? process.cwd(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      const result: ClaudeResultState = { ok: true };
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
+
+      child.stdout?.on('data', (chunk: Buffer | string) => {
+        stdoutBuffer += chunk.toString();
+        const lines = stdoutBuffer.split(/\r?\n/);
+        stdoutBuffer = lines.pop() ?? '';
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          this.parseStreamJsonLine(line, localEmit, result);
+        }
+      });
+
+      child.stderr?.on('data', (chunk: Buffer | string) => {
+        const text = chunk.toString();
+        stderrBuffer += text;
+        void localEmit('stderr', text);
+      });
+
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (stdoutBuffer.trim().length > 0) {
+          this.parseStreamJsonLine(stdoutBuffer.trim(), localEmit, result);
+          stdoutBuffer = '';
+        }
+        if (result.ok && code === 0) {
+          logRunnerInfo('Qwen turn completed successfully');
+          resolve();
+          return;
+        }
+        if (result.error) {
+          logRunnerError(`Qwen turn failed: ${result.error.message}`);
+          reject(result.error);
+          return;
+        }
+        const stderrText = stderrBuffer.trim();
+        logRunnerError(`Qwen exited with code ${code}${stderrText ? `: ${stderrText}` : ''}`);
+        reject(new Error(stderrText || `qwen exited with code ${code}`));
+      });
+
+      if (this.platform !== 'win32') {
+        child.stdin?.end(input);
+      }
+    });
+  }
+
+  async interrupt(): Promise<void> {
+    return;
+  }
+}
+
 export async function executeShellCommand(
   command: string,
   emit: (type: EventType, data: string) => Promise<void>,
@@ -1347,6 +1589,7 @@ export interface RunnerOptions {
   codexSearchEnabled: boolean;
   claudePermissionMode?: string;
   geminiApprovalMode?: string;
+  qwenApprovalMode?: string;
   execTemplate?: string;
   pollIdleMs?: number;
   pollCommandsMs?: number;
@@ -1377,6 +1620,11 @@ function createExecutor(options: RunnerOptions): WorkerExecutor {
   if (options.provider === 'gemini') {
     return new GeminiCliExecutor({
       approvalMode: options.geminiApprovalMode,
+    });
+  }
+  if (options.provider === 'qwen') {
+    return new QwenCliExecutor({
+      approvalMode: options.qwenApprovalMode,
     });
   }
   return new TemplateExecExecutor(options.execTemplate ?? '');

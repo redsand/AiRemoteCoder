@@ -75,7 +75,7 @@ AiRemoteCoder is now **MCP-first**:
 - **MCP Control Plane (Primary)**: Provider-neutral JSON-RPC control over HTTP/SSE
 - **Secure Human Channel (Primary)**: Existing UI + `/api/*` + WebSocket for approvals, status, artifacts
 - **Real-time Monitoring**: Stream normalized run/session events to your phone/browser
-- **Multi-Provider MCP Setup**: Claude, Codex, Gemini, OpenCode, Zenflow, and Rev can connect to the gateway MCP server
+- **Multi-Provider MCP Setup**: Claude, Codex, Gemini, Qwen, OpenCode, Zenflow, and Rev can connect to the gateway MCP server
 - **Runner MVP**: `airc-mcp-runner` is production-ready for Codex today, with Claude and Gemini available as preview runner paths for active testing
 - **Command Execution**: Run allowlisted local commands (tests, git operations) from the UI through the helper; prompts still go to the agent
 - **Secure Authentication**: Scoped MCP tokens, session auth, optional TOTP 2FA, Cloudflare Access
@@ -171,6 +171,7 @@ For the current preview path, use `AIREMOTECODER_CLAUDE_PERMISSION_MODE=bypassPe
 Gemini preview runs now use the native helper transport and no longer require `AIREMOTECODER_EXEC_TEMPLATE`.
 For the current preview path, use `AIREMOTECODER_GEMINI_APPROVAL_MODE=yolo`.
 `airc-mcp-runner` now also prints Gemini session/tool/result activity locally so blocked or quota-limited turns can be diagnosed from the helper terminal.
+Qwen supports native MCP configuration through `.qwen/settings.json`, and preview helper runs now use the native Qwen CLI transport with `AIREMOTECODER_QWEN_APPROVAL_MODE=yolo`.
 OpenCode, Zenflow, and Rev are still not production-ready runner targets. The current helper still offers manual `execTemplate` fallback for them:
 
 ```bash
@@ -234,7 +235,7 @@ See [SECURITY.md](docs/SECURITY.md) for the full threat model.
 
 - Node.js 20+
 - Python 3 + pip (required for VNC remote desktop support)
-- Any supported MCP-capable agent runtime (Claude Code, Codex, Gemini CLI, OpenCode, Zenflow; Rev via adapter)
+- Any supported MCP-capable agent runtime (Claude Code, Codex, Gemini CLI, Qwen, OpenCode, Zenflow; Rev via adapter)
 - `cloudflared` (optional — for Cloudflare Tunnel remote access)
 - `tmate` (optional — for assist sessions)
 

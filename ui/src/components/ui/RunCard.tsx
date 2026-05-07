@@ -59,6 +59,7 @@ function getWorkerIcon(workerType: string | null): string {
     'ollama-launch': '',
     codex: '',
     gemini: '',
+    qwen: '',
     rev: '',
     vnc: '',
     'hands-on': ''
@@ -73,6 +74,7 @@ function getWorkerColor(workerType: string | null): string {
     'ollama-launch': '#9333EA', // purple
     codex: '#0891B2', // cyan
     gemini: '#7C3AED', // violet
+    qwen: '#2563EB', // blue
     rev: '#DC2626', // red
     vnc: '#0891B2', // cyan (same as codex - remote desktop)
     'hands-on': '#F59E0B' // amber (manual control)

@@ -205,6 +205,7 @@ gateway/src/
 | `AIRC_PROVIDER_CLAUDE` | `true` | Enable Claude adapter |
 | `AIRC_PROVIDER_CODEX` | `true` | Enable Codex adapter |
 | `AIRC_PROVIDER_GEMINI` | `true` | Enable Gemini adapter |
+| `AIRC_PROVIDER_QWEN` | `true` | Enable Qwen adapter |
 | `AIRC_PROVIDER_OPENCODE` | `true` | Enable OpenCode adapter |
 | `AIRC_PROVIDER_ZENFLOW` | `true` | Enable Zenflow adapter |
 | `AIRC_PROVIDER_REV` | `true` | Enable Rev adapter |

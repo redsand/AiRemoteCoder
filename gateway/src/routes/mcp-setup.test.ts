@@ -245,6 +245,46 @@ describe('mcpSetupRoutes', () => {
     await app.close();
   });
 
+  it('returns a qwen MCP settings snippet and installs it into .qwen/settings.json', async () => {
+    const app = await buildApp();
+
+    const setupRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/qwen',
+    });
+
+    expect(setupRes.statusCode).toBe(200);
+    const setup = setupRes.json() as { token: string; snippet: any; filePath: string | null };
+    expect(setup.filePath).toBe('.qwen/settings.json');
+    expect(setup.snippet.mcpServers.airemotecoder.httpUrl).toMatch(/\/mcp$/);
+    expect(setup.snippet.mcpServers.airemotecoder.headers.Authorization).toBe(`Bearer ${setup.token}`);
+
+    const installRes = await app.inject({
+      method: 'POST',
+      url: '/api/mcp/setup/qwen/install',
+      payload: { token: setup.token },
+    });
+
+    expect(installRes.statusCode).toBe(200);
+    const install = installRes.json() as {
+      installed: boolean;
+      filePath: string;
+      copyPaste?: { bash?: string[]; powershell?: string[] };
+    };
+    expect(install.installed).toBe(true);
+    expect(install.filePath).toContain('.qwen');
+    expect(install.copyPaste?.bash?.[0] ?? '').toContain('.qwen/settings.json');
+    expect(install.copyPaste?.powershell?.[0] ?? '').toContain('.qwen\\\\settings.json');
+
+    const writtenPath = join(projectRoot, '.qwen', 'settings.json');
+    expect(existsSync(writtenPath)).toBe(true);
+    const written = JSON.parse(readFileSync(writtenPath, 'utf-8')) as any;
+    expect(written.mcpServers.airemotecoder.httpUrl).toMatch(/\/mcp$/);
+    expect(written.mcpServers.airemotecoder.headers.Authorization).toBe(`Bearer ${setup.token}`);
+
+    await app.close();
+  });
+
   it('reuses latest unused setup token unless rotate is requested', async () => {
     const app = await buildApp();
 

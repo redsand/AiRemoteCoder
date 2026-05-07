@@ -81,6 +81,7 @@ export interface AppConfig {
     claude: boolean;
     codex: boolean;
     gemini: boolean;
+    qwen: boolean;
     opencode: boolean;
     zenflow: boolean;
     rev: boolean;
@@ -287,6 +288,7 @@ function buildConfig(): AppConfig {
       claude: process.env.AIRC_PROVIDER_CLAUDE !== 'false',
       codex: process.env.AIRC_PROVIDER_CODEX !== 'false',
       gemini: process.env.AIRC_PROVIDER_GEMINI !== 'false',
+      qwen: process.env.AIRC_PROVIDER_QWEN !== 'false',
       opencode: process.env.AIRC_PROVIDER_OPENCODE !== 'false',
       zenflow: process.env.AIRC_PROVIDER_ZENFLOW !== 'false',
       rev: process.env.AIRC_PROVIDER_REV !== 'false',

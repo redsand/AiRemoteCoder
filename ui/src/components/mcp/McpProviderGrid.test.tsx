@@ -10,7 +10,7 @@ const baseConfig: McpConfig = {
   specVersion: '2024-11-05',
   availableScopes: ['runs:read', 'runs:write', 'vnc:read', 'vnc:control'],
   defaultAgentScopes: ['runs:read', 'runs:write', 'vnc:read', 'vnc:control'],
-  enabledProviders: ['claude', 'codex', 'gemini', 'opencode', 'zenflow', 'rev'],
+  enabledProviders: ['claude', 'codex', 'gemini', 'qwen', 'opencode', 'zenflow', 'rev'],
   connectionInstructions: {
     curl_test: { description: 'Connectivity check', command: 'curl https://gateway.example.test/mcp' },
   },
@@ -34,12 +34,13 @@ describe('McpProviderGrid', () => {
     expect(html).toContain('Claude Code');
     expect(html).toContain('Codex');
     expect(html).toContain('Gemini CLI');
+    expect(html).toContain('Qwen Coder');
     expect(html).toContain('OpenCode');
     expect(html).toContain('Zenflow');
     expect(html).toContain('Rev');
     expect(html).toContain('runner ready');
-    expect((html.match(/runner preview/g) || []).length).toBe(5);
-    expect((html.match(/Generate Snippet/g) || []).length).toBe(6);
+    expect((html.match(/runner preview/g) || []).length).toBe(6);
+    expect((html.match(/Generate Snippet/g) || []).length).toBe(7);
   });
 
   it('shows reinstall and copied state when a provider is configured', () => {

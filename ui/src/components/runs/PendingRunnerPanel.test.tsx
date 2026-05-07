@@ -38,4 +38,18 @@ describe('PendingRunnerPanel', () => {
     expect(unsupported).toBe('');
     expect(missingRunner).toBe('');
   });
+
+  it('renders helper commands for qwen runner-targeted runs', () => {
+    const html = renderToStaticMarkup(
+      <PendingRunnerPanel
+        workerType="qwen"
+        runnerId="runner-qwen"
+        gatewayUrl="http://localhost:3100"
+      />
+    );
+
+    expect(html).toContain('Launch or restart the QWEN helper');
+    expect(html).toContain('AIREMOTECODER_PROVIDER=&quot;qwen&quot;');
+    expect(html).toContain('AIREMOTECODER_QWEN_APPROVAL_MODE=&quot;yolo&quot;');
+  });
 });

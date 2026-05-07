@@ -92,7 +92,7 @@ vi.mock('../config.js', () => ({
     mcpRateLimit: { max: 300, timeWindow: '1 minute' },
     tlsEnabled: false,
     port: 3100,
-    providers: { claude: true, codex: true, gemini: true, opencode: true, zenflow: true, rev: true },
+    providers: { claude: true, codex: true, gemini: true, qwen: true, opencode: true, zenflow: true, rev: true },
     allowlistedCommands: [],
     approvalTimeoutSeconds: 300,
     maxArtifactSize: 52428800,
@@ -154,8 +154,11 @@ describe('GET /api/mcp/config', () => {
     expect(body.transport).toBe('streamable-http');
     expect(Array.isArray(body.enabledProviders)).toBe(true);
     expect(body.enabledProviders).toContain('claude');
+    expect(body.enabledProviders).toContain('qwen');
     expect(body.connectionInstructions).toBeDefined();
     expect(body.connectionInstructions.claude_code).toBeDefined();
+    expect(body.connectionInstructions.qwen).toBeDefined();
+    expect(body.connectionInstructions.qwen.config.mcpServers.airemotecoder.httpUrl).toMatch(/\/mcp$/);
     expect(Array.isArray(body.availableScopes)).toBe(true);
     expect(body.availableScopes).toContain('vnc:read');
     expect(body.availableScopes).toContain('vnc:control');
@@ -190,7 +193,7 @@ describe('GET /api/mcp/config', () => {
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/api/mcp/config' });
     const body = res.json();
-    expect(body.enabledProviders).toEqual(expect.arrayContaining(['claude', 'codex', 'gemini', 'opencode', 'zenflow', 'rev']));
+    expect(body.enabledProviders).toEqual(expect.arrayContaining(['claude', 'codex', 'gemini', 'qwen', 'opencode', 'zenflow', 'rev']));
     expect(body).not.toHaveProperty('legacyWrapperDeprecated');
     await app.close();
   });

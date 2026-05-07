@@ -47,4 +47,18 @@ describe('buildRunnerCommandSnippet', () => {
     expect(snippet.powershell).toContain('$env:AIREMOTECODER_CLAUDE_PERMISSION_MODE="bypassPermissions"');
     expect(snippet.powershell).toContain('airc-mcp-runner --runner-id "$env:AIREMOTECODER_RUNNER_ID"');
   });
+
+  it('uses native qwen preview runner flags without an exec template', () => {
+    const snippet = buildRunnerCommandSnippet('qwen', 'runner-qwen', 'http://localhost:3100');
+
+    expect(snippet.bash).toContain('AIREMOTECODER_PROVIDER="qwen"');
+    expect(snippet.bash).toContain('AIREMOTECODER_QWEN_APPROVAL_MODE="yolo"');
+    expect(snippet.bash).not.toContain('AIREMOTECODER_EXEC_TEMPLATE=');
+    expect(snippet.bash).toContain('airc-mcp-runner --runner-id "$AIREMOTECODER_RUNNER_ID"');
+
+    expect(snippet.powershell).toContain('$env:AIREMOTECODER_PROVIDER="qwen"');
+    expect(snippet.powershell).toContain('$env:AIREMOTECODER_QWEN_APPROVAL_MODE="yolo"');
+    expect(snippet.powershell).not.toContain('AIREMOTECODER_EXEC_TEMPLATE=');
+    expect(snippet.powershell).toContain('airc-mcp-runner --runner-id "$env:AIREMOTECODER_RUNNER_ID"');
+  });
 });

@@ -50,7 +50,7 @@ function Login({ onLogin }: Props) {
   return (
     <div className="login-container">
       <div className="card login-card">
-        <h1 className="login-title">Claude Code Monitor</h1>
+        <h1 className="login-title">AI Remote Coder</h1>
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">

@@ -109,7 +109,7 @@ vi.mock('../config.js', () => ({
     approvalTimeoutSeconds: 300,
     maxArtifactSize: 52428800,
     providers: {
-      claude: true, codex: true, gemini: true, opencode: true, zenflow: true, rev: true,
+      claude: true, codex: true, gemini: true, qwen: true, opencode: true, zenflow: true, rev: true,
     },
   },
 }));
@@ -264,6 +264,7 @@ describe('MCP tool: get_agent_capabilities', () => {
     const data = JSON.parse(result.content[0].text);
     expect(data.capabilities).toBeDefined();
     expect(data.enabledProviders).toContain('claude');
+    expect(data.enabledProviders).toContain('qwen');
   });
 
   it('returns only supported MCP providers', async () => {

@@ -63,6 +63,9 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
   const geminiApprovalMode = (args.get('gemini-approval-mode')
     ?? env.AIREMOTECODER_GEMINI_APPROVAL_MODE
     ?? 'yolo').trim();
+  const qwenApprovalMode = (args.get('qwen-approval-mode')
+    ?? env.AIREMOTECODER_QWEN_APPROVAL_MODE
+    ?? 'yolo').trim();
   const execTemplate = args.get('exec-template') ?? env.AIREMOTECODER_EXEC_TEMPLATE;
   if (!token) {
     throw new Error('Missing MCP token. Set AIREMOTECODER_MCP_TOKEN (or pass --token).');
@@ -79,6 +82,7 @@ export function parseRunnerOptions(argv: string[], env: NodeJS.ProcessEnv): Runn
     codexSearchEnabled,
     claudePermissionMode,
     geminiApprovalMode,
+    qwenApprovalMode,
     execTemplate,
   };
 }

@@ -7,6 +7,7 @@ import {
   createBufferedEventSink,
   CodexAppServerExecutor,
   GeminiCliExecutor,
+  QwenCliExecutor,
   handleWorkerCommand,
   isExpectedIdleClaimError,
   PersistentCodexExecutor,
@@ -552,6 +553,91 @@ describe('runner executor helpers', () => {
     expect(executor.snapshotState?.()).toEqual({ cliSessionId: 'gem-session-1' });
   });
 
+  it('uses Qwen CLI with persistent resume semantics and structured tool events', async () => {
+    const spawns: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = [];
+    const stdoutChunks = [
+      [
+        JSON.stringify({ type: 'system', subtype: 'session_start', session_id: 'qwen-session-1' }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'thinking', text: 'Planning changes' }, { type: 'tool_use', name: 'bash', id: 'tool-1', input: { command: 'npm test' } }, { type: 'text', text: 'first reply' }] } }),
+        JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'Tests passed' }] } }),
+        JSON.stringify({ type: 'result', subtype: 'success', session_id: 'qwen-session-1', result: 'done' }),
+      ],
+      [
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'second reply' }] } }),
+        JSON.stringify({ type: 'result', subtype: 'success', session_id: 'qwen-session-1' }),
+      ],
+    ];
+    const spawnFn = vi.fn((command: string, args: string[], options: Record<string, unknown>) => {
+      spawns.push({ command, args, options });
+      const child = new EventEmitter() as any;
+      child.stdin = { end: vi.fn() };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      queueMicrotask(() => {
+        const chunkSet = stdoutChunks[spawns.length - 1] ?? [];
+        for (const line of chunkSet) {
+          child.stdout.emit('data', Buffer.from(`${line}\n`));
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const executor = new QwenCliExecutor({ spawnFn: spawnFn as any, cwd: 'C:/repo' });
+    const events: Array<{ type: string; data: string }> = [];
+
+    await executor.sendInput('first prompt', async (type, data) => {
+      events.push({ type, data });
+    });
+    await executor.sendInput('second prompt', async (type, data) => {
+      events.push({ type, data });
+    });
+
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    expect(spawns[0]?.command).toBe('qwen');
+    expect(spawns[0]?.args).toEqual(expect.arrayContaining([
+      '-p',
+      '--output-format',
+      'stream-json',
+      '--include-partial-messages',
+      '--approval-mode',
+      'yolo',
+    ]));
+    expect(spawns[0]?.args).not.toContain('--resume');
+    expect(spawns[1]?.args).toEqual(expect.arrayContaining(['--resume', 'qwen-session-1']));
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'info', data: 'Qwen reasoning: Planning changes' },
+      { type: 'stdout', data: 'first reply' },
+      { type: 'stdout', data: 'second reply' },
+      { type: 'tool_use', data: JSON.stringify({ phase: 'pre', tool: 'bash npm test', provider: 'qwen', toolId: 'tool-1' }) },
+      { type: 'tool_use', data: JSON.stringify({ phase: 'post', tool: 'bash npm test', provider: 'qwen', toolId: 'tool-1', summary: 'Tests passed' }) },
+    ]));
+    expect(executor.snapshotState?.()).toEqual({ cliSessionId: 'qwen-session-1' });
+  });
+
+  it('surfaces Qwen CLI errors from stream-json results', async () => {
+    const spawnFn = vi.fn(() => {
+      const child = new EventEmitter() as any;
+      child.stdin = { end: vi.fn() };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          is_error: true,
+          result: 'Permission denied by approval mode',
+        })}\n`));
+        child.emit('close', 1);
+      });
+      return child;
+    });
+
+    const executor = new QwenCliExecutor({ spawnFn: spawnFn as any });
+    await expect(executor.sendInput('explode', async () => {})).rejects.toThrow('Permission denied by approval mode');
+  });
+
   it('surfaces Gemini errors with real error text', async () => {
     const spawnFn = vi.fn(() => {
       const child = new EventEmitter() as any;
@@ -746,6 +832,18 @@ describe('runner cli parsing', () => {
     expect(options.codexSearchEnabled).toBe(false);
     expect(options.claudePermissionMode).toBe('acceptEdits');
     expect(options.runnerId).toMatch(/^[a-f0-9]{16}$/);
+  });
+
+  it('defaults qwen provider to native approval-mode settings', () => {
+    const options = parseRunnerOptions([], {
+      AIREMOTECODER_GATEWAY_URL: 'http://gw:3100',
+      AIREMOTECODER_MCP_TOKEN: 'token-123',
+      AIREMOTECODER_PROVIDER: 'qwen',
+    });
+
+    expect(options.provider).toBe('qwen');
+    expect(options.execTemplate).toBeUndefined();
+    expect(options.qwenApprovalMode).toBe('yolo');
   });
 
   it('accepts explicit runner id seed and hashes it deterministically', () => {

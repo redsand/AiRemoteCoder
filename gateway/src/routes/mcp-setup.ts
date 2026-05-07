@@ -10,7 +10,7 @@
  *   - Only works when the gateway has filesystem access to the target project directory
  *   - The project directory is the gateway's working directory (GATEWAY_PROJECT_ROOT or cwd)
  *
- * Supported providers: claude, codex, gemini, opencode, rev, zenflow
+ * Supported providers: claude, codex, gemini, qwen, opencode, rev, zenflow
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -34,7 +34,7 @@ const AGENT_DEFAULT_SCOPES: McpScope[] = [
   'approvals:read', 'approvals:write',
 ];
 
-const SUPPORTED_PROVIDERS = ['claude', 'codex', 'gemini', 'opencode', 'rev', 'zenflow'] as const;
+const SUPPORTED_PROVIDERS = ['claude', 'codex', 'gemini', 'qwen', 'opencode', 'rev', 'zenflow'] as const;
 type SupportedProvider = typeof SUPPORTED_PROVIDERS[number];
 
 interface ProjectTargetRecord {
@@ -387,6 +387,24 @@ bearer_token_env_var = "AIREMOTECODER_MCP_TOKEN"
         fileFormat: 'json',
         instructions: 'Add to .gemini/settings.json in your project root.',
         copyPaste: jsonCopyPaste('.gemini/settings.json', snippet),
+      };
+    }
+
+    case 'qwen': {
+      const snippet = {
+        mcpServers: {
+          airemotecoder: {
+            httpUrl: mcpUrl,
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        },
+      };
+      return {
+        snippet,
+        filePath: '.qwen/settings.json',
+        fileFormat: 'json',
+        instructions: 'Add to .qwen/settings.json in your project root. Qwen Code will pick it up automatically.',
+        copyPaste: jsonCopyPaste('.qwen/settings.json', snippet),
       };
     }
 
